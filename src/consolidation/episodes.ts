@@ -113,14 +113,27 @@ function extractToolText(raw: string): string {
  */
 
 export class EpisodeReader {
-  private db: Database;
+  private _db: Database | null = null;
+  private readonly dbPath: string;
 
   // Cached prepared statements — compiled once, reused across all getMessagesInRange calls.
   private _textPartsStmt: Statement | null = null;
   private _toolPartsStmt: Statement | null = null;
 
   constructor(dbPath?: string) {
-    this.db = new Database(dbPath || config.opencodeDbPath, { readonly: true });
+    this.dbPath = dbPath ?? config.opencodeDbPath;
+  }
+
+  /**
+   * Lazily open the OpenCode DB on first use.
+   * Deferred so that ConsolidationEngine can be constructed (and tested)
+   * without requiring the OpenCode DB to exist on disk at construction time.
+   */
+  private get db(): Database {
+    if (!this._db) {
+      this._db = new Database(this.dbPath, { readonly: true });
+    }
+    return this._db;
   }
 
   private get textPartsStmt(): Statement {
@@ -633,6 +646,7 @@ export class EpisodeReader {
     this._textPartsStmt = null;
     this._toolPartsStmt?.finalize();
     this._toolPartsStmt = null;
-    this.db.close();
+    this._db?.close();
+    this._db = null;
   }
 }
