@@ -4,7 +4,6 @@ import type { EmbeddingClient } from "../activation/embeddings.js";
 import { cosineSimilarity, formatEmbeddingText } from "../activation/embeddings.js";
 import type { ConsolidationLLM, ExtractedKnowledge } from "./llm.js";
 import { computeStrength } from "./decay.js";
-import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { clampKnowledgeType, RECONSOLIDATION_THRESHOLD } from "../types.js";
 import type { KnowledgeEntry } from "../types.js";
@@ -169,7 +168,7 @@ export class Reconsolidator {
    * Insert a new knowledge entry into the DB.
    * Optionally pre-supply the embedding to avoid re-computing it.
    */
-  insertNewEntry(
+  private insertNewEntry(
     entry: ExtractedKnowledge,
     sessionIds: string[],
     embedding?: number[]
