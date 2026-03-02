@@ -189,6 +189,35 @@ describe("ConsolidationLLM.extractKnowledge", () => {
     const result = await llm.extractKnowledge("episodes", "existing");
     expect(result.length).toBe(1);
   });
+
+  it("preserves scope: team when LLM returns it", async () => {
+    mockGenerateText(JSON.stringify([
+      { type: "fact", content: "The MI Jira project key is MI.", topics: ["jira"], confidence: 0.9, scope: "team", source: "t" },
+    ]));
+    const result = await llm.extractKnowledge("episodes", "existing");
+    expect(result.length).toBe(1);
+    expect(result[0].scope).toBe("team");
+  });
+
+  it("preserves scope: personal when LLM returns it", async () => {
+    mockGenerateText(JSON.stringify([
+      { type: "procedure", content: "My local bun binary is at ~/.bun/bin/bun.", topics: ["setup"], confidence: 0.8, scope: "personal", source: "t" },
+    ]));
+    const result = await llm.extractKnowledge("episodes", "existing");
+    expect(result.length).toBe(1);
+    expect(result[0].scope).toBe("personal");
+  });
+
+  it("clamps an invalid scope value to 'personal'", async () => {
+    // The extraction layer clamps unknown scope strings to the default "personal"
+    // to prevent SQLite CHECK constraint violations downstream.
+    mockGenerateText(JSON.stringify([
+      { type: "fact", content: "Some fact.", topics: [], confidence: 0.9, scope: "unknown", source: "t" },
+    ]));
+    const result = await llm.extractKnowledge("episodes", "existing");
+    expect(result.length).toBe(1);
+    expect(result[0].scope).toBe("personal");
+  });
 });
 
 // ── ConsolidationLLM.decideMerge ─────────────────────────────────────────────

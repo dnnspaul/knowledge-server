@@ -4,6 +4,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
+import { clampKnowledgeScope } from "../types.js";
 import type { KnowledgeEntry, Episode } from "../types.js";
 
 /**
@@ -162,7 +163,7 @@ function parseJSON<T>(response: string, arrayMode: boolean): T | null {
       if (!trimmed.startsWith("[")) return null;
       const lastClose = trimmed.lastIndexOf("}");
       if (lastClose === -1) return null;
-      return trimmed.slice(0, lastClose + 1) + "]";
+      return `${trimmed.slice(0, lastClose + 1)}]`;
     },
   ];
 
@@ -211,9 +212,16 @@ Knowledge types:
 - "decision": An architectural or design choice with rationale (e.g., "Chose BigQuery over Snowflake because of existing GCP infra")
 - "procedure": A non-obvious multi-step workflow (e.g., "To deploy: run X, wait for Y, then trigger Z")
 
-Scope:
-- "personal": Only relevant to this individual's workflow
-- "team": Relevant to any team member (schemas, business rules, processes)
+Scope — choose based on who benefits, not who did the work:
+- "team": A colleague joining the project tomorrow could use this without any extra context.
+  Examples: shared data schemas and field definitions, business rules and KPI definitions,
+  architectural decisions, team conventions, project-specific APIs or config values,
+  recurring patterns in the team's codebase or analytical domain.
+  When in doubt and the knowledge concerns a shared codebase, data model, or business domain: use "team".
+- "personal": Only useful to this specific individual's personal workflow, preferences, or setup.
+  Examples: local dev environment quirks, personal productivity shortcuts, individual tool
+  preferences, personal account/credential locations, notes about one's own habits or mistakes.
+  If a team member would find no value in this entry: use "personal".
 
 ENCODE if:
 - It's a concrete, reusable fact that would otherwise require looking up (API field IDs, custom statuses, naming conventions, config values)
@@ -269,12 +277,17 @@ If there is nothing new worth extracting, return an empty array: []`;
       return [];
     }
 
-    return parsed.filter(
-      (entry) =>
-        entry.content &&
-        entry.type &&
-        ["fact", "principle", "pattern", "decision", "procedure"].includes(entry.type)
-    );
+    return parsed
+      .filter(
+        (entry) =>
+          entry.content &&
+          entry.type &&
+          ["fact", "principle", "pattern", "decision", "procedure"].includes(entry.type)
+      )
+      .map((entry) => ({
+        ...entry,
+        scope: clampKnowledgeScope(entry.scope ?? "personal"),
+      }));
   }
 
   /**
