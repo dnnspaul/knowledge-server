@@ -233,10 +233,10 @@ echo "  ✓ launcher: $BIN_DIR/knowledge-server"
 echo ""
 echo "Downloading OpenCode integration files..."
 
-curl --fail --location --show-error "$BASE_URL/knowledge.ts"          -o "$INSTALL_DIR/knowledge.ts"
-curl --fail --location --show-error "$BASE_URL/consolidate.md"        -o "$INSTALL_DIR/consolidate.md"
-curl --fail --location --show-error "$BASE_URL/knowledge-review.md"   -o "$INSTALL_DIR/knowledge-review.md"
-curl --fail --location --show-error "$BASE_URL/knowledge-update.md"   -o "$INSTALL_DIR/knowledge-update.md"
+curl --fail --location --silent --show-error "$BASE_URL/knowledge.ts"          -o "$INSTALL_DIR/knowledge.ts"
+curl --fail --location --silent --show-error "$BASE_URL/consolidate.md"        -o "$INSTALL_DIR/consolidate.md"
+curl --fail --location --silent --show-error "$BASE_URL/knowledge-review.md"   -o "$INSTALL_DIR/knowledge-review.md"
+curl --fail --location --silent --show-error "$BASE_URL/knowledge-update.md"   -o "$INSTALL_DIR/knowledge-update.md"
 echo "  ✓ plugin and commands"
 
 # ── Symlink plugin and commands into OpenCode ─────────────────────────────────
