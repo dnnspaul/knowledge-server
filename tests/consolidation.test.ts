@@ -671,17 +671,13 @@ describe("ConsolidationEngine.runContradictionScan() — hallucinated candidateI
     spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
     spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
-    // New entry embedding overlaps with existing (mid-similarity band)
-    // We need similarity to be in [contradictionMinSimilarity, RECONSOLIDATION_THRESHOLD)
-    // Use the same vec so similarity = 1 → above threshold → decideMerge returns "insert"
-    // Then set up the contradiction scan with a mid-band embedding.
-    const newEmb = fakeEmbedding("server port"); // same as existing → sim=1, will go through decideMerge
-    const midBandEmb = [0.7, 0.7, 0.1, 0, 0, 0, 0, 0]; // different enough for mid-band
-
-    // We'll test the guard by having the LLM return a hallucinated candidateId.
-    // To reach runContradictionScan, we need at least one changed entry.
-    // Use orthogonal embedding so reconsolidate inserts (below threshold).
-    const novelEmb = [0, 0, 1, 0, 0, 0, 0, 0]; // orthogonal to existingEmb → sim=0
+    // The new entry's embedding must be in the mid-band [contradictionMinSimilarity, RECONSOLIDATION_THRESHOLD)
+    // against existingEmb so the contradiction scan fires, but below RECONSOLIDATION_THRESHOLD so
+    // reconsolidate inserts it (novel path, no decideMerge).
+    //
+    // existingEmb = fakeEmbedding("ser") ≈ [0.603, 0.529, 0.598, 0, ...]
+    // novelEmb = [0, 0, 1, 0, ...] → cos = 0.598 ∈ [0.4, 0.82) ✓ (mid-band, below threshold)
+    const novelEmb = [0, 0, 1, 0, 0, 0, 0, 0];
 
     const embedSpy = spyOn(activation.embeddings, "embed").mockResolvedValue(novelEmb);
 
