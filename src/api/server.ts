@@ -174,6 +174,13 @@ export function createApp(
     const stats = db.getStats();
     const consolidationState = db.getConsolidationState();
 
+    // Config block (model names, port) is gated behind the admin token.
+    // Unauthenticated callers (e.g. healthcheck scripts) still get version +
+    // knowledge stats, but don't learn which models / endpoint are in use.
+    // Intentional: non-blocking — unauthenticated callers still receive a 200
+    // with partial data; the config block is simply omitted.
+    const isAdmin = requireAdminToken(c);
+
     return c.json({
       status: "ok",
       version: pkg.version,
@@ -186,13 +193,15 @@ export function createApp(
           consolidationState.totalSessionsProcessed,
         totalEntriesCreated: consolidationState.totalEntriesCreated,
       },
-      config: {
-        port: config.port,
-        embeddingModel: config.embedding.model,
-        extractionModel: config.llm.extractionModel,
-        mergeModel: config.llm.mergeModel,
-        contradictionModel: config.llm.contradictionModel,
-      },
+      ...(isAdmin && {
+        config: {
+          port: config.port,
+          embeddingModel: config.embedding.model,
+          extractionModel: config.llm.extractionModel,
+          mergeModel: config.llm.mergeModel,
+          contradictionModel: config.llm.contradictionModel,
+        },
+      }),
     });
   });
 

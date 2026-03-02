@@ -47,7 +47,7 @@ describe("HTTP API", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("GET /status should return server info", async () => {
+  it("GET /status should return server info without config when unauthenticated", async () => {
     const res = await app.request("/status");
     expect(res.status).toBe(200);
 
@@ -56,6 +56,21 @@ describe("HTTP API", () => {
     expect(data.version).toBe(pkg.version);
     expect(data.knowledge).toBeDefined();
     expect(data.consolidation).toBeDefined();
+    // Config block must NOT be present without admin token (M1 fix)
+    expect(data.config).toBeUndefined();
+  });
+
+  it("GET /status should include config block when authenticated", async () => {
+    const res = await app.request("/status", {
+      headers: { Authorization: `Bearer ${TEST_ADMIN_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.status).toBe("ok");
+    expect(data.config).toBeDefined();
+    expect(typeof data.config.port).toBe("number");
+    expect(typeof data.config.embeddingModel).toBe("string");
   });
 
   it("GET /entries should return empty list initially", async () => {

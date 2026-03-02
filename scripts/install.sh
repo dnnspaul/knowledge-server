@@ -221,10 +221,41 @@ cat > "$BIN_DIR/knowledge-server" << WRAPPER
 # Loads .env so config is available regardless of invocation directory.
 # To update: knowledge-server update
 # To reinstall: curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/install.sh | bash
-set -a
-# shellcheck source=/dev/null
-[ -f "$ENV_FILE" ] && source "$ENV_FILE"
-set +a
+
+# Safe KEY=value parser — does NOT execute arbitrary shell code.
+# Key and value are split manually; printf -v assigns the literal value string
+# to the variable without any word-splitting, glob expansion, or command
+# substitution — so a crafted value like \$(evil-command) or \`evil\` is stored
+# verbatim rather than executed.
+# Only keys with a known knowledge-server prefix are loaded; this prevents a
+# crafted .env from overwriting sensitive process variables such as PATH,
+# LD_PRELOAD, or IFS — variables that a valid identifier check alone would allow.
+if [ -f "$ENV_FILE" ]; then
+  while IFS= read -r _line || [ -n "\$_line" ]; do # || handles no-trailing-newline files
+    # Skip blank lines and comments
+    case "\$_line" in
+      ''|'#'*) continue ;;
+    esac
+    # Split on first '=' to get key and value separately
+    _key="\${_line%%=*}"
+    _val="\${_line#*=}"
+    # Allowlist: only load keys with a known knowledge-server prefix.
+    # This rejects PATH, LD_PRELOAD, IFS, BASH_ENV, etc.
+    if [[ "\$_key" =~ ^(KNOWLEDGE_|LLM_|EMBEDDING_|OPENCODE_|CONSOLIDATION_|ACTIVATION_|CONTRADICTION_|DECAY_)[A-Za-z0-9_]*\$ ]]; then
+      # Strip matching surrounding quotes from the value so KNOWLEDGE_PORT="3179"
+      # and KNOWLEDGE_PORT='3179' both work correctly. Asymmetric stripping (e.g.
+      # removing a leading " and trailing ' independently) is intentionally avoided
+      # to prevent silently corrupting values with mismatched or missing quotes.
+      case "\$_val" in
+        '\"'*'\"') _val="\${_val:1:\${#_val}-2}" ;;
+        "'"*"'")   _val="\${_val:1:\${#_val}-2}" ;;
+      esac
+      printf -v "\$_key" '%s' "\$_val"  # assign literal value — no shell evaluation
+      export "\$_key"
+    fi
+  done < "$ENV_FILE"
+fi
+
 exec "$INSTALL_DIR/libexec/knowledge-server" "\$@"
 WRAPPER
 chmod +x "$BIN_DIR/knowledge-server"

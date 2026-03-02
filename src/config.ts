@@ -160,6 +160,17 @@ export function validateConfig(): string[] {
     errors.push("LLM_BASE_ENDPOINT is required. Set it in .env or environment.");
   }
 
+  // Enforce a minimum token length when a fixed admin token is configured.
+  // A short token is trivial to brute-force over a loopback connection — 16 chars
+  // of a random hex string gives ~64 bits of entropy, a reasonable lower bound.
+  // Random startup-generated tokens (24 bytes → 48 hex chars, ~192 bits) always pass.
+  // Prefer at least 24 hex chars (openssl rand -hex 24) for a stronger guarantee.
+  if (config.adminToken !== null && config.adminToken.length < 16) {
+    errors.push(
+      "KNOWLEDGE_ADMIN_TOKEN must be at least 16 characters. Use a long random value (e.g. openssl rand -hex 24)."
+    );
+  }
+
   const loopbackHosts = ["127.0.0.1", "::1", "localhost"];
   if (!loopbackHosts.includes(config.host)) {
     errors.push(
