@@ -9,10 +9,13 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { KnowledgeDB } from "../src/db/database";
 import { ActivationEngine } from "../src/activation/activate";
 import { ConsolidationEngine } from "../src/consolidation/consolidate";
+import { ConsolidationLLM } from "../src/consolidation/llm";
 import { EpisodeReader } from "../src/consolidation/episodes";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { RECONSOLIDATION_THRESHOLD } from "../src/types";
+import { config } from "../src/config";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -399,6 +402,614 @@ describe("KnowledgeDB — applyContradictionResolution clears conflicted status 
     expect(relX.some((r) => r.type === "contradicts")).toBe(false);
     // old-z is superseded
     expect(db.getEntry("old-z")?.status).toBe("superseded");
+  });
+});
+
+// ── Helper: build a synthetic Episode ────────────────────────────────────────
+
+function makeEpisode(overrides: Partial<{
+  sessionId: string;
+  startMessageId: string;
+  endMessageId: string;
+  sessionTitle: string;
+  projectName: string;
+  directory: string;
+  timeCreated: number;
+  maxMessageTime: number;
+  content: string;
+  contentType: "messages" | "compaction_summary";
+  approxTokens: number;
+}> = {}) {
+  const now = Date.now();
+  return {
+    sessionId: "session-1",
+    startMessageId: "msg-start",
+    endMessageId: "msg-end",
+    sessionTitle: "Test Session",
+    projectName: "test-project",
+    directory: "/tmp/test",
+    timeCreated: now,
+    maxMessageTime: now,
+    content: "User learned that TypeScript is statically typed.",
+    contentType: "messages" as const,
+    approxTokens: 20,
+    ...overrides,
+  };
+}
+
+// ── ConsolidationEngine.reconsolidate() paths ─────────────────────────────────
+
+describe("ConsolidationEngine.reconsolidate() — novel entry (below threshold)", () => {
+  it("inserts a new entry when the knowledge base is empty", async () => {
+    // No existing entries → similarity is 0 → insert unconditionally
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+      { id: "session-1", maxMessageTime: Date.now() },
+    ]);
+    spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+
+    // Give embed a deterministic vector
+    const vec = fakeEmbedding("TypeScript");
+    spyOn(activation.embeddings, "embed").mockResolvedValue(vec);
+
+    // extractKnowledge returns one novel entry
+    spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([
+      {
+        type: "fact",
+        content: "TypeScript is statically typed.",
+        topics: ["typescript"],
+        confidence: 0.9,
+        scope: "personal",
+        source: "test",
+      },
+    ]);
+
+    const result = await engine.consolidate();
+
+    expect(result.entriesCreated).toBe(1);
+    expect(result.entriesUpdated).toBe(0);
+
+    const entries = db.getEntries({ type: "fact" });
+    expect(entries.length).toBe(1);
+    expect(entries[0].content).toBe("TypeScript is statically typed.");
+    expect(entries[0].status).toBe("active");
+  });
+
+  it("inserts a new entry when nearest neighbour is below RECONSOLIDATION_THRESHOLD", async () => {
+    // Pre-populate one entry with an orthogonal embedding (similarity = 0)
+    const existingEmb = [1, 0, 0, 0, 0, 0, 0, 0];
+    db.insertEntry(makeEntry({ id: "existing", content: "Unrelated fact.", topics: ["sql"], embedding: existingEmb }));
+
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+      { id: "session-1", maxMessageTime: Date.now() },
+    ]);
+    spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+
+    // New entry embedding is orthogonal to existing — sim = 0
+    const newVec = [0, 1, 0, 0, 0, 0, 0, 0];
+    spyOn(activation.embeddings, "embed").mockResolvedValue(newVec);
+
+    spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([
+      {
+        type: "fact",
+        content: "Bun is a fast JS runtime.",
+        topics: ["bun"],
+        confidence: 0.85,
+        scope: "personal",
+        source: "test",
+      },
+    ]);
+
+    // decideMerge should NOT be called — we're below the threshold
+    const decideMergeSpy = spyOn(ConsolidationLLM.prototype, "decideMerge");
+
+    const result = await engine.consolidate();
+
+    expect(result.entriesCreated).toBe(1);
+    expect(decideMergeSpy).not.toHaveBeenCalled();
+
+    const allEntries = db.getEntries({});
+    expect(allEntries.length).toBe(2);
+  });
+});
+
+describe("ConsolidationEngine.reconsolidate() — 'keep' decision (above threshold)", () => {
+  it("reinforces the existing entry and does not create a new one", async () => {
+    // Existing entry with a known embedding
+    const existingEmb = fakeEmbedding("TypeScript static");
+    db.insertEntry(makeEntry({
+      id: "existing-ts",
+      content: "TypeScript is statically typed.",
+      topics: ["typescript"],
+      embedding: existingEmb,
+      observationCount: 1,
+    }));
+
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+      { id: "session-1", maxMessageTime: Date.now() },
+    ]);
+    spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+
+    // Near-identical embedding → similarity above threshold
+    spyOn(activation.embeddings, "embed").mockResolvedValue(existingEmb);
+
+    spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([
+      {
+        type: "fact",
+        content: "TypeScript uses static types.",
+        topics: ["typescript"],
+        confidence: 0.88,
+        scope: "personal",
+        source: "test",
+      },
+    ]);
+
+    spyOn(ConsolidationLLM.prototype, "decideMerge").mockResolvedValue({ action: "keep" });
+
+    const result = await engine.consolidate();
+
+    expect(result.entriesCreated).toBe(0);
+    expect(result.entriesUpdated).toBe(0);
+
+    // observationCount should have been incremented by reinforceObservation
+    const entry = db.getEntry("existing-ts");
+    expect(entry?.observationCount).toBe(2);
+
+    const allEntries = db.getEntries({});
+    expect(allEntries.length).toBe(1);
+  });
+});
+
+describe("ConsolidationEngine.reconsolidate() — 'update' decision (above threshold)", () => {
+  it("merges the new observation into the existing entry in place", async () => {
+    const existingEmb = fakeEmbedding("TypeScript static");
+    db.insertEntry(makeEntry({
+      id: "existing-ts",
+      content: "TypeScript is statically typed.",
+      topics: ["typescript"],
+      confidence: 0.8,
+      embedding: existingEmb,
+    }));
+
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+      { id: "session-1", maxMessageTime: Date.now() },
+    ]);
+    spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+
+    spyOn(activation.embeddings, "embed").mockResolvedValue(existingEmb);
+
+    spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([
+      {
+        type: "fact",
+        content: "TypeScript has structural typing and type inference.",
+        topics: ["typescript"],
+        confidence: 0.9,
+        scope: "personal",
+        source: "test",
+      },
+    ]);
+
+    spyOn(ConsolidationLLM.prototype, "decideMerge").mockResolvedValue({
+      action: "update",
+      content: "TypeScript is statically typed and supports type inference.",
+      type: "fact",
+      topics: ["typescript"],
+      confidence: 0.92,
+    });
+
+    const result = await engine.consolidate();
+
+    expect(result.entriesCreated).toBe(0);
+    expect(result.entriesUpdated).toBe(1);
+
+    const entry = db.getEntry("existing-ts");
+    expect(entry?.content).toBe("TypeScript is statically typed and supports type inference.");
+    expect(entry?.confidence).toBeCloseTo(0.92);
+    expect(entry?.status).toBe("active");
+  });
+});
+
+describe("ConsolidationEngine.reconsolidate() — 'insert' decision (above threshold but distinct)", () => {
+  it("inserts a new entry even when similarity exceeds the threshold", async () => {
+    const existingEmb = fakeEmbedding("TypeScript static");
+    db.insertEntry(makeEntry({
+      id: "existing-ts",
+      content: "TypeScript is statically typed.",
+      topics: ["typescript"],
+      embedding: existingEmb,
+    }));
+
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+      { id: "session-1", maxMessageTime: Date.now() },
+    ]);
+    spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+
+    spyOn(activation.embeddings, "embed").mockResolvedValue(existingEmb);
+
+    spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([
+      {
+        type: "fact",
+        content: "TypeScript compiles to JavaScript, unlike statically typed native languages.",
+        topics: ["typescript", "compilation"],
+        confidence: 0.87,
+        scope: "personal",
+        source: "test",
+      },
+    ]);
+
+    spyOn(ConsolidationLLM.prototype, "decideMerge").mockResolvedValue({ action: "insert" });
+
+    const result = await engine.consolidate();
+
+    expect(result.entriesCreated).toBe(1);
+    expect(result.entriesUpdated).toBe(0);
+
+    const allEntries = db.getEntries({});
+    expect(allEntries.length).toBe(2);
+  });
+});
+
+// ── ConsolidationEngine.runContradictionScan() edge cases ─────────────────────
+
+describe("ConsolidationEngine.runContradictionScan() — hallucinated candidateId guard", () => {
+  it("ignores a candidateId the LLM invented that was not in the candidate list", async () => {
+    const existingEmb = fakeEmbedding("server port");
+    db.insertEntry(makeEntry({
+      id: "candidate-real",
+      content: "The server runs on port 8080.",
+      topics: ["server", "config"],
+      embedding: existingEmb,
+    }));
+
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+      { id: "session-1", maxMessageTime: Date.now() },
+    ]);
+    spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+
+    // New entry embedding overlaps with existing (mid-similarity band)
+    // We need similarity to be in [contradictionMinSimilarity, RECONSOLIDATION_THRESHOLD)
+    // Use the same vec so similarity = 1 → above threshold → decideMerge returns "insert"
+    // Then set up the contradiction scan with a mid-band embedding.
+    const newEmb = fakeEmbedding("server port"); // same as existing → sim=1, will go through decideMerge
+    const midBandEmb = [0.7, 0.7, 0.1, 0, 0, 0, 0, 0]; // different enough for mid-band
+
+    // We'll test the guard by having the LLM return a hallucinated candidateId.
+    // To reach runContradictionScan, we need at least one changed entry.
+    // Use orthogonal embedding so reconsolidate inserts (below threshold).
+    const novelEmb = [0, 0, 1, 0, 0, 0, 0, 0]; // orthogonal to existingEmb → sim=0
+
+    const embedSpy = spyOn(activation.embeddings, "embed").mockResolvedValue(novelEmb);
+
+    spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([
+      {
+        type: "fact",
+        content: "The server port was changed to 9090.",
+        topics: ["server", "config"],
+        confidence: 0.9,
+        scope: "personal",
+        source: "test",
+      },
+    ]);
+
+    // LLM returns a hallucinated candidateId ("HALLUCINATED") not in the candidate list
+    spyOn(ConsolidationLLM.prototype, "detectAndResolveContradiction").mockResolvedValue([
+      {
+        candidateId: "HALLUCINATED-ID",
+        resolution: "supersede_old",
+        reason: "new port supersedes old",
+      },
+    ]);
+
+    const result = await engine.consolidate();
+
+    // The hallucinated ID should be ignored — both entries remain active
+    expect(result.conflictsResolved).toBe(0);
+    const candidate = db.getEntry("candidate-real");
+    expect(candidate?.status).toBe("active"); // not superseded
+  });
+});
+
+describe("ConsolidationEngine.runContradictionScan() — supersede_new stops further candidates", () => {
+  it("stops checking candidates after the new entry is itself superseded", async () => {
+    // Craft embeddings so the new entry lands in the mid-band similarity window
+    // against both candidates:
+    //   candidateEmb = [1, 0, 0, 0, 0, 0, 0, 0]  (unit vector along dim-0)
+    //   newEmb        = [0.6, 0.8, 0, 0, 0, 0, 0, 0]  unit; cos(new, candidate) = 0.6
+    // 0.6 is in [contradictionMinSimilarity=0.4, RECONSOLIDATION_THRESHOLD=0.82) → mid-band.
+    const candidateEmb = [1, 0, 0, 0, 0, 0, 0, 0];
+    const newEmb       = [0.6, 0.8, 0, 0, 0, 0, 0, 0]; // already unit (0.36+0.64=1)
+
+    db.insertEntry(makeEntry({ id: "candidate-a", content: "Port is 8080.", topics: ["server"], embedding: candidateEmb }));
+    db.insertEntry(makeEntry({ id: "candidate-b", content: "Port is 3000.", topics: ["server"], embedding: candidateEmb }));
+
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+      { id: "session-1", maxMessageTime: Date.now() },
+    ]);
+    spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+
+    // embed returns newEmb → cos(newEmb, candidateEmb) = 0.6 → below RECONSOLIDATION_THRESHOLD
+    // → reconsolidate inserts; scan then finds candidates in mid-band
+    spyOn(activation.embeddings, "embed").mockResolvedValue(newEmb);
+
+    spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([
+      {
+        type: "fact",
+        content: "Port was changed to 9090.",
+        topics: ["server"],
+        confidence: 0.9,
+        scope: "personal",
+        source: "test",
+      },
+    ]);
+
+    // LLM returns supersede_new for candidate-a → new entry loses; candidate-b result
+    // must never be applied because the scan breaks on supersede_new.
+    spyOn(ConsolidationLLM.prototype, "detectAndResolveContradiction").mockResolvedValue([
+      { candidateId: "candidate-a", resolution: "supersede_new", reason: "candidate-a is authoritative" },
+      { candidateId: "candidate-b", resolution: "supersede_old", reason: "should not be reached" },
+    ]);
+
+    const result = await engine.consolidate();
+
+    // The new entry was superseded (supersede_new counts as resolved)
+    expect(result.conflictsResolved).toBe(1);
+    const newEntries = db.getEntries({ type: "fact" });
+    const insertedNew = newEntries.find((e) => e.content.includes("9090"));
+    expect(insertedNew?.status).toBe("superseded");
+
+    // candidate-b must not have been superseded — the scan stopped after supersede_new
+    expect(db.getEntry("candidate-b")?.status).toBe("active");
+  });
+});
+
+describe("ConsolidationEngine.runContradictionScan() — superseded_in_scan tracking", () => {
+  it("skips a candidate that was already superseded by an earlier new entry in the same scan", async () => {
+    // candidate-x is a pre-existing entry in the mid-band range for the new entries.
+    // new-entry-1 supersedes it in the first scan pass; new-entry-2 should not re-process it.
+    //
+    // Embedding layout:
+    //   candidateEmb = [1, 0, 0, 0, 0, 0, 0, 0]  (unit on dim-0)
+    //   newEmb1      = [0.6, 0.8, 0, 0, 0, 0, 0, 0]  cos=0.6 with candidate → mid-band
+    //   newEmb2      = [0.6, 0, 0.8, 0, 0, 0, 0, 0]  cos=0.6 with candidate → mid-band
+    //   cos(newEmb1, newEmb2) = 0.36 < threshold → both insert as novel independently
+    const candidateEmb = [1, 0, 0, 0, 0, 0, 0, 0];
+    const newEmb1      = [0.6, 0.8, 0, 0, 0, 0, 0, 0]; // unit: 0.36+0.64=1
+    const newEmb2      = [0.6, 0, 0.8, 0, 0, 0, 0, 0]; // unit: 0.36+0.64=1
+    // cos(newEmb1, newEmb2) = 0.6*0.6 + 0.8*0 + 0*0.8 = 0.36 < RECONSOLIDATION_THRESHOLD (0.82)
+
+    db.insertEntry(makeEntry({ id: "candidate-x", content: "Port is 8080.", topics: ["server"], embedding: candidateEmb }));
+
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+      { id: "session-1", maxMessageTime: Date.now() },
+    ]);
+    spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+
+    // embed is called once per extracted entry (during reconsolidate).
+    // Alternate between the two mid-band embeddings.
+    let embedCallCount = 0;
+    spyOn(activation.embeddings, "embed").mockImplementation(async () => {
+      embedCallCount++;
+      return embedCallCount % 2 === 1 ? newEmb1 : newEmb2;
+    });
+
+    spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([
+      {
+        type: "fact",
+        content: "Port changed to 9090.",
+        topics: ["server"],
+        confidence: 0.9,
+        scope: "personal",
+        source: "test",
+      },
+      {
+        type: "fact",
+        content: "Port also changed to 9091.",
+        topics: ["server"],
+        confidence: 0.85,
+        scope: "personal",
+        source: "test",
+      },
+    ]);
+
+    // First scan (new-entry-1): supersede candidate-x.
+    // Second scan (new-entry-2): detectAndResolveContradiction must NOT receive candidate-x
+    // because supersededInThisScan should filter it out.
+    let scanCallCount = 0;
+    let candidateXAppearedInScan2 = false;
+    spyOn(ConsolidationLLM.prototype, "detectAndResolveContradiction").mockImplementation(async (_newEntry, candidates) => {
+      scanCallCount++;
+      if (scanCallCount === 1) {
+        // First scan: new-entry-1 supersedes candidate-x
+        const cx = candidates.find((c) => c.id === "candidate-x");
+        if (!cx) return [];
+        return [{ candidateId: "candidate-x", resolution: "supersede_old" as const, reason: "newer info" }];
+      }
+      // Second scan: record whether candidate-x incorrectly reappears
+      if (candidates.some((c) => c.id === "candidate-x")) {
+        candidateXAppearedInScan2 = true;
+      }
+      return [];
+    });
+
+    await engine.consolidate();
+
+    // candidate-x must be superseded exactly once (by new-entry-1)
+    expect(db.getEntry("candidate-x")?.status).toBe("superseded");
+    // candidate-x must not have been passed to the second scan iteration
+    expect(candidateXAppearedInScan2).toBe(false);
+    // at most one scan call per new entry
+    expect(scanCallCount).toBeLessThanOrEqual(2);
+  });
+});
+
+// ── ConsolidationEngine.consolidate() cursor advancement ─────────────────────
+
+describe("ConsolidationEngine.consolidate() — cursor advancement", () => {
+  it("advances cursor past all sessions when batch is not full (no boundary risk)", async () => {
+    const t1 = Date.now() - 2000;
+    const t2 = Date.now() - 1000;
+
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+      { id: "session-1", maxMessageTime: t1 },
+      { id: "session-2", maxMessageTime: t2 },
+    ]);
+    // No episodes → sessionsProcessed reflects candidates, not episodes
+    spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+
+    const initialState = db.getConsolidationState();
+
+    await engine.consolidate();
+
+    const state = db.getConsolidationState();
+    // Batch was NOT full (returned 2, limit is much higher) → cursor must advance to t2
+    expect(state.lastMessageTimeCreated).toBe(t2);
+    expect(state.lastMessageTimeCreated).toBeGreaterThan(initialState.lastMessageTimeCreated);
+  });
+
+  it("caps cursor below last session's maxMessageTime when batch is full", async () => {
+    // Simulate a full batch: return exactly maxSessionsPerRun sessions.
+    // To trigger the cap guard we also need episodes — otherwise maxEpisodeMessageTime=0
+    // and Math.min(0, cap) = 0. Include one episode in the last session so that
+    // maxEpisodeMessageTime = lastSession.maxMessageTime, then the cap fires.
+    const limit = config.consolidation.maxSessionsPerRun;
+
+    const baseTime = Date.now();
+    const sessions = Array.from({ length: limit }, (_, i) => ({
+      id: `session-${i}`,
+      maxMessageTime: baseTime + i * 1000,
+    }));
+
+    const lastSession = sessions[sessions.length - 1];
+
+    // One episode whose maxMessageTime equals the last session's timestamp
+    const ep = makeEpisode({
+      sessionId: lastSession.id,
+      maxMessageTime: lastSession.maxMessageTime,
+    });
+
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue(sessions);
+    spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([ep]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+    spyOn(activation.embeddings, "embed").mockResolvedValue(fakeEmbedding("test"));
+    spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([]);
+
+    await engine.consolidate();
+
+    const state = db.getConsolidationState();
+    // Batch was full → cursor must be capped to lastSession.maxMessageTime - 1
+    expect(state.lastMessageTimeCreated).toBe(lastSession.maxMessageTime - 1);
+  });
+
+  it("never moves cursor backwards", async () => {
+    // Set initial cursor to a future timestamp
+    const futureCursor = Date.now() + 100_000;
+    db.updateConsolidationState({ lastMessageTimeCreated: futureCursor });
+
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue([]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+
+    await engine.consolidate();
+
+    const state = db.getConsolidationState();
+    // Cursor must not go backwards
+    expect(state.lastMessageTimeCreated).toBeGreaterThanOrEqual(futureCursor);
+  });
+});
+
+// ── Full pipeline: extract → reconsolidate → contradiction scan ───────────────
+
+describe("ConsolidationEngine.consolidate() — full pipeline with mocked LLM + embedding", () => {
+  it("creates, updates, and resolves conflicts end-to-end", async () => {
+    // Start with one pre-existing entry.
+    // Its embedding is [1,0,0,...] (unit on dim-0).
+    // The new entry will use embedding [0.6,0.8,0,...] → cos = 0.6 with existing-port.
+    // 0.6 is in [contradictionMinSimilarity=0.4, RECONSOLIDATION_THRESHOLD=0.82) → mid-band.
+    // cos = 0.6 < 0.82 → reconsolidate inserts (below RECONSOLIDATION_THRESHOLD).
+    const existingEmb = [1, 0, 0, 0, 0, 0, 0, 0];
+    db.insertEntry(makeEntry({
+      id: "existing-port",
+      content: "The server runs on port 8080.",
+      topics: ["server", "config"],
+      embedding: existingEmb,
+    }));
+
+    const now = Date.now();
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+      { id: "session-1", maxMessageTime: now },
+    ]);
+    spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+
+    // mid-band embedding: cos(newEmb, existingEmb) = 0.6 → below threshold → insert
+    // and also lands in the contradiction scan band [0.4, 0.82)
+    const midBandEmb = [0.6, 0.8, 0, 0, 0, 0, 0, 0]; // unit: 0.36+0.64=1
+    spyOn(activation.embeddings, "embed").mockResolvedValue(midBandEmb);
+
+    spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([
+      {
+        type: "fact",
+        content: "The server port was changed to 9090.",
+        topics: ["server", "config"],
+        confidence: 0.9,
+        scope: "team",
+        source: "test",
+      },
+    ]);
+
+    // Contradiction scan: new entry vs existing-port — irresolvable
+    spyOn(ConsolidationLLM.prototype, "detectAndResolveContradiction").mockResolvedValue([
+      {
+        candidateId: "existing-port",
+        resolution: "irresolvable",
+        reason: "both ports are actively used for different services",
+      },
+    ]);
+
+    const result = await engine.consolidate();
+
+    expect(result.sessionsProcessed).toBe(1);
+    expect(result.entriesCreated).toBe(1);
+    expect(result.conflictsDetected).toBe(1);
+    expect(result.conflictsResolved).toBe(0); // irresolvable doesn't count as resolved
+
+    // The new entry must be in the DB as conflicted
+    const newEntry = db.getEntries({ type: "fact" }).find((e) => e.content.includes("9090"));
+    expect(newEntry).toBeDefined();
+    expect(newEntry?.status).toBe("conflicted"); // irresolvable marks both as conflicted
+
+    // existing-port also marked conflicted
+    expect(db.getEntry("existing-port")?.status).toBe("conflicted");
+  });
+
+  it("records episodes so they are not reprocessed on the next run", async () => {
+    const now = Date.now();
+    const ep = makeEpisode({ startMessageId: "stable-start", endMessageId: "stable-end", maxMessageTime: now });
+
+    spyOn(EpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+      { id: "session-1", maxMessageTime: now },
+    ]);
+    spyOn(EpisodeReader.prototype, "getNewEpisodes").mockReturnValue([ep]);
+    spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+    spyOn(activation.embeddings, "embed").mockResolvedValue(fakeEmbedding("anything"));
+    spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([]);
+
+    await engine.consolidate();
+
+    // The episode range must now be recorded in the DB
+    const ranges = db.getProcessedEpisodeRanges(["session-1"]);
+    const sessionRanges = ranges.get("session-1") ?? [];
+    const recorded = sessionRanges.find(
+      (r) => r.startMessageId === "stable-start" && r.endMessageId === "stable-end"
+    );
+    expect(recorded).toBeDefined();
   });
 });
 
