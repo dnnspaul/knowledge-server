@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/MAnders333/knowledge-server/compare/v1.1.0...v1.2.0) (2026-03-02)
+
+
+### Features
+
+* add darwin-x64 (Intel Mac) build to release matrix and verify binary checksums on install/update ([ae3ad7f](https://github.com/MAnders333/knowledge-server/commit/ae3ad7f2379606ff5068d6500148c69150b65265))
+
 ## [1.1.0](https://github.com/MAnders333/knowledge-server/compare/v1.0.1...v1.1.0) (2026-03-02)
 
 
