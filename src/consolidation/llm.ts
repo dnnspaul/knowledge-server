@@ -4,7 +4,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
-import { clampKnowledgeScope, clampKnowledgeType, KNOWLEDGE_TYPES } from "../types.js";
+import { clampKnowledgeScope, clampKnowledgeType } from "../types.js";
 import type { KnowledgeEntry, KnowledgeType, KnowledgeScope, Episode } from "../types.js";
 
 /**
@@ -278,11 +278,15 @@ If there is nothing new worth extracting, return an empty array: []`;
     }
 
     return parsed
+      // type is intentionally not validated in the filter — clamped to KnowledgeType in the map below
       .filter((entry) => entry.content && entry.type)
       .map((entry) => ({
-        ...entry,
         type: clampKnowledgeType(entry.type),
+        content: entry.content,
+        topics: Array.isArray(entry.topics) ? entry.topics : [],
+        confidence: entry.confidence,
         scope: clampKnowledgeScope(entry.scope ?? "personal"),
+        source: entry.source,
       }));
   }
 
