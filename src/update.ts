@@ -1,6 +1,7 @@
-import { rename, chmod, unlink, writeFile } from "node:fs/promises";
+import { rename, chmod, unlink, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
+import { createHash } from "node:crypto";
 
 const REPO = "MAnders333/knowledge-server";
 const GITHUB_API = "https://api.github.com";
@@ -16,9 +17,10 @@ function detectPlatform(): string {
 
   if (os === "linux" && arch === "x64") return "linux-x64";
   if (os === "darwin" && arch === "arm64") return "darwin-arm64";
+  if (os === "darwin" && arch === "x64") return "darwin-x64";
 
   throw new Error(
-    `Unsupported platform: ${os}/${arch}. Supported: linux/x64, darwin/arm64. To update manually, download from https://github.com/${REPO}/releases`
+    `Unsupported platform: ${os}/${arch}. Supported: linux/x64, darwin/arm64, darwin/x64. To update manually, download from https://github.com/${REPO}/releases`
   );
 }
 
@@ -38,6 +40,48 @@ async function fetchLatestVersion(): Promise<string> {
     throw new Error(`Unexpected tag_name from GitHub API: ${JSON.stringify(data.tag_name)}`);
   }
   return data.tag_name;
+}
+
+/**
+ * Fetch the SHA256SUMS file for a given platform from the release and return
+ * a map of { assetFilename → expectedHex }.
+ */
+async function fetchChecksums(targetVersion: string, platform: string): Promise<Map<string, string>> {
+  const url = `${GITHUB_RELEASES}/${targetVersion}/SHA256SUMS-${platform}`;
+  const res = await fetch(url, {
+    headers: { "User-Agent": "knowledge-server-updater" },
+    redirect: "follow",
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch checksums: ${res.status} ${res.statusText} (${url})`);
+  }
+  const text = await res.text();
+  const map = new Map<string, string>();
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    // sha256sum format: "<hash>  <filename>" (two spaces) or "<hash> <filename>"
+    const spaceIdx = trimmed.indexOf(" ");
+    if (spaceIdx < 0) continue;
+    const hash = trimmed.slice(0, spaceIdx).trim();
+    const filename = trimmed.slice(spaceIdx).trim().replace(/^\*/, ""); // strip leading * (binary mode)
+    map.set(filename, hash);
+  }
+  return map;
+}
+
+/**
+ * Verify the SHA256 checksum of a downloaded file against an expected hex string.
+ * Throws if the checksum does not match.
+ */
+async function verifyChecksum(filePath: string, expectedHex: string, label: string): Promise<void> {
+  const data = await readFile(filePath);
+  const actual = createHash("sha256").update(data).digest("hex");
+  if (actual !== expectedHex) {
+    throw new Error(
+      `Checksum mismatch for ${label}:\n  expected: ${expectedHex}\n  actual:   ${actual}\n  Aborting — the download may be corrupt or tampered.`
+    );
+  }
 }
 
 /**
@@ -163,33 +207,60 @@ export async function runUpdate(argv: string[], currentVersion: string): Promise
 
   console.log(`\n  Updating ${currentVersion} → ${targetVersion}`);
 
-  // Download both binaries to temp files BEFORE replacing either.
-  // This prevents a split-version install if the second download fails after
-  // the first binary has already been replaced.
-  const binaryUrl = `${GITHUB_RELEASES}/${targetVersion}/knowledge-server-${platform}`;
-  const mcpPath = join(dirname(execPath), "knowledge-server-mcp");
-  const mcpUrl = `${GITHUB_RELEASES}/${targetVersion}/knowledge-server-mcp-${platform}`;
-  const hasMcp = existsSync(mcpPath);
-
-  process.stdout.write(`  Downloading knowledge-server-${platform}... `);
-  let mainTmpPath = "";
+  // Fetch checksums before downloading — fail fast if the checksums file is unavailable
+  process.stdout.write("  Fetching checksums... ");
+  let checksums: Map<string, string>;
   try {
-    mainTmpPath = await downloadBinary(binaryUrl, execPath);
+    checksums = await fetchChecksums(targetVersion, platform);
     console.log("done");
   } catch (err) {
     console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
     process.exit(1);
   }
 
+  // Download both binaries to temp files BEFORE replacing either.
+  // This prevents a split-version install if the second download fails after
+  // the first binary has already been replaced.
+  const binaryAsset = `knowledge-server-${platform}`;
+  const binaryUrl = `${GITHUB_RELEASES}/${targetVersion}/${binaryAsset}`;
+  const mcpPath = join(dirname(execPath), "knowledge-server-mcp");
+  const mcpAsset = `knowledge-server-mcp-${platform}`;
+  const mcpUrl = `${GITHUB_RELEASES}/${targetVersion}/${mcpAsset}`;
+  const hasMcp = existsSync(mcpPath);
+
+  process.stdout.write(`  Downloading ${binaryAsset}... `);
+  let mainTmpPath = "";
+  try {
+    mainTmpPath = await downloadBinary(binaryUrl, execPath);
+    const expectedHash = checksums.get(binaryAsset);
+    if (expectedHash) {
+      await verifyChecksum(mainTmpPath, expectedHash, binaryAsset);
+    } else {
+      console.error(`\n  ⚠ No checksum found for ${binaryAsset} — proceeding without verification`);
+    }
+    console.log("done");
+  } catch (err) {
+    await unlink(mainTmpPath).catch(() => {});
+    console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  }
+
   let mcpTmpPath = "";
   if (hasMcp) {
-    process.stdout.write(`  Downloading knowledge-server-mcp-${platform}... `);
+    process.stdout.write(`  Downloading ${mcpAsset}... `);
     try {
       mcpTmpPath = await downloadBinary(mcpUrl, mcpPath);
+      const expectedMcpHash = checksums.get(mcpAsset);
+      if (expectedMcpHash) {
+        await verifyChecksum(mcpTmpPath, expectedMcpHash, mcpAsset);
+      } else {
+        console.error(`\n  ⚠ No checksum found for ${mcpAsset} — proceeding without verification`);
+      }
       console.log("done");
     } catch (err) {
       // Clean up the already-downloaded main binary temp file before exiting
       await unlink(mainTmpPath).catch(() => {});
+      await unlink(mcpTmpPath).catch(() => {});
       console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
       process.exit(1);
     }

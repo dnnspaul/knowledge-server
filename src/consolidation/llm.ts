@@ -228,6 +228,7 @@ DO NOT ENCODE if:
 - It duplicates or closely restates something already in EXISTING KNOWLEDGE
 - It's a version number, model name, or configuration value likely to change soon
 - The session was mostly back-and-forth clarification with no concrete outcome
+- It's a specific numerical result, statistical output, or data finding from a one-off analysis (e.g., "the R2 shift centerline moved from 0.57 to 0.50", "bootstrap delta was -1.3pp"). Ask: is the *conclusion* reusable, or just the number? The number itself is almost never worth encoding — the conclusion it supports might be (e.g., "App→CR conversion rate shows a structural decline unrelated to per-application behaviour" is encodable; the specific coefficients that proved it are not).
 
 KNOWLEDGE EVOLUTION — when existing knowledge should be upgraded:
 - If a new episode reinforces an existing "fact" into a recurring pattern, extract the generalized version.

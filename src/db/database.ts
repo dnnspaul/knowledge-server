@@ -620,6 +620,27 @@ export class KnowledgeDB {
       .run(resolvedId, counterpartId, counterpartId, resolvedId);
   }
 
+  /**
+   * Hard-delete an entry and all its relations.
+   * Intended for human review cleanup (junk/noise entries, irresolvable conflicts
+   * that aren't worth keeping). Returns true if an entry was deleted, false if not found.
+   */
+  deleteEntry(id: string): boolean {
+    let deleted = false;
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          "DELETE FROM knowledge_relation WHERE source_id = ? OR target_id = ?"
+        )
+        .run(id, id);
+      const result = this.db
+        .prepare("DELETE FROM knowledge_entry WHERE id = ?")
+        .run(id);
+      deleted = result.changes > 0;
+    })();
+    return deleted;
+  }
+
   // ── Relations ──
 
   insertRelation(relation: KnowledgeRelation): void {

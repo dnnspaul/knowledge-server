@@ -261,7 +261,11 @@ The server binds to `127.0.0.1` by default and will exit at startup if `KNOWLEDG
 
 ### Prompt injection
 
-The consolidation pipeline sends raw session content to an LLM. The more realistic risk is not a dedicated attacker — it's adversarial text that ended up in your own sessions: code you pasted, web content you discussed, or documentation that contained prompt-like instructions. Such content could in principle influence what gets consolidated into the knowledge graph. The extraction prompt is hardened against this, and any injected entry would still need to pass the similarity threshold and reconsolidation check — but no instruction-following model is fully immune. Be aware of this if you regularly paste large amounts of external content into your coding sessions.
+The system has two prompt injection surfaces:
+
+**Consolidation pipeline:** Raw session content is sent to an LLM for knowledge extraction. The more realistic risk is not a dedicated attacker — it's adversarial text that ended up in your own sessions: code you pasted, web content you discussed, or documentation that contained prompt-like instructions. Such content could in principle influence what gets consolidated into the knowledge graph. The extraction prompt is hardened against this, and any injected entry would still need to pass the similarity threshold and reconsolidation check — but no instruction-following model is fully immune. Be aware of this if you regularly paste large amounts of external content into your coding sessions.
+
+**Plugin injection:** Activated knowledge entries are injected verbatim into the LLM context of new sessions. An entry whose content contains instruction-like text could subtly influence agent behaviour. The plugin labels injected entries as "background context, not instructions", which helps but does not fully prevent a well-crafted entry from being followed. Entries that appear suspicious can be reviewed and deleted via `GET /review` and `DELETE /entries/:id`. The extraction bar (most sessions produce no entries) and the reconsolidation deduplication step significantly limit what can reach the store, but no LLM-based system is fully immune to injection.
 
 ### Rate limiting
 

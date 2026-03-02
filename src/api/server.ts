@@ -4,7 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { KnowledgeDB } from "../db/database.js";
 import type { ActivationEngine } from "../activation/activate.js";
 import type { ConsolidationEngine } from "../consolidation/consolidate.js";
-import type { KnowledgeEntry } from "../types.js";
+import type { KnowledgeEntry, KnowledgeStatus } from "../types.js";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 // @ts-ignore — Bun supports JSON imports natively; tsc may warn without resolveJsonModule
@@ -21,6 +21,9 @@ import pkg from "../../package.json" with { type: "json" };
  * - GET  /status              -- Server health and stats
  * - GET  /entries             -- List all entries (with filters)
  * - GET  /entries/:id         -- Get a specific entry
+ * - PATCH /entries/:id        -- Update fields on an entry       [requires admin token]
+ * - POST /entries/:id/resolve -- Resolve a conflicted entry pair [requires admin token]
+ * - DELETE /entries/:id       -- Hard-delete an entry            [requires admin token]
  *
  * Admin token:
  * A random token is generated at startup and printed to the console once.
@@ -220,6 +223,189 @@ export function createApp(
       entry: stripEmbedding(entry),
       relations,
     });
+  });
+
+  // PATCH /entries/:id — update mutable fields on any entry.
+  // Useful for human review: correcting content, changing scope/type, marking stale entries active, etc.
+  // Accepts any subset of: content, topics, confidence, status, scope.
+  // Embedding is NOT re-computed — callers that change content should be aware similarity
+  // searches will use the old embedding until the next reconsolidation pass touches the entry.
+  app.patch("/entries/:id", async (c) => {
+    if (!requireAdminToken(c)) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const entry = db.getEntry(c.req.param("id"));
+    if (!entry) {
+      return c.json({ error: "Entry not found" }, 404);
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const allowed = ["content", "topics", "confidence", "status", "scope"] as const;
+    type AllowedField = typeof allowed[number];
+    const updates: Partial<KnowledgeEntry> = {};
+
+    for (const field of allowed) {
+      if (field in body) {
+        (updates as Record<AllowedField, unknown>)[field] = body[field];
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return c.json({ error: `No updatable fields provided. Allowed: ${allowed.join(", ")}` }, 400);
+    }
+
+    // Validate all fields before touching the DB.
+    if (updates.content !== undefined) {
+      if (typeof updates.content !== "string" || !updates.content.trim()) {
+        return c.json({ error: "content must be a non-empty string" }, 400);
+      }
+    }
+    if (updates.topics !== undefined) {
+      if (!Array.isArray(updates.topics) || !(updates.topics as unknown[]).every((t) => typeof t === "string")) {
+        return c.json({ error: "topics must be an array of strings" }, 400);
+      }
+    }
+    const validStatuses: KnowledgeStatus[] = ["active", "archived", "superseded", "conflicted", "tombstoned"];
+    if (updates.status !== undefined && !validStatuses.includes(updates.status)) {
+      return c.json({ error: `Invalid status. Must be one of: ${validStatuses.join(", ")}` }, 400);
+    }
+    if (updates.scope !== undefined && updates.scope !== "personal" && updates.scope !== "team") {
+      return c.json({ error: `Invalid scope. Must be 'personal' or 'team'` }, 400);
+    }
+    if (updates.confidence !== undefined) {
+      const c_ = updates.confidence as unknown;
+      if (typeof c_ !== "number" || c_ < 0 || c_ > 1) {
+        return c.json({ error: "confidence must be a number between 0 and 1" }, 400);
+      }
+    }
+
+    db.updateEntry(entry.id, updates);
+    const updated = db.getEntry(entry.id);
+    return c.json({ entry: updated ? stripEmbedding(updated) : null });
+  });
+
+  // POST /entries/:id/resolve — resolve a conflicted entry pair via one of three outcomes:
+  //   supersede_this  — the entry identified by :id is the loser; its conflict counterpart wins
+  //   supersede_other — the entry identified by :id wins; its conflict counterpart is superseded
+  //   merge           — replace :id's content with mergedContent; supersede the counterpart
+  //   delete          — hard-delete this entry (useful for noise/junk that shouldn't be kept)
+  //
+  // The entry must have status='conflicted'. Its counterpart is looked up automatically
+  // via the contradicts relation.
+  app.post("/entries/:id/resolve", async (c) => {
+    if (!requireAdminToken(c)) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const entry = db.getEntry(c.req.param("id"));
+    if (!entry) {
+      return c.json({ error: "Entry not found" }, 404);
+    }
+    if (entry.status !== "conflicted") {
+      return c.json({ error: `Entry is not conflicted (status: ${entry.status})` }, 400);
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    const resolution = body.resolution as string;
+    const validResolutions = ["supersede_this", "supersede_other", "merge", "delete"];
+    if (!validResolutions.includes(resolution)) {
+      return c.json({ error: `Invalid resolution. Must be one of: ${validResolutions.join(", ")}` }, 400);
+    }
+
+    // All resolutions need the counterpart. For 'delete', we also restore the counterpart
+    // to 'active' before deleting — otherwise it stays 'conflicted' forever with no partner.
+    const relations = db.getRelationsFor(entry.id);
+    const conflictRelation = relations.find((r) => r.type === "contradicts");
+    const counterpartId = conflictRelation
+      ? (conflictRelation.sourceId === entry.id ? conflictRelation.targetId : conflictRelation.sourceId)
+      : null;
+
+    if (resolution === "delete") {
+      // Restore the counterpart to active (deleteEntry cascades and removes the relation)
+      if (counterpartId) {
+        db.updateEntry(counterpartId, { status: "active" });
+      }
+      db.deleteEntry(entry.id);
+      return c.json({ ok: true, deleted: entry.id, restoredCounterpart: counterpartId });
+    }
+
+    if (!counterpartId) {
+      return c.json({ error: "No contradicts relation found — cannot locate conflict counterpart" }, 422);
+    }
+
+    if (resolution === "merge") {
+      const mergedContent = body.mergedContent as string | undefined;
+      if (!mergedContent || typeof mergedContent !== "string" || !mergedContent.trim()) {
+        return c.json({ error: "mergedContent is required for merge resolution" }, 400);
+      }
+      // In applyContradictionResolution: "merge" means newEntryId content gets mergedData,
+      // existingEntryId is superseded. We treat :id as the winner (newEntryId).
+      db.applyContradictionResolution("merge", entry.id, counterpartId, {
+        content: mergedContent,
+        type: entry.type,
+        topics: entry.topics,
+        confidence: entry.confidence,
+      });
+      return c.json({ ok: true, resolution: "merge", winner: entry.id, superseded: counterpartId });
+    }
+
+    if (resolution === "supersede_this") {
+      // :id loses — counterpart wins
+      // applyContradictionResolution("supersede_new", newEntryId=:id, existingEntryId=counterpart)
+      // means existingEntryId (counterpart) wins, newEntryId (:id) is superseded
+      db.applyContradictionResolution("supersede_new", entry.id, counterpartId);
+      return c.json({ ok: true, resolution: "supersede_this", winner: counterpartId, superseded: entry.id });
+    }
+
+    // supersede_other — :id wins, counterpart loses
+    // applyContradictionResolution("supersede_old", newEntryId=:id, existingEntryId=counterpart)
+    // means newEntryId (:id) wins, existingEntryId (counterpart) is superseded
+    db.applyContradictionResolution("supersede_old", entry.id, counterpartId);
+    return c.json({ ok: true, resolution: "supersede_other", winner: entry.id, superseded: counterpartId });
+  });
+
+  // DELETE /entries/:id — hard-delete an entry and all its relations.
+  // Use for noise, junk extractions, or entries you simply don't want in the store.
+  // Irreversible. For soft removal prefer PATCH with status='superseded'.
+  app.delete("/entries/:id", (c) => {
+    if (!requireAdminToken(c)) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const entry = db.getEntry(c.req.param("id"));
+    if (!entry) {
+      return c.json({ error: "Entry not found" }, 404);
+    }
+
+    // If the entry is conflicted, restore its counterpart to active before deleting.
+    // deleteEntry cascades and removes the contradicts relation, which would otherwise
+    // leave the counterpart stuck in 'conflicted' status with no resolvable partner.
+    let restoredCounterpart: string | null = null;
+    if (entry.status === "conflicted") {
+      const relations = db.getRelationsFor(entry.id);
+      const conflictRel = relations.find((r) => r.type === "contradicts");
+      if (conflictRel) {
+        restoredCounterpart =
+          conflictRel.sourceId === entry.id ? conflictRel.targetId : conflictRel.sourceId;
+        db.updateEntry(restoredCounterpart, { status: "active" });
+      }
+    }
+
+    db.deleteEntry(entry.id);
+    return c.json({ ok: true, deleted: entry.id, restoredCounterpart });
   });
 
   return app;

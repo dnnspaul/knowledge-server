@@ -12,9 +12,7 @@
 # Update an existing installation:
 #   knowledge-server update
 #
-# Note: no checksum verification is performed. Downloads are over HTTPS from
-# github.com. If your threat model requires binary integrity verification,
-# download the release assets manually and verify the SHA256 sums.
+# SHA-256 checksums are downloaded and verified before binaries are installed.
 set -euo pipefail
 
 REPO="MAnders333/knowledge-server"
@@ -73,16 +71,12 @@ case "$OS" in
   Darwin)
     case "$ARCH" in
       arm64)  PLATFORM="darwin-arm64" ;;
-      x86_64)
-        echo "Unsupported: Intel macOS (x86_64). Only Apple Silicon (arm64) is supported."
-        echo "Run from source instead: https://github.com/$REPO"
-        exit 1
-        ;;
+      x86_64) PLATFORM="darwin-x64" ;;
       *) echo "Unsupported architecture: $ARCH on macOS."; exit 1 ;;
     esac
     ;;
   *)
-    echo "Unsupported OS: $OS. Only Linux (x64) and macOS (arm64) are supported."
+    echo "Unsupported OS: $OS. Supported: Linux x64, macOS arm64, macOS x64."
     exit 1
     ;;
 esac
@@ -121,19 +115,52 @@ mkdir -p "$BIN_DIR"
 mkdir -p "$PLUGIN_DIR"
 mkdir -p "$COMMAND_DIR"
 
-# ── Download binaries into libexec ────────────────────────────────────────────
+# ── Download binaries and verify checksums ────────────────────────────────────
 
 echo "Downloading binaries..."
 
+TMPDIR_DL="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_DL"' EXIT
+
+# Download the checksum file first
+curl --fail --location --silent --show-error \
+  "$BASE_URL/SHA256SUMS-$PLATFORM" \
+  -o "$TMPDIR_DL/SHA256SUMS"
+
+# Download both binaries to temp dir, then verify before installing
 curl --fail --location --show-error --progress-bar \
   "$BASE_URL/knowledge-server-$PLATFORM" \
-  -o "$INSTALL_DIR/libexec/knowledge-server"
-chmod +x "$INSTALL_DIR/libexec/knowledge-server"
-echo "  ✓ knowledge-server"
+  -o "$TMPDIR_DL/knowledge-server"
 
 curl --fail --location --show-error --progress-bar \
   "$BASE_URL/knowledge-server-mcp-$PLATFORM" \
-  -o "$INSTALL_DIR/libexec/knowledge-server-mcp"
+  -o "$TMPDIR_DL/knowledge-server-mcp"
+
+echo "Verifying checksums..."
+# The SHA256SUMS file uses the release asset filenames; verify using just the basenames
+if command -v sha256sum > /dev/null 2>&1; then
+  # MCP substitution must come before server substitution to avoid partial match:
+  # "knowledge-server-$PLATFORM" is a prefix of "knowledge-server-mcp-$PLATFORM"
+  (cd "$TMPDIR_DL" && sed "s/knowledge-server-mcp-$PLATFORM/knowledge-server-mcp/; s/knowledge-server-$PLATFORM/knowledge-server/" SHA256SUMS | sha256sum --check --status) || {
+    echo "Checksum verification FAILED — aborting install."
+    exit 1
+  }
+elif command -v shasum > /dev/null 2>&1; then
+  (cd "$TMPDIR_DL" && sed "s/knowledge-server-mcp-$PLATFORM/knowledge-server-mcp/; s/knowledge-server-$PLATFORM/knowledge-server/" SHA256SUMS | shasum -a 256 --check --status) || {
+    echo "Checksum verification FAILED — aborting install."
+    exit 1
+  }
+else
+  echo "  ⚠ No sha256sum or shasum found — skipping checksum verification"
+fi
+echo "  ✓ Checksums verified"
+
+# Move verified binaries into place
+mv "$TMPDIR_DL/knowledge-server" "$INSTALL_DIR/libexec/knowledge-server"
+chmod +x "$INSTALL_DIR/libexec/knowledge-server"
+echo "  ✓ knowledge-server"
+
+mv "$TMPDIR_DL/knowledge-server-mcp" "$INSTALL_DIR/libexec/knowledge-server-mcp"
 chmod +x "$INSTALL_DIR/libexec/knowledge-server-mcp"
 echo "  ✓ knowledge-server-mcp"
 

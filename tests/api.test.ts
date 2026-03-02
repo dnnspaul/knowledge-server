@@ -259,4 +259,260 @@ describe("HTTP API", () => {
     const data = await res.json();
     expect(data.status).toBe("reinitialized");
   });
+
+  // -- PATCH /entries/:id --
+
+  it("PATCH /entries/:id should return 401 without token", async () => {
+    const res = await app.request("/entries/nonexistent", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "new" }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("PATCH /entries/:id should return 404 for unknown entry", async () => {
+    const res = await app.request("/entries/nonexistent", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${TEST_ADMIN_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ content: "new" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("PATCH /entries/:id should update allowed fields", async () => {
+    db.insertEntry({
+      id: "patch-test",
+      type: "fact",
+      content: "Original content",
+      topics: ["topic"],
+      confidence: 0.8,
+      source: "test",
+      scope: "personal",
+      status: "active",
+      strength: 1.0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastAccessedAt: Date.now(),
+      accessCount: 0,
+      observationCount: 1,
+      supersededBy: null,
+      derivedFrom: [],
+    });
+
+    const res = await app.request("/entries/patch-test", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${TEST_ADMIN_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ content: "Updated content", confidence: 0.95 }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.entry.content).toBe("Updated content");
+    expect(data.entry.confidence).toBe(0.95);
+  });
+
+  it("PATCH /entries/:id should return 400 with no valid fields", async () => {
+    db.insertEntry({
+      id: "patch-noop",
+      type: "fact",
+      content: "Content",
+      topics: [],
+      confidence: 0.8,
+      source: "test",
+      scope: "personal",
+      status: "active",
+      strength: 1.0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastAccessedAt: Date.now(),
+      accessCount: 0,
+      observationCount: 1,
+      supersededBy: null,
+      derivedFrom: [],
+    });
+
+    const res = await app.request("/entries/patch-noop", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${TEST_ADMIN_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ embedding: [1, 2, 3] }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  // -- DELETE /entries/:id --
+
+  it("DELETE /entries/:id should return 401 without token", async () => {
+    const res = await app.request("/entries/nonexistent", { method: "DELETE" });
+    expect(res.status).toBe(401);
+  });
+
+  it("DELETE /entries/:id should return 404 for unknown entry", async () => {
+    const res = await app.request("/entries/nonexistent", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${TEST_ADMIN_TOKEN}` },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("DELETE /entries/:id should hard-delete entry and relations", async () => {
+    db.insertEntry({
+      id: "delete-test",
+      type: "fact",
+      content: "To be deleted",
+      topics: [],
+      confidence: 0.8,
+      source: "test",
+      scope: "personal",
+      status: "active",
+      strength: 1.0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastAccessedAt: Date.now(),
+      accessCount: 0,
+      observationCount: 1,
+      supersededBy: null,
+      derivedFrom: [],
+    });
+
+    const res = await app.request("/entries/delete-test", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${TEST_ADMIN_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.ok).toBe(true);
+    expect(data.deleted).toBe("delete-test");
+
+    // Verify it's gone
+    const check = await app.request("/entries/delete-test");
+    expect(check.status).toBe(404);
+  });
+
+  // -- POST /entries/:id/resolve --
+
+  it("POST /entries/:id/resolve should return 401 without token", async () => {
+    const res = await app.request("/entries/nonexistent/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resolution: "supersede_other" }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /entries/:id/resolve should return 404 for unknown entry", async () => {
+    const res = await app.request("/entries/nonexistent/resolve", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TEST_ADMIN_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ resolution: "supersede_other" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /entries/:id/resolve should return 400 for non-conflicted entry", async () => {
+    db.insertEntry({
+      id: "not-conflicted",
+      type: "fact",
+      content: "Active entry",
+      topics: [],
+      confidence: 0.8,
+      source: "test",
+      scope: "personal",
+      status: "active",
+      strength: 1.0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastAccessedAt: Date.now(),
+      accessCount: 0,
+      observationCount: 1,
+      supersededBy: null,
+      derivedFrom: [],
+    });
+
+    const res = await app.request("/entries/not-conflicted/resolve", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TEST_ADMIN_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ resolution: "supersede_other" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /entries/:id/resolve with delete should hard-delete a conflicted entry", async () => {
+    db.insertEntry({
+      id: "conflicted-del",
+      type: "fact",
+      content: "Conflicted junk",
+      topics: [],
+      confidence: 0.8,
+      source: "test",
+      scope: "personal",
+      status: "conflicted",
+      strength: 1.0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastAccessedAt: Date.now(),
+      accessCount: 0,
+      observationCount: 1,
+      supersededBy: null,
+      derivedFrom: [],
+    });
+
+    const res = await app.request("/entries/conflicted-del/resolve", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TEST_ADMIN_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ resolution: "delete" }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.ok).toBe(true);
+    expect(data.deleted).toBe("conflicted-del");
+  });
+
+  it("POST /entries/:id/resolve with invalid resolution should return 400", async () => {
+    db.insertEntry({
+      id: "conflicted-bad",
+      type: "fact",
+      content: "Conflicted",
+      topics: [],
+      confidence: 0.8,
+      source: "test",
+      scope: "personal",
+      status: "conflicted",
+      strength: 1.0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastAccessedAt: Date.now(),
+      accessCount: 0,
+      observationCount: 1,
+      supersededBy: null,
+      derivedFrom: [],
+    });
+
+    const res = await app.request("/entries/conflicted-bad/resolve", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TEST_ADMIN_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ resolution: "magic" }),
+    });
+    expect(res.status).toBe(400);
+  });
 });
