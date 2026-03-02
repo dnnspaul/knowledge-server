@@ -5,7 +5,7 @@
  * clients so they run fast and offline. They verify the core reconsolidation
  * logic, contradiction scan wiring, and decay behaviour.
  */
-import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from "bun:test";
 import { KnowledgeDB } from "../src/db/database";
 import { ActivationEngine } from "../src/activation/activate";
 import { ConsolidationEngine } from "../src/consolidation/consolidate";
@@ -36,6 +36,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Restore all spies so prototype mutations don't leak into other test files
+  // (e.g. ConsolidationLLM.prototype.extractKnowledge mocks must not affect llm.test.ts).
+  mock.restore();
   db.close();
   rmSync(tempDir, { recursive: true, force: true });
 });
