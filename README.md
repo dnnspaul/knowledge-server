@@ -230,6 +230,7 @@ All config is via environment variables in `.env`. Defaults are sensible for loc
 | `CONSOLIDATION_MAX_SESSIONS` | `50` | Sessions per consolidation batch |
 | `CONSOLIDATION_CHUNK_SIZE` | `10` | Episodes per LLM extraction call |
 | `CONTRADICTION_MIN_SIMILARITY` | `0.4` | Lower bound of the contradiction scan similarity band (upper bound is always 0.82) |
+| `CONSOLIDATION_POLL_INTERVAL_MS` | `0` (disabled) | Auto-consolidation polling interval in ms while server runs. `0` = disabled; e.g. `1800000` = every 30 min |
 | `ACTIVATION_MAX_RESULTS` | `10` | Max entries returned by activation |
 | `ACTIVATION_SIMILARITY_THRESHOLD` | `0.3` | Minimum cosine similarity to activate |
 
