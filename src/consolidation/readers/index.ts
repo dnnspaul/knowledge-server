@@ -1,10 +1,10 @@
-import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { config } from "../../config.js";
 import { logger } from "../../logger.js";
-import { OpenCodeEpisodeReader } from "./opencode.js";
-import { ClaudeCodeEpisodeReader } from "./claude-code.js";
 import type { IEpisodeReader } from "../../types.js";
+import { ClaudeCodeEpisodeReader } from "./claude-code.js";
+import { OpenCodeEpisodeReader } from "./opencode.js";
 
 export { OpenCodeEpisodeReader } from "./opencode.js";
 export { ClaudeCodeEpisodeReader } from "./claude-code.js";
@@ -14,8 +14,8 @@ export { ClaudeCodeEpisodeReader } from "./claude-code.js";
  * Ordered by likelihood — the standard XDG path first, then legacy macOS locations.
  */
 const OPENCODE_DB_PROBE_PATHS = [
-  // Primary: XDG data dir (used by the current opencode release on all platforms)
-  config.opencodeDbPath, // already resolves ~/.local/share/opencode/opencode.db
+	// Primary: XDG data dir (used by the current opencode release on all platforms)
+	config.opencodeDbPath, // already resolves ~/.local/share/opencode/opencode.db
 ];
 
 /**
@@ -29,33 +29,33 @@ const OPENCODE_DB_PROBE_PATHS = [
  * Returns null if no path can be found or the file doesn't exist.
  */
 function resolveOpenCodeDbPath(): string | null {
-  // If explicitly set via env var, trust it (validateConfig already checked existence).
-  if (process.env.OPENCODE_DB_PATH) {
-    return existsSync(config.opencodeDbPath) ? config.opencodeDbPath : null;
-  }
+	// If explicitly set via env var, trust it (validateConfig already checked existence).
+	if (process.env.OPENCODE_DB_PATH) {
+		return existsSync(config.opencodeDbPath) ? config.opencodeDbPath : null;
+	}
 
-  // Try the CLI — most reliable since the binary knows its own path.
-  try {
-    const cliPath = execSync("opencode db path", {
-      encoding: "utf8",
-      timeout: 3000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    if (cliPath && existsSync(cliPath)) {
-      return cliPath;
-    }
-  } catch {
-    // CLI not on PATH or returned non-zero — fall through to probe list
-  }
+	// Try the CLI — most reliable since the binary knows its own path.
+	try {
+		const cliPath = execSync("opencode db path", {
+			encoding: "utf8",
+			timeout: 3000,
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+		if (cliPath && existsSync(cliPath)) {
+			return cliPath;
+		}
+	} catch {
+		// CLI not on PATH or returned non-zero — fall through to probe list
+	}
 
-  // Probe well-known paths
-  for (const candidate of OPENCODE_DB_PROBE_PATHS) {
-    if (candidate && existsSync(candidate)) {
-      return candidate;
-    }
-  }
+	// Probe well-known paths
+	for (const candidate of OPENCODE_DB_PROBE_PATHS) {
+		if (candidate && existsSync(candidate)) {
+			return candidate;
+		}
+	}
 
-  return null;
+	return null;
 }
 
 /**
@@ -69,8 +69,8 @@ function resolveOpenCodeDbPath(): string | null {
  * Returns null if the directory doesn't exist.
  */
 function resolveClaudeDbPath(): string | null {
-  const candidate = config.claudeDbPath; // already merged from env vars in config.ts
-  return existsSync(candidate) ? candidate : null;
+	const candidate = config.claudeDbPath; // already merged from env vars in config.ts
+	return existsSync(candidate) ? candidate : null;
 }
 
 /**
@@ -86,38 +86,38 @@ function resolveClaudeDbPath(): string | null {
  * Order matters for log output but not for correctness — sources are independent.
  */
 export function createEpisodeReaders(): IEpisodeReader[] {
-  const readers: IEpisodeReader[] = [];
+	const readers: IEpisodeReader[] = [];
 
-  // ── OpenCode ──
-  if (config.opencodeEnabled) {
-    const dbPath = resolveOpenCodeDbPath();
-    if (dbPath) {
-      readers.push(new OpenCodeEpisodeReader(dbPath));
-      logger.log(`[sources] OpenCode: ${dbPath}`);
-    } else {
-      logger.warn(
-        "[sources] OpenCode source enabled but DB not found. " +
-        "Set OPENCODE_DB_PATH or disable with OPENCODE_ENABLED=false."
-      );
-    }
-  } else {
-    logger.log("[sources] OpenCode: disabled (OPENCODE_ENABLED=false)");
-  }
+	// ── OpenCode ──
+	if (config.opencodeEnabled) {
+		const dbPath = resolveOpenCodeDbPath();
+		if (dbPath) {
+			readers.push(new OpenCodeEpisodeReader(dbPath));
+			logger.log(`[sources] OpenCode: ${dbPath}`);
+		} else {
+			logger.warn(
+				"[sources] OpenCode source enabled but DB not found. " +
+					"Set OPENCODE_DB_PATH or disable with OPENCODE_ENABLED=false.",
+			);
+		}
+	} else {
+		logger.log("[sources] OpenCode: disabled (OPENCODE_ENABLED=false)");
+	}
 
-  // ── Claude Code ──
-  if (config.claudeEnabled) {
-    const claudeDir = resolveClaudeDbPath();
-    if (claudeDir) {
-      readers.push(new ClaudeCodeEpisodeReader(claudeDir));
-      logger.log(`[sources] Claude Code: ${claudeDir}`);
-    } else {
-      logger.warn(
-        `[sources] Claude Code source enabled but directory not found at ${config.claudeDbPath}. Set CLAUDE_DB_PATH or disable with CLAUDE_ENABLED=false.`
-      );
-    }
-  } else {
-    logger.log("[sources] Claude Code: disabled (CLAUDE_ENABLED=false)");
-  }
+	// ── Claude Code ──
+	if (config.claudeEnabled) {
+		const claudeDir = resolveClaudeDbPath();
+		if (claudeDir) {
+			readers.push(new ClaudeCodeEpisodeReader(claudeDir));
+			logger.log(`[sources] Claude Code: ${claudeDir}`);
+		} else {
+			logger.warn(
+				`[sources] Claude Code source enabled but directory not found at ${config.claudeDbPath}. Set CLAUDE_DB_PATH or disable with CLAUDE_ENABLED=false.`,
+			);
+		}
+	} else {
+		logger.log("[sources] Claude Code: disabled (CLAUDE_ENABLED=false)");
+	}
 
-  return readers;
+	return readers;
 }

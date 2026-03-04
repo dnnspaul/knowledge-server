@@ -1,21 +1,25 @@
 import { Database } from "bun:sqlite";
 import type { SQLQueryBindings } from "bun:sqlite";
-import { mkdirSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { config } from "../config.js";
-import { CREATE_TABLES, SCHEMA_VERSION, EXPECTED_TABLE_COLUMNS } from "./schema.js";
 import { logger } from "../logger.js";
 import { clampKnowledgeType } from "../types.js";
 import type {
-  KnowledgeEntry,
-  KnowledgeRelation,
-  KnowledgeStatus,
-  KnowledgeType,
-  ConsolidationState,
-  ProcessedRange,
-  SourceCursor,
+	ConsolidationState,
+	KnowledgeEntry,
+	KnowledgeRelation,
+	KnowledgeStatus,
+	KnowledgeType,
+	ProcessedRange,
+	SourceCursor,
 } from "../types.js";
+import {
+	CREATE_TABLES,
+	EXPECTED_TABLE_COLUMNS,
+	SCHEMA_VERSION,
+} from "./schema.js";
 
 /**
  * Database layer for the knowledge graph.
@@ -25,1026 +29,1146 @@ import type {
  * and consolidation state management.
  */
 export class KnowledgeDB {
-  private db: Database;
+	private db: Database;
 
-  /**
-   * @param dbPath         Path to the knowledge SQLite DB (defaults to config.dbPath).
-   * @param opencodeDbPath Kept for forward compatibility; currently unused since
-   *                       all migration code was removed in v5. Reserved for future
-   *                       use if cross-DB queries are re-introduced.
-   */
-  constructor(dbPath?: string, opencodeDbPath?: string) {
-    const path = dbPath || config.dbPath;
-    const dir = dirname(path);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
+	/**
+	 * @param dbPath Path to the knowledge SQLite DB (defaults to config.dbPath).
+	 */
+	constructor(dbPath?: string) {
+		const path = dbPath || config.dbPath;
+		const dir = dirname(path);
+		if (!existsSync(dir)) {
+			mkdirSync(dir, { recursive: true });
+		}
 
-    this.db = new Database(path);
-    this.db.exec("PRAGMA journal_mode = WAL");
-    // With WAL mode, NORMAL synchronous is safe and ~3x faster than FULL.
-    // FULL is only needed for non-WAL journals.
-    this.db.exec("PRAGMA synchronous = NORMAL");
-    this.db.exec("PRAGMA foreign_keys = ON");
-    this.initialize();
-  }
+		this.db = new Database(path);
+		this.db.exec("PRAGMA journal_mode = WAL");
+		// With WAL mode, NORMAL synchronous is safe and ~3x faster than FULL.
+		// FULL is only needed for non-WAL journals.
+		this.db.exec("PRAGMA synchronous = NORMAL");
+		this.db.exec("PRAGMA foreign_keys = ON");
+		this.initialize();
+	}
 
-  private initialize(): void {
-    // Bootstrap schema_version table first (no IF NOT EXISTS risk since it's fresh here).
-    // We need it to exist before we can check the version.
-    this.db.exec(`
+	private initialize(): void {
+		// Bootstrap schema_version table first (no IF NOT EXISTS risk since it's fresh here).
+		// We need it to exist before we can check the version.
+		this.db.exec(`
       CREATE TABLE IF NOT EXISTS schema_version (
         version INTEGER NOT NULL,
         applied_at INTEGER NOT NULL
       );
     `);
 
-    const row = this.db
-      .prepare("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
-      .get() as { version: number } | null;
+		const row = this.db
+			.prepare(
+				"SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+			)
+			.get() as { version: number } | null;
 
-    const existingVersion = row?.version ?? 0;
+		const existingVersion = row?.version ?? 0;
 
-    // Detect schema drift: compare actual DB columns against EXPECTED_TABLE_COLUMNS
-    // for every table. This is the authoritative check — the version number alone
-    // can be stale if a prior startup wrote the new version to schema_version before
-    // the DROP+recreate completed (e.g. partial run, crash, or reinitialize race).
-    // Keeping EXPECTED_TABLE_COLUMNS in sync with CREATE_TABLES means adding a new
-    // column to the DDL automatically gets caught here without touching this method.
-    const missingColumns = this.getSchemaDrift();
+		// Detect schema drift: compare actual DB columns against EXPECTED_TABLE_COLUMNS
+		// for every table. This is the authoritative check — the version number alone
+		// can be stale if a prior startup wrote the new version to schema_version before
+		// the DROP+recreate completed (e.g. partial run, crash, or reinitialize race).
+		// Keeping EXPECTED_TABLE_COLUMNS in sync with CREATE_TABLES means adding a new
+		// column to the DDL automatically gets caught here without touching this method.
+		const missingColumns = this.getSchemaDrift();
 
-    const needsReset =
-      // Explicit version lag: recorded version is older than current code
-      (existingVersion > 0 && existingVersion < SCHEMA_VERSION) ||
-      // Schema drift: a table exists but is missing one or more required columns
-      missingColumns.length > 0;
+		const needsReset =
+			// Explicit version lag: recorded version is older than current code
+			(existingVersion > 0 && existingVersion < SCHEMA_VERSION) ||
+			// Schema drift: a table exists but is missing one or more required columns
+			missingColumns.length > 0;
 
-    if (needsReset) {
-      // Existing DB is from an older schema. Since we have no incremental migrations
-      // (single clean schema, solo-use project), drop all tables and start fresh.
-      // This is a hard reset — the caller is expected to run POST /consolidate
-      // after the server starts to rebuild the knowledge graph.
-      const driftDetail = missingColumns.length > 0
-        ? ` (missing columns: ${missingColumns.map((d) => `${d.table}.${d.column}`).join(", ")})`
-        : "";
-      logger.warn(
-        `[db] Schema mismatch: DB is v${existingVersion}, code expects v${SCHEMA_VERSION}${driftDetail}. Dropping and recreating all tables. All existing knowledge data has been cleared.`
-      );
-      // Wrap in a transaction so a crash mid-drop leaves the DB in its original
-      // state (all tables intact) rather than a half-torn-down state.
-      // SQLite DDL (including DROP TABLE) is fully transactional: if the process
-      // crashes before COMMIT, SQLite rolls back all drops on the next open.
-      this.db.transaction(() => {
-        this.db.exec("DROP TABLE IF EXISTS knowledge_relation");
-        this.db.exec("DROP TABLE IF EXISTS knowledge_entry");
-        this.db.exec("DROP TABLE IF EXISTS consolidated_episode");
-        this.db.exec("DROP TABLE IF EXISTS source_cursor");
-        this.db.exec("DROP TABLE IF EXISTS consolidation_state");
-        this.db.exec("DROP TABLE IF EXISTS schema_version");
-      })();
-    }
+		if (needsReset) {
+			// Existing DB is from an older schema. Since we have no incremental migrations
+			// (single clean schema, solo-use project), drop all tables and start fresh.
+			// This is a hard reset — the caller is expected to run POST /consolidate
+			// after the server starts to rebuild the knowledge graph.
+			const driftDetail =
+				missingColumns.length > 0
+					? ` (missing columns: ${missingColumns.map((d) => `${d.table}.${d.column}`).join(", ")})`
+					: "";
+			logger.warn(
+				`[db] Schema mismatch: DB is v${existingVersion}, code expects v${SCHEMA_VERSION}${driftDetail}. Dropping and recreating all tables. All existing knowledge data has been cleared.`,
+			);
+			// Wrap in a transaction so a crash mid-drop leaves the DB in its original
+			// state (all tables intact) rather than a half-torn-down state.
+			// SQLite DDL (including DROP TABLE) is fully transactional: if the process
+			// crashes before COMMIT, SQLite rolls back all drops on the next open.
+			this.db.transaction(() => {
+				this.db.exec("DROP TABLE IF EXISTS knowledge_relation");
+				this.db.exec("DROP TABLE IF EXISTS knowledge_entry");
+				this.db.exec("DROP TABLE IF EXISTS consolidated_episode");
+				this.db.exec("DROP TABLE IF EXISTS source_cursor");
+				this.db.exec("DROP TABLE IF EXISTS consolidation_state");
+				this.db.exec("DROP TABLE IF EXISTS schema_version");
+			})();
+		}
 
-    // Create all tables (idempotent on a fresh DB; re-creates after a version-triggered drop).
-    this.db.exec(CREATE_TABLES);
+		// Create all tables (idempotent on a fresh DB; re-creates after a version-triggered drop).
+		this.db.exec(CREATE_TABLES);
 
-    // Record current schema version.
-    const currentRow = this.db
-      .prepare("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
-      .get() as { version: number } | null;
+		// Record current schema version.
+		const currentRow = this.db
+			.prepare(
+				"SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+			)
+			.get() as { version: number } | null;
 
-    if (!currentRow || currentRow.version < SCHEMA_VERSION) {
-      this.db
-        .prepare("INSERT INTO schema_version (version, applied_at) VALUES (?, ?)")
-        .run(SCHEMA_VERSION, Date.now());
-    }
-  }
+		if (!currentRow || currentRow.version < SCHEMA_VERSION) {
+			this.db
+				.prepare(
+					"INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+				)
+				.run(SCHEMA_VERSION, Date.now());
+		}
+	}
 
-  // ── Entry CRUD ──
+	// ── Entry CRUD ──
 
-  insertEntry(entry: Omit<KnowledgeEntry, "embedding"> & { embedding?: number[] }): void {
-    const embeddingBlob = entry.embedding
-      ? new Uint8Array(new Float32Array(entry.embedding).buffer)
-      : null;
+	insertEntry(
+		entry: Omit<KnowledgeEntry, "embedding"> & { embedding?: number[] },
+	): void {
+		const embeddingBlob = entry.embedding
+			? new Uint8Array(new Float32Array(entry.embedding).buffer)
+			: null;
 
-    this.db
-      .prepare(
-        `INSERT INTO knowledge_entry 
+		this.db
+			.prepare(
+				`INSERT INTO knowledge_entry 
          (id, type, content, topics, confidence, source, scope, status, strength,
           created_at, updated_at, last_accessed_at, access_count, observation_count,
           superseded_by, derived_from, embedding)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        entry.id,
-        entry.type,
-        entry.content,
-        JSON.stringify(entry.topics),
-        entry.confidence,
-        entry.source,
-        entry.scope,
-        entry.status,
-        entry.strength,
-        entry.createdAt,
-        entry.updatedAt,
-        entry.lastAccessedAt,
-        entry.accessCount,
-        entry.observationCount,
-        entry.supersededBy,
-        JSON.stringify(entry.derivedFrom),
-        embeddingBlob
-      );
-  }
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			)
+			.run(
+				entry.id,
+				entry.type,
+				entry.content,
+				JSON.stringify(entry.topics),
+				entry.confidence,
+				entry.source,
+				entry.scope,
+				entry.status,
+				entry.strength,
+				entry.createdAt,
+				entry.updatedAt,
+				entry.lastAccessedAt,
+				entry.accessCount,
+				entry.observationCount,
+				entry.supersededBy,
+				JSON.stringify(entry.derivedFrom),
+				embeddingBlob,
+			);
+	}
 
-  updateEntry(id: string, updates: Partial<KnowledgeEntry>): void {
-    const fields: string[] = [];
-    const values: SQLQueryBindings[] = [];
+	updateEntry(id: string, updates: Partial<KnowledgeEntry>): void {
+		const fields: string[] = [];
+		const values: SQLQueryBindings[] = [];
 
-    if (updates.content !== undefined) {
-      fields.push("content = ?");
-      values.push(updates.content);
-    }
-    if (updates.topics !== undefined) {
-      fields.push("topics = ?");
-      values.push(JSON.stringify(updates.topics));
-    }
-    if (updates.confidence !== undefined) {
-      fields.push("confidence = ?");
-      values.push(updates.confidence);
-    }
-    if (updates.status !== undefined) {
-      fields.push("status = ?");
-      values.push(updates.status);
-    }
-    if (updates.strength !== undefined) {
-      fields.push("strength = ?");
-      values.push(updates.strength);
-    }
-    if (updates.supersededBy !== undefined) {
-      fields.push("superseded_by = ?");
-      values.push(updates.supersededBy);
-    }
-    if (updates.scope !== undefined) {
-      fields.push("scope = ?");
-      values.push(updates.scope);
-    }
-    if (updates.embedding !== undefined) {
-      fields.push("embedding = ?");
-      values.push(new Uint8Array(new Float32Array(updates.embedding).buffer));
-    }
+		if (updates.content !== undefined) {
+			fields.push("content = ?");
+			values.push(updates.content);
+		}
+		if (updates.topics !== undefined) {
+			fields.push("topics = ?");
+			values.push(JSON.stringify(updates.topics));
+		}
+		if (updates.confidence !== undefined) {
+			fields.push("confidence = ?");
+			values.push(updates.confidence);
+		}
+		if (updates.status !== undefined) {
+			fields.push("status = ?");
+			values.push(updates.status);
+		}
+		if (updates.strength !== undefined) {
+			fields.push("strength = ?");
+			values.push(updates.strength);
+		}
+		if (updates.supersededBy !== undefined) {
+			fields.push("superseded_by = ?");
+			values.push(updates.supersededBy);
+		}
+		if (updates.scope !== undefined) {
+			fields.push("scope = ?");
+			values.push(updates.scope);
+		}
+		if (updates.embedding !== undefined) {
+			fields.push("embedding = ?");
+			values.push(new Uint8Array(new Float32Array(updates.embedding).buffer));
+		}
 
-    // Always update timestamp
-    fields.push("updated_at = ?");
-    values.push(Date.now());
+		// Always update timestamp
+		fields.push("updated_at = ?");
+		values.push(Date.now());
 
-    values.push(id);
+		values.push(id);
 
-    this.db
-      .prepare(`UPDATE knowledge_entry SET ${fields.join(", ")} WHERE id = ?`)
-      .run(...values);
-  }
+		this.db
+			.prepare(`UPDATE knowledge_entry SET ${fields.join(", ")} WHERE id = ?`)
+			.run(...values);
+	}
 
-  getEntry(id: string): KnowledgeEntry | null {
-    const row = this.db
-      .prepare("SELECT * FROM knowledge_entry WHERE id = ?")
-      .get(id) as RawEntryRow | null;
+	getEntry(id: string): KnowledgeEntry | null {
+		const row = this.db
+			.prepare("SELECT * FROM knowledge_entry WHERE id = ?")
+			.get(id) as RawEntryRow | null;
 
-    return row ? this.rowToEntry(row) : null;
-  }
+		return row ? this.rowToEntry(row) : null;
+	}
 
-  getActiveEntries(): KnowledgeEntry[] {
-    const rows = this.db
-      .prepare(
-        "SELECT * FROM knowledge_entry WHERE status = 'active' ORDER BY strength DESC"
-      )
-      .all() as RawEntryRow[];
+	getActiveEntries(): KnowledgeEntry[] {
+		const rows = this.db
+			.prepare(
+				"SELECT * FROM knowledge_entry WHERE status = 'active' ORDER BY strength DESC",
+			)
+			.all() as RawEntryRow[];
 
-    return rows.map((r) => this.rowToEntry(r));
-  }
+		return rows.map((r) => this.rowToEntry(r));
+	}
 
-  /**
-   * Get all active and conflicted entries that have embeddings (for similarity search).
-   * Conflicted entries are included so they can be surfaced to the agent with a caveat
-   * annotation, and so the contradiction scan can attempt to re-resolve them.
-   */
-  getActiveEntriesWithEmbeddings(): Array<KnowledgeEntry & { embedding: number[] }> {
-    const rows = this.db
-      .prepare(
-        "SELECT * FROM knowledge_entry WHERE status IN ('active', 'conflicted') AND embedding IS NOT NULL ORDER BY strength DESC"
-      )
-      .all() as RawEntryRow[];
+	/**
+	 * Get all active and conflicted entries that have embeddings (for similarity search).
+	 * Conflicted entries are included so they can be surfaced to the agent with a caveat
+	 * annotation, and so the contradiction scan can attempt to re-resolve them.
+	 */
+	getActiveEntriesWithEmbeddings(): Array<
+		KnowledgeEntry & { embedding: number[] }
+	> {
+		const rows = this.db
+			.prepare(
+				"SELECT * FROM knowledge_entry WHERE status IN ('active', 'conflicted') AND embedding IS NOT NULL ORDER BY strength DESC",
+			)
+			.all() as RawEntryRow[];
 
-    return rows
-      .map((r) => this.rowToEntry(r))
-      .filter((e): e is KnowledgeEntry & { embedding: number[] } => !!e.embedding);
-  }
+		return rows
+			.map((r) => this.rowToEntry(r))
+			.filter(
+				(e): e is KnowledgeEntry & { embedding: number[] } => !!e.embedding,
+			);
+	}
 
-  /**
-   * Get all active and conflicted entries in a single query.
-   * Used by applyDecay — avoids the TOCTOU window of two separate queries
-   * (an entry transitioning between statuses between calls could be processed twice).
-   */
-  getActiveAndConflictedEntries(): KnowledgeEntry[] {
-    const rows = this.db
-      .prepare(
-        "SELECT * FROM knowledge_entry WHERE status IN ('active', 'conflicted') ORDER BY updated_at DESC"
-      )
-      .all() as RawEntryRow[];
-    return rows.map((r) => this.rowToEntry(r));
-  }
+	/**
+	 * Get all active and conflicted entries in a single query.
+	 * Used by applyDecay — avoids the TOCTOU window of two separate queries
+	 * (an entry transitioning between statuses between calls could be processed twice).
+	 */
+	getActiveAndConflictedEntries(): KnowledgeEntry[] {
+		const rows = this.db
+			.prepare(
+				"SELECT * FROM knowledge_entry WHERE status IN ('active', 'conflicted') ORDER BY updated_at DESC",
+			)
+			.all() as RawEntryRow[];
+		return rows.map((r) => this.rowToEntry(r));
+	}
 
-  /**
-   * Get entries missing an embedding — used by ensureEmbeddings.
-   */
-  getEntriesMissingEmbeddings(): KnowledgeEntry[] {
-    const rows = this.db
-      .prepare(
-        "SELECT * FROM knowledge_entry WHERE status IN ('active', 'conflicted') AND embedding IS NULL ORDER BY updated_at DESC"
-      )
-      .all() as RawEntryRow[];
+	/**
+	 * Get entries missing an embedding — used by ensureEmbeddings.
+	 */
+	getEntriesMissingEmbeddings(): KnowledgeEntry[] {
+		const rows = this.db
+			.prepare(
+				"SELECT * FROM knowledge_entry WHERE status IN ('active', 'conflicted') AND embedding IS NULL ORDER BY updated_at DESC",
+			)
+			.all() as RawEntryRow[];
 
-    return rows.map((r) => this.rowToEntry(r));
-  }
+		return rows.map((r) => this.rowToEntry(r));
+	}
 
-  /**
-   * Get entries by status (for review, decay processing, etc.)
-   */
-  getEntriesByStatus(status: KnowledgeStatus): KnowledgeEntry[] {
-    const rows = this.db
-      .prepare("SELECT * FROM knowledge_entry WHERE status = ? ORDER BY updated_at DESC")
-      .all(status) as RawEntryRow[];
+	/**
+	 * Get entries by status (for review, decay processing, etc.)
+	 */
+	getEntriesByStatus(status: KnowledgeStatus): KnowledgeEntry[] {
+		const rows = this.db
+			.prepare(
+				"SELECT * FROM knowledge_entry WHERE status = ? ORDER BY updated_at DESC",
+			)
+			.all(status) as RawEntryRow[];
 
-    return rows.map((r) => this.rowToEntry(r));
-  }
+		return rows.map((r) => this.rowToEntry(r));
+	}
 
-  /**
-   * Get entries with optional server-side filtering — pushes status/type/scope
-   * filters to SQL so we don't load the full table into memory just to slice it.
-   */
-  getEntries(filters: { status?: string; type?: string; scope?: string }): KnowledgeEntry[] {
-    const conditions: string[] = [];
-    const values: string[] = [];
+	/**
+	 * Get entries with optional server-side filtering — pushes status/type/scope
+	 * filters to SQL so we don't load the full table into memory just to slice it.
+	 */
+	getEntries(filters: {
+		status?: string;
+		type?: string;
+		scope?: string;
+	}): KnowledgeEntry[] {
+		const conditions: string[] = [];
+		const values: string[] = [];
 
-    if (filters.status) {
-      conditions.push("status = ?");
-      values.push(filters.status);
-    }
-    if (filters.type) {
-      conditions.push("type = ?");
-      values.push(filters.type);
-    }
-    if (filters.scope) {
-      conditions.push("scope = ?");
-      values.push(filters.scope);
-    }
+		if (filters.status) {
+			conditions.push("status = ?");
+			values.push(filters.status);
+		}
+		if (filters.type) {
+			conditions.push("type = ?");
+			values.push(filters.type);
+		}
+		if (filters.scope) {
+			conditions.push("scope = ?");
+			values.push(filters.scope);
+		}
 
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const rows = this.db
-      .prepare(`SELECT * FROM knowledge_entry ${where} ORDER BY created_at DESC`)
-      .all(...values) as RawEntryRow[];
+		const where =
+			conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+		const rows = this.db
+			.prepare(
+				`SELECT * FROM knowledge_entry ${where} ORDER BY created_at DESC`,
+			)
+			.all(...values) as RawEntryRow[];
 
-    return rows.map((r) => this.rowToEntry(r));
-  }
+		return rows.map((r) => this.rowToEntry(r));
+	}
 
-  /**
-   * Record an access (bump access_count and last_accessed_at).
-   * Retrieval-only signal — never called during consolidation.
-   */
-  recordAccess(id: string): void {
-    this.db
-      .prepare(
-        `UPDATE knowledge_entry 
+	/**
+	 * Record an access (bump access_count and last_accessed_at).
+	 * Retrieval-only signal — never called during consolidation.
+	 */
+	recordAccess(id: string): void {
+		this.db
+			.prepare(
+				`UPDATE knowledge_entry 
          SET access_count = access_count + 1, last_accessed_at = ?, updated_at = ?
-         WHERE id = ?`
-      )
-      .run(Date.now(), Date.now(), id);
-  }
+         WHERE id = ?`,
+			)
+			.run(Date.now(), Date.now(), id);
+	}
 
-  /**
-   * Reinforce an observation (bump observation_count and reset last_accessed_at).
-   * Evidence-only signal — called during consolidation when a `keep` decision
-   * confirms the same knowledge appeared in a new episode.
-   * Never called during activation/retrieval.
-   */
-  reinforceObservation(id: string): void {
-    this.db
-      .prepare(
-        `UPDATE knowledge_entry
+	/**
+	 * Reinforce an observation (bump observation_count and reset last_accessed_at).
+	 * Evidence-only signal — called during consolidation when a `keep` decision
+	 * confirms the same knowledge appeared in a new episode.
+	 * Never called during activation/retrieval.
+	 */
+	reinforceObservation(id: string): void {
+		this.db
+			.prepare(
+				`UPDATE knowledge_entry
          SET observation_count = observation_count + 1, last_accessed_at = ?, updated_at = ?
-         WHERE id = ?`
-      )
-      .run(Date.now(), Date.now(), id);
-  }
+         WHERE id = ?`,
+			)
+			.run(Date.now(), Date.now(), id);
+	}
 
-  /**
-   * Batch update strength scores (used during decay).
-   */
-  updateStrength(id: string, strength: number): void {
-    this.db
-      .prepare("UPDATE knowledge_entry SET strength = ?, updated_at = ? WHERE id = ?")
-      .run(strength, Date.now(), id);
-  }
+	/**
+	 * Batch update strength scores (used during decay).
+	 */
+	updateStrength(id: string, strength: number): void {
+		this.db
+			.prepare(
+				"UPDATE knowledge_entry SET strength = ?, updated_at = ? WHERE id = ?",
+			)
+			.run(strength, Date.now(), id);
+	}
 
-  /**
-   * Count entries by status.
-   */
-  getStats(): Record<string, number> {
-    const rows = this.db
-      .prepare("SELECT status, COUNT(*) as count FROM knowledge_entry GROUP BY status")
-      .all() as Array<{ status: string; count: number }>;
+	/**
+	 * Count entries by status.
+	 */
+	getStats(): Record<string, number> {
+		const rows = this.db
+			.prepare(
+				"SELECT status, COUNT(*) as count FROM knowledge_entry GROUP BY status",
+			)
+			.all() as Array<{ status: string; count: number }>;
 
-    const stats: Record<string, number> = { total: 0 };
-    for (const row of rows) {
-      stats[row.status] = row.count;
-      stats.total += row.count;
-    }
-    return stats;
-  }
+		const stats: Record<string, number> = { total: 0 };
+		for (const row of rows) {
+			stats[row.status] = row.count;
+			stats.total += row.count;
+		}
+		return stats;
+	}
 
-  // ── Contradiction detection ──
+	// ── Contradiction detection ──
 
-  /**
-   * Find active and conflicted entries that share at least one topic with the given
-   * topics list. Returns only entries that have embeddings (needed for similarity filtering).
-   *
-   * Conflicted entries are included so that new entries can re-attempt to resolve
-   * existing irresolvable pairs — if a new entry clearly supports one side, the LLM
-   * can supersede the loser and clear the conflict.
-   *
-   * Used by the post-extraction contradiction scan to find candidates in the
-   * mid-similarity band (0.4–0.82) — entries that are topic-related but not
-   * similar enough to have been caught by the reconsolidation threshold.
-   *
-   * Uses json_each() on both sides to avoid variable-limit issues.
-   * Excludes a set of IDs already handled (e.g. the new entry itself, entries
-   * already processed by decideMerge in this chunk).
-   */
-  getEntriesWithOverlappingTopics(
-    topics: string[],
-    excludeIds: string[]
-  ): Array<KnowledgeEntry & { embedding: number[] }> {
-    if (topics.length === 0) return [];
+	/**
+	 * Find active and conflicted entries that share at least one topic with the given
+	 * topics list. Returns only entries that have embeddings (needed for similarity filtering).
+	 *
+	 * Conflicted entries are included so that new entries can re-attempt to resolve
+	 * existing irresolvable pairs — if a new entry clearly supports one side, the LLM
+	 * can supersede the loser and clear the conflict.
+	 *
+	 * Used by the post-extraction contradiction scan to find candidates in the
+	 * mid-similarity band (0.4–0.82) — entries that are topic-related but not
+	 * similar enough to have been caught by the reconsolidation threshold.
+	 *
+	 * Uses json_each() on both sides to avoid variable-limit issues.
+	 * Excludes a set of IDs already handled (e.g. the new entry itself, entries
+	 * already processed by decideMerge in this chunk).
+	 */
+	getEntriesWithOverlappingTopics(
+		topics: string[],
+		excludeIds: string[],
+	): Array<KnowledgeEntry & { embedding: number[] }> {
+		if (topics.length === 0) return [];
 
-    const rows = this.db
-      .prepare(
-        `SELECT DISTINCT ke.*
+		const rows = this.db
+			.prepare(
+				`SELECT DISTINCT ke.*
          FROM knowledge_entry ke, json_each(ke.topics) t
          WHERE ke.status IN ('active', 'conflicted')
            AND t.value IN (SELECT value FROM json_each(?))
            AND ke.id NOT IN (SELECT value FROM json_each(?))
-         ORDER BY ke.strength DESC`
-      )
-      .all(JSON.stringify(topics), JSON.stringify(excludeIds)) as RawEntryRow[];
+         ORDER BY ke.strength DESC`,
+			)
+			.all(JSON.stringify(topics), JSON.stringify(excludeIds)) as RawEntryRow[];
 
-    // Filter to entries with embeddings — similarity scoring in the contradiction scan
-    // requires embeddings. Entries without embeddings are skipped (they'll get embeddings
-    // on the next ensureEmbeddings pass and be checked on the next consolidation run).
-    return rows
-      .map((r) => this.rowToEntry(r))
-      .filter((e): e is KnowledgeEntry & { embedding: number[] } => !!e.embedding);
-  }
+		// Filter to entries with embeddings — similarity scoring in the contradiction scan
+		// requires embeddings. Entries without embeddings are skipped (they'll get embeddings
+		// on the next ensureEmbeddings pass and be checked on the next consolidation run).
+		return rows
+			.map((r) => this.rowToEntry(r))
+			.filter(
+				(e): e is KnowledgeEntry & { embedding: number[] } => !!e.embedding,
+			);
+	}
 
-  /**
-   * Record the outcome of a contradiction resolution between two entries.
-   *
-   * - "supersede_old": newEntryId wins — mark existingEntryId as superseded
-   * - "supersede_new": existingEntryId wins — mark newEntryId as superseded
-   * - "merge":         replace newEntryId content with merged, mark existingEntryId as superseded
-   * - "irresolvable":  insert a contradicts relation, mark BOTH entries as conflicted for human review
-   *
-   * For supersede/merge resolutions: if the winning entry was previously 'conflicted'
-   * (i.e. it was one half of an irresolvable pair), its contradicts relation is deleted
-   * and its status is restored to 'active'. This enables automatic re-resolution when
-   * a new entry clearly settles a previously unresolvable conflict.
-   */
-  applyContradictionResolution(
-    resolution: "supersede_old" | "supersede_new" | "merge" | "irresolvable",
-    newEntryId: string,
-    existingEntryId: string,
-    mergedData?: { content: string; type: string; topics: string[]; confidence: number }
-  ): void {
-    const now = Date.now();
+	/**
+	 * Record the outcome of a contradiction resolution between two entries.
+	 *
+	 * - "supersede_old": newEntryId wins — mark existingEntryId as superseded
+	 * - "supersede_new": existingEntryId wins — mark newEntryId as superseded
+	 * - "merge":         replace newEntryId content with merged, mark existingEntryId as superseded
+	 * - "irresolvable":  insert a contradicts relation, mark BOTH entries as conflicted for human review
+	 *
+	 * For supersede/merge resolutions: if the winning entry was previously 'conflicted'
+	 * (i.e. it was one half of an irresolvable pair), its contradicts relation is deleted
+	 * and its status is restored to 'active'. This enables automatic re-resolution when
+	 * a new entry clearly settles a previously unresolvable conflict.
+	 */
+	applyContradictionResolution(
+		resolution: "supersede_old" | "supersede_new" | "merge" | "irresolvable",
+		newEntryId: string,
+		existingEntryId: string,
+		mergedData?: {
+			content: string;
+			type: string;
+			topics: string[];
+			confidence: number;
+		},
+	): void {
+		const now = Date.now();
 
-    this.db.transaction(() => {
-      switch (resolution) {
-        case "supersede_old": {
-          // Resolve any prior conflicts on BOTH entries BEFORE status changes.
-          const loserConflictPartner1 = this.findConflictCounterpart(existingEntryId);
-          const winnerConflictPartner1 = this.findConflictCounterpart(newEntryId);
-          // New entry wins — mark existing as superseded
-          this.db
-            .prepare(
-              `UPDATE knowledge_entry
+		this.db.transaction(() => {
+			switch (resolution) {
+				case "supersede_old": {
+					// Resolve any prior conflicts on BOTH entries BEFORE status changes.
+					const loserConflictPartner1 =
+						this.findConflictCounterpart(existingEntryId);
+					const winnerConflictPartner1 =
+						this.findConflictCounterpart(newEntryId);
+					// New entry wins — mark existing as superseded
+					this.db
+						.prepare(
+							`UPDATE knowledge_entry
                SET status = 'superseded', superseded_by = ?, updated_at = ?
-               WHERE id = ?`
-            )
-            .run(newEntryId, now, existingEntryId);
-          // Record the supersedes relation
-          this.db
-            .prepare(
-              `INSERT OR IGNORE INTO knowledge_relation
+               WHERE id = ?`,
+						)
+						.run(newEntryId, now, existingEntryId);
+					// Record the supersedes relation
+					this.db
+						.prepare(
+							`INSERT OR IGNORE INTO knowledge_relation
                (id, source_id, target_id, type, created_at)
-               VALUES (?, ?, ?, 'supersedes', ?)`
-            )
-            .run(randomUUID(), newEntryId, existingEntryId, now);
-          // If the loser was half of an irresolvable pair, its counterpart is now orphaned.
-          // Restore the counterpart to 'active' and clean up the contradicts relation.
-          if (loserConflictPartner1) this.restoreConflictCounterpart(loserConflictPartner1, existingEntryId, now);
-          // If the winner was also conflicted, the new entry decisively settles it —
-          // restore the winner to active and clean up its conflict counterpart too.
-          if (winnerConflictPartner1) {
-            this.db
-              .prepare("UPDATE knowledge_entry SET status = 'active', updated_at = ? WHERE id = ? AND status = 'conflicted'")
-              .run(now, newEntryId);
-            this.restoreConflictCounterpart(winnerConflictPartner1, newEntryId, now);
-          }
-          break;
-        }
+               VALUES (?, ?, ?, 'supersedes', ?)`,
+						)
+						.run(randomUUID(), newEntryId, existingEntryId, now);
+					// If the loser was half of an irresolvable pair, its counterpart is now orphaned.
+					// Restore the counterpart to 'active' and clean up the contradicts relation.
+					if (loserConflictPartner1)
+						this.restoreConflictCounterpart(
+							loserConflictPartner1,
+							existingEntryId,
+							now,
+						);
+					// If the winner was also conflicted, the new entry decisively settles it —
+					// restore the winner to active and clean up its conflict counterpart too.
+					if (winnerConflictPartner1) {
+						this.db
+							.prepare(
+								"UPDATE knowledge_entry SET status = 'active', updated_at = ? WHERE id = ? AND status = 'conflicted'",
+							)
+							.run(now, newEntryId);
+						this.restoreConflictCounterpart(
+							winnerConflictPartner1,
+							newEntryId,
+							now,
+						);
+					}
+					break;
+				}
 
-        case "supersede_new": {
-          // Resolve any prior conflicts on BOTH entries before status changes.
-          const loserConflictPartner2 = this.findConflictCounterpart(newEntryId);
-          const winnerConflictPartner2 = this.findConflictCounterpart(existingEntryId);
-          // Existing entry wins — mark new entry as superseded
-          this.db
-            .prepare(
-              `UPDATE knowledge_entry
+				case "supersede_new": {
+					// Resolve any prior conflicts on BOTH entries before status changes.
+					const loserConflictPartner2 =
+						this.findConflictCounterpart(newEntryId);
+					const winnerConflictPartner2 =
+						this.findConflictCounterpart(existingEntryId);
+					// Existing entry wins — mark new entry as superseded
+					this.db
+						.prepare(
+							`UPDATE knowledge_entry
                SET status = 'superseded', superseded_by = ?, updated_at = ?
-               WHERE id = ?`
-            )
-            .run(existingEntryId, now, newEntryId);
-          this.db
-            .prepare(
-              `INSERT OR IGNORE INTO knowledge_relation
+               WHERE id = ?`,
+						)
+						.run(existingEntryId, now, newEntryId);
+					this.db
+						.prepare(
+							`INSERT OR IGNORE INTO knowledge_relation
                (id, source_id, target_id, type, created_at)
-               VALUES (?, ?, ?, 'supersedes', ?)`
-            )
-            .run(randomUUID(), existingEntryId, newEntryId, now);
-          // Restore the loser's orphaned conflict counterpart if any.
-          if (loserConflictPartner2) this.restoreConflictCounterpart(loserConflictPartner2, newEntryId, now);
-          // If the winner was also conflicted, the new entry decisively settles it —
-          // restore the winner to active and clean up its conflict counterpart too.
-          if (winnerConflictPartner2) {
-            this.db
-              .prepare("UPDATE knowledge_entry SET status = 'active', updated_at = ? WHERE id = ? AND status = 'conflicted'")
-              .run(now, existingEntryId);
-            this.restoreConflictCounterpart(winnerConflictPartner2, existingEntryId, now);
-          }
-          break;
-        }
+               VALUES (?, ?, ?, 'supersedes', ?)`,
+						)
+						.run(randomUUID(), existingEntryId, newEntryId, now);
+					// Restore the loser's orphaned conflict counterpart if any.
+					if (loserConflictPartner2)
+						this.restoreConflictCounterpart(
+							loserConflictPartner2,
+							newEntryId,
+							now,
+						);
+					// If the winner was also conflicted, the new entry decisively settles it —
+					// restore the winner to active and clean up its conflict counterpart too.
+					if (winnerConflictPartner2) {
+						this.db
+							.prepare(
+								"UPDATE knowledge_entry SET status = 'active', updated_at = ? WHERE id = ? AND status = 'conflicted'",
+							)
+							.run(now, existingEntryId);
+						this.restoreConflictCounterpart(
+							winnerConflictPartner2,
+							existingEntryId,
+							now,
+						);
+					}
+					break;
+				}
 
-        case "merge": {
-          // Resolve any prior conflicts on both entries BEFORE status changes.
-          const existingConflictPartner = this.findConflictCounterpart(existingEntryId);
-          const newConflictPartner = this.findConflictCounterpart(newEntryId);
-          // Merge into the new entry, supersede the old one.
-          // If mergedData is absent (LLM truncation), newEntryId keeps its
-          // original content — still a valid state, just unrefined.
-          if (!mergedData) {
-            logger.warn(
-              `[db] merge resolution missing mergedData — existingEntryId ${existingEntryId} ` +
-              `will be superseded but newEntryId ${newEntryId} content unchanged`
-            );
-          } else {
-            const safeType = clampKnowledgeType(mergedData.type);
-            this.db
-              .prepare(
-                `UPDATE knowledge_entry
+				case "merge": {
+					// Resolve any prior conflicts on both entries BEFORE status changes.
+					const existingConflictPartner =
+						this.findConflictCounterpart(existingEntryId);
+					const newConflictPartner = this.findConflictCounterpart(newEntryId);
+					// Merge into the new entry, supersede the old one.
+					// If mergedData is absent (LLM truncation), newEntryId keeps its
+					// original content — still a valid state, just unrefined.
+					if (!mergedData) {
+						logger.warn(
+							`[db] merge resolution missing mergedData — existingEntryId ${existingEntryId} ` +
+								`will be superseded but newEntryId ${newEntryId} content unchanged`,
+						);
+					} else {
+						const safeType = clampKnowledgeType(mergedData.type);
+						this.db
+							.prepare(
+								`UPDATE knowledge_entry
                  SET content = ?, type = ?, topics = ?, confidence = ?,
                      embedding = NULL, updated_at = ?
-                 WHERE id = ?`
-              )
-              .run(
-                mergedData.content,
-                safeType,
-                JSON.stringify(mergedData.topics),
-                mergedData.confidence,
-                now,
-                newEntryId
-              );
-          }
-          this.db
-            .prepare(
-              `UPDATE knowledge_entry
+                 WHERE id = ?`,
+							)
+							.run(
+								mergedData.content,
+								safeType,
+								JSON.stringify(mergedData.topics),
+								mergedData.confidence,
+								now,
+								newEntryId,
+							);
+					}
+					this.db
+						.prepare(
+							`UPDATE knowledge_entry
                SET status = 'superseded', superseded_by = ?, updated_at = ?
-               WHERE id = ?`
-            )
-            .run(newEntryId, now, existingEntryId);
-          this.db
-            .prepare(
-              `INSERT OR IGNORE INTO knowledge_relation
+               WHERE id = ?`,
+						)
+						.run(newEntryId, now, existingEntryId);
+					this.db
+						.prepare(
+							`INSERT OR IGNORE INTO knowledge_relation
                (id, source_id, target_id, type, created_at)
-               VALUES (?, ?, ?, 'supersedes', ?)`
-            )
-            .run(randomUUID(), newEntryId, existingEntryId, now);
-          // Restore orphaned conflict counterparts for both entries if applicable.
-          // For the loser (existingEntryId): restore its counterpart.
-          if (existingConflictPartner) this.restoreConflictCounterpart(existingConflictPartner, existingEntryId, now);
-          // For the winner (newEntryId): if it was conflicted AND the merge content actually
-          // landed (mergedData present), the conflict is decisively resolved — restore it and
-          // its counterpart to active. If mergedData is absent (LLM truncation), the entry
-          // retains its original unrefined content and should stay under review.
-          if (newConflictPartner && mergedData) {
-            this.db
-              .prepare("UPDATE knowledge_entry SET status = 'active', updated_at = ? WHERE id = ? AND status = 'conflicted'")
-              .run(now, newEntryId);
-            this.restoreConflictCounterpart(newConflictPartner, newEntryId, now);
-          }
-          break;
-        }
+               VALUES (?, ?, ?, 'supersedes', ?)`,
+						)
+						.run(randomUUID(), newEntryId, existingEntryId, now);
+					// Restore orphaned conflict counterparts for both entries if applicable.
+					// For the loser (existingEntryId): restore its counterpart.
+					if (existingConflictPartner)
+						this.restoreConflictCounterpart(
+							existingConflictPartner,
+							existingEntryId,
+							now,
+						);
+					// For the winner (newEntryId): if it was conflicted AND the merge content actually
+					// landed (mergedData present), the conflict is decisively resolved — restore it and
+					// its counterpart to active. If mergedData is absent (LLM truncation), the entry
+					// retains its original unrefined content and should stay under review.
+					if (newConflictPartner && mergedData) {
+						this.db
+							.prepare(
+								"UPDATE knowledge_entry SET status = 'active', updated_at = ? WHERE id = ? AND status = 'conflicted'",
+							)
+							.run(now, newEntryId);
+						this.restoreConflictCounterpart(
+							newConflictPartner,
+							newEntryId,
+							now,
+						);
+					}
+					break;
+				}
 
-        case "irresolvable":
-          // Genuine tie — insert contradicts relation, mark BOTH entries as conflicted.
-          // The /review endpoint surfaces all conflicted entries, so both halves of the
-          // conflict must be visible there.
-          this.db
-            .prepare(
-              `INSERT OR IGNORE INTO knowledge_relation
+				case "irresolvable":
+					// Genuine tie — insert contradicts relation, mark BOTH entries as conflicted.
+					// The /review endpoint surfaces all conflicted entries, so both halves of the
+					// conflict must be visible there.
+					this.db
+						.prepare(
+							`INSERT OR IGNORE INTO knowledge_relation
                (id, source_id, target_id, type, created_at)
-               VALUES (?, ?, ?, 'contradicts', ?)`
-            )
-            .run(randomUUID(), newEntryId, existingEntryId, now);
-          this.db
-            .prepare(
-              `UPDATE knowledge_entry SET status = 'conflicted', updated_at = ?
-               WHERE id IN (?, ?)`
-            )
-            .run(now, newEntryId, existingEntryId);
-          break;
-      }
-    })();
-  }
+               VALUES (?, ?, ?, 'contradicts', ?)`,
+						)
+						.run(randomUUID(), newEntryId, existingEntryId, now);
+					this.db
+						.prepare(
+							`UPDATE knowledge_entry SET status = 'conflicted', updated_at = ?
+               WHERE id IN (?, ?)`,
+						)
+						.run(now, newEntryId, existingEntryId);
+					break;
+			}
+		})();
+	}
 
-  /**
-   * Find the ID of the entry that shares a 'contradicts' relation with the given entry,
-   * if one exists. Returns null if the entry has no contradicts relation.
-   *
-   * Must be called BEFORE the entry's status is changed (e.g. before superseding),
-   * since the relation lookup does not depend on status but the caller needs the
-   * counterpart ID before the original entry is modified.
-   */
-  private findConflictCounterpart(entryId: string): string | null {
-    // A 'contradicts' relation only exists when both entries are 'conflicted',
-    // so querying the relation directly is sufficient — no separate status check needed.
-    // This saves one DB round-trip per call (called up to 4 times per resolution).
-    const rel = this.db
-      .prepare(
-        "SELECT source_id, target_id FROM knowledge_relation WHERE type = 'contradicts' AND (source_id = ? OR target_id = ?) LIMIT 1"
-      )
-      .get(entryId, entryId) as { source_id: string; target_id: string } | null;
+	/**
+	 * Find the ID of the entry that shares a 'contradicts' relation with the given entry,
+	 * if one exists. Returns null if the entry has no contradicts relation.
+	 *
+	 * Must be called BEFORE the entry's status is changed (e.g. before superseding),
+	 * since the relation lookup does not depend on status but the caller needs the
+	 * counterpart ID before the original entry is modified.
+	 */
+	private findConflictCounterpart(entryId: string): string | null {
+		// A 'contradicts' relation only exists when both entries are 'conflicted',
+		// so querying the relation directly is sufficient — no separate status check needed.
+		// This saves one DB round-trip per call (called up to 4 times per resolution).
+		const rel = this.db
+			.prepare(
+				"SELECT source_id, target_id FROM knowledge_relation WHERE type = 'contradicts' AND (source_id = ? OR target_id = ?) LIMIT 1",
+			)
+			.get(entryId, entryId) as { source_id: string; target_id: string } | null;
 
-    if (!rel) return null;
-    return rel.source_id === entryId ? rel.target_id : rel.source_id;
-  }
+		if (!rel) return null;
+		return rel.source_id === entryId ? rel.target_id : rel.source_id;
+	}
 
-  /**
-   * Restore a conflict counterpart to 'active' after its paired entry has been
-   * superseded/resolved. Deletes the contradicts relation between them.
-   *
-   * @param counterpartId  The entry to restore (was orphaned when its partner was resolved)
-   * @param resolvedId     The entry that was just superseded (used to target the relation delete)
-   * @param now            Timestamp for updated_at
-   */
-  private restoreConflictCounterpart(counterpartId: string, resolvedId: string, now: number): void {
-    this.db
-      .prepare(
-        "UPDATE knowledge_entry SET status = 'active', updated_at = ? WHERE id = ? AND status = 'conflicted'"
-      )
-      .run(now, counterpartId);
+	/**
+	 * Restore a conflict counterpart to 'active' after its paired entry has been
+	 * superseded/resolved. Deletes the contradicts relation between them.
+	 *
+	 * @param counterpartId  The entry to restore (was orphaned when its partner was resolved)
+	 * @param resolvedId     The entry that was just superseded (used to target the relation delete)
+	 * @param now            Timestamp for updated_at
+	 */
+	private restoreConflictCounterpart(
+		counterpartId: string,
+		resolvedId: string,
+		now: number,
+	): void {
+		this.db
+			.prepare(
+				"UPDATE knowledge_entry SET status = 'active', updated_at = ? WHERE id = ? AND status = 'conflicted'",
+			)
+			.run(now, counterpartId);
 
-    // Scope the delete to the specific pair (not all contradicts relations touching resolvedId)
-    // to avoid accidentally orphaning unrelated conflicts if resolvedId has multiple pairs.
-    this.db
-      .prepare(
-        `DELETE FROM knowledge_relation
+		// Scope the delete to the specific pair (not all contradicts relations touching resolvedId)
+		// to avoid accidentally orphaning unrelated conflicts if resolvedId has multiple pairs.
+		this.db
+			.prepare(
+				`DELETE FROM knowledge_relation
          WHERE type = 'contradicts'
-           AND ((source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?))`
-      )
-      .run(resolvedId, counterpartId, counterpartId, resolvedId);
-  }
+           AND ((source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?))`,
+			)
+			.run(resolvedId, counterpartId, counterpartId, resolvedId);
+	}
 
-  /**
-   * Hard-delete an entry and all its relations.
-   * Intended for human review cleanup (junk/noise entries, irresolvable conflicts
-   * that aren't worth keeping). Returns true if an entry was deleted, false if not found.
-   */
-  deleteEntry(id: string): boolean {
-    let deleted = false;
-    this.db.transaction(() => {
-      this.db
-        .prepare(
-          "DELETE FROM knowledge_relation WHERE source_id = ? OR target_id = ?"
-        )
-        .run(id, id);
-      const result = this.db
-        .prepare("DELETE FROM knowledge_entry WHERE id = ?")
-        .run(id);
-      deleted = result.changes > 0;
-    })();
-    return deleted;
-  }
+	/**
+	 * Hard-delete an entry and all its relations.
+	 * Intended for human review cleanup (junk/noise entries, irresolvable conflicts
+	 * that aren't worth keeping). Returns true if an entry was deleted, false if not found.
+	 */
+	deleteEntry(id: string): boolean {
+		let deleted = false;
+		this.db.transaction(() => {
+			this.db
+				.prepare(
+					"DELETE FROM knowledge_relation WHERE source_id = ? OR target_id = ?",
+				)
+				.run(id, id);
+			const result = this.db
+				.prepare("DELETE FROM knowledge_entry WHERE id = ?")
+				.run(id);
+			deleted = result.changes > 0;
+		})();
+		return deleted;
+	}
 
-  // ── Relations ──
+	// ── Relations ──
 
-  insertRelation(relation: KnowledgeRelation): void {
-    this.db
-      .prepare(
-        "INSERT INTO knowledge_relation (id, source_id, target_id, type, created_at) VALUES (?, ?, ?, ?, ?)"
-      )
-      .run(relation.id, relation.sourceId, relation.targetId, relation.type, relation.createdAt);
-  }
+	insertRelation(relation: KnowledgeRelation): void {
+		this.db
+			.prepare(
+				"INSERT INTO knowledge_relation (id, source_id, target_id, type, created_at) VALUES (?, ?, ?, ?, ?)",
+			)
+			.run(
+				relation.id,
+				relation.sourceId,
+				relation.targetId,
+				relation.type,
+				relation.createdAt,
+			);
+	}
 
-  getRelationsFor(entryId: string): KnowledgeRelation[] {
-    const rows = this.db
-      .prepare(
-        "SELECT * FROM knowledge_relation WHERE source_id = ? OR target_id = ?"
-      )
-      .all(entryId, entryId) as Array<{
-      id: string;
-      source_id: string;
-      target_id: string;
-      type: string;
-      created_at: number;
-    }>;
+	getRelationsFor(entryId: string): KnowledgeRelation[] {
+		const rows = this.db
+			.prepare(
+				"SELECT * FROM knowledge_relation WHERE source_id = ? OR target_id = ?",
+			)
+			.all(entryId, entryId) as Array<{
+			id: string;
+			source_id: string;
+			target_id: string;
+			type: string;
+			created_at: number;
+		}>;
 
-    return rows.map((r) => ({
-      id: r.id,
-      sourceId: r.source_id,
-      targetId: r.target_id,
-      type: r.type as KnowledgeRelation["type"],
-      createdAt: r.created_at,
-    }));
-  }
+		return rows.map((r) => ({
+			id: r.id,
+			sourceId: r.source_id,
+			targetId: r.target_id,
+			type: r.type as KnowledgeRelation["type"],
+			createdAt: r.created_at,
+		}));
+	}
 
-  /**
-   * Batch fetch all 'contradicts' relations that involve any of the given entry IDs.
-   * Returns a map from each entry ID to its conflict counterpart ID.
-   *
-   * Used by the activation engine to annotate conflicted entries without N+1 queries.
-   * Entries with no contradicts relation are absent from the returned map.
-   */
-  getContradictPairsForIds(entryIds: string[]): Map<string, string> {
-    if (entryIds.length === 0) return new Map();
+	/**
+	 * Batch fetch all 'contradicts' relations that involve any of the given entry IDs.
+	 * Returns a map from each entry ID to its conflict counterpart ID.
+	 *
+	 * Used by the activation engine to annotate conflicted entries without N+1 queries.
+	 * Entries with no contradicts relation are absent from the returned map.
+	 */
+	getContradictPairsForIds(entryIds: string[]): Map<string, string> {
+		if (entryIds.length === 0) return new Map();
 
-    const rows = this.db
-      .prepare(
-        `SELECT source_id, target_id FROM knowledge_relation
+		const rows = this.db
+			.prepare(
+				`SELECT source_id, target_id FROM knowledge_relation
          WHERE type = 'contradicts'
            AND (source_id IN (SELECT value FROM json_each(?))
-                OR target_id IN (SELECT value FROM json_each(?)))`
-      )
-      .all(JSON.stringify(entryIds), JSON.stringify(entryIds)) as Array<{
-      source_id: string;
-      target_id: string;
-    }>;
+                OR target_id IN (SELECT value FROM json_each(?)))`,
+			)
+			.all(JSON.stringify(entryIds), JSON.stringify(entryIds)) as Array<{
+			source_id: string;
+			target_id: string;
+		}>;
 
-    const result = new Map<string, string>();
-    for (const row of rows) {
-      // Map both directions so lookup works regardless of which end we query from
-      result.set(row.source_id, row.target_id);
-      result.set(row.target_id, row.source_id);
-    }
-    return result;
-  }
+		const result = new Map<string, string>();
+		for (const row of rows) {
+			// Map both directions so lookup works regardless of which end we query from
+			result.set(row.source_id, row.target_id);
+			result.set(row.target_id, row.source_id);
+		}
+		return result;
+	}
 
-  // ── Episode Tracking ──
+	// ── Episode Tracking ──
 
-  /**
-   * Record a processed episode by its stable message ID range.
-   * Called after the LLM call and DB writes for that episode succeed.
-   * Uses INSERT OR IGNORE to be idempotent on retry.
-   *
-   * @param source  Reader source name (e.g. "opencode", "claude-code").
-   */
-  recordEpisode(
-    source: string,
-    sessionId: string,
-    startMessageId: string,
-    endMessageId: string,
-    contentType: "compaction_summary" | "messages",
-    entriesCreated: number
-  ): void {
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO consolidated_episode
+	/**
+	 * Record a processed episode by its stable message ID range.
+	 * Called after the LLM call and DB writes for that episode succeed.
+	 * Uses INSERT OR IGNORE to be idempotent on retry.
+	 *
+	 * @param source  Reader source name (e.g. "opencode", "claude-code").
+	 */
+	recordEpisode(
+		source: string,
+		sessionId: string,
+		startMessageId: string,
+		endMessageId: string,
+		contentType: "compaction_summary" | "messages",
+		entriesCreated: number,
+	): void {
+		this.db
+			.prepare(
+				`INSERT OR IGNORE INTO consolidated_episode
          (source, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(source, sessionId, startMessageId, endMessageId, contentType, Date.now(), entriesCreated);
-  }
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			)
+			.run(
+				source,
+				sessionId,
+				startMessageId,
+				endMessageId,
+				contentType,
+				Date.now(),
+				entriesCreated,
+			);
+	}
 
-  /**
-   * Load already-processed message ID ranges for a set of session IDs from a specific source.
-   * Returns a Map<sessionId, ProcessedRange[]> for O(1) lookup during segmentation.
-   *
-   * The source filter ensures episodes from one reader don't mask episodes from another
-   * when session IDs happen to collide (both OpenCode and Claude Code use UUIDs, so
-   * collisions are astronomically unlikely, but the source column is the authoritative
-   * namespace boundary).
-   *
-   * Uses json_each() to pass IDs as a single JSON array parameter, avoiding the
-   * SQLite SQLITE_MAX_VARIABLE_NUMBER limit (999) that a spread IN(?,?,...) would hit.
-   *
-   * @param source      Reader source name (e.g. "opencode", "claude-code").
-   * @param sessionIds  Session IDs to look up.
-   */
-  getProcessedEpisodeRanges(source: string, sessionIds: string[]): Map<string, ProcessedRange[]> {
-    if (sessionIds.length === 0) return new Map();
+	/**
+	 * Load already-processed message ID ranges for a set of session IDs from a specific source.
+	 * Returns a Map<sessionId, ProcessedRange[]> for O(1) lookup during segmentation.
+	 *
+	 * The source filter ensures episodes from one reader don't mask episodes from another
+	 * when session IDs happen to collide (both OpenCode and Claude Code use UUIDs, so
+	 * collisions are astronomically unlikely, but the source column is the authoritative
+	 * namespace boundary).
+	 *
+	 * Uses json_each() to pass IDs as a single JSON array parameter, avoiding the
+	 * SQLite SQLITE_MAX_VARIABLE_NUMBER limit (999) that a spread IN(?,?,...) would hit.
+	 *
+	 * @param source      Reader source name (e.g. "opencode", "claude-code").
+	 * @param sessionIds  Session IDs to look up.
+	 */
+	getProcessedEpisodeRanges(
+		source: string,
+		sessionIds: string[],
+	): Map<string, ProcessedRange[]> {
+		if (sessionIds.length === 0) return new Map();
 
-    const rows = this.db
-      .prepare(
-        `SELECT session_id, start_message_id, end_message_id
+		const rows = this.db
+			.prepare(
+				`SELECT session_id, start_message_id, end_message_id
          FROM consolidated_episode
          WHERE source = ?
-           AND session_id IN (SELECT value FROM json_each(?))`
-      )
-      .all(source, JSON.stringify(sessionIds)) as Array<{
-      session_id: string;
-      start_message_id: string;
-      end_message_id: string;
-    }>;
+           AND session_id IN (SELECT value FROM json_each(?))`,
+			)
+			.all(source, JSON.stringify(sessionIds)) as Array<{
+			session_id: string;
+			start_message_id: string;
+			end_message_id: string;
+		}>;
 
-    const result = new Map<string, ProcessedRange[]>();
-    for (const row of rows) {
-      const existing = result.get(row.session_id);
-      if (existing) {
-        existing.push({ startMessageId: row.start_message_id, endMessageId: row.end_message_id });
-      } else {
-        result.set(row.session_id, [{ startMessageId: row.start_message_id, endMessageId: row.end_message_id }]);
-      }
-    }
-    return result;
-  }
+		const result = new Map<string, ProcessedRange[]>();
+		for (const row of rows) {
+			const existing = result.get(row.session_id);
+			if (existing) {
+				existing.push({
+					startMessageId: row.start_message_id,
+					endMessageId: row.end_message_id,
+				});
+			} else {
+				result.set(row.session_id, [
+					{
+						startMessageId: row.start_message_id,
+						endMessageId: row.end_message_id,
+					},
+				]);
+			}
+		}
+		return result;
+	}
 
-  // ── Source Cursor ──
+	// ── Source Cursor ──
 
-  /**
-   * Get the high-water mark cursor for a specific source.
-   * Returns a zero-state cursor if no row exists for this source yet.
-   */
-  getSourceCursor(source: string): SourceCursor {
-    const row = this.db
-      .prepare("SELECT last_message_time_created, last_consolidated_at FROM source_cursor WHERE source = ?")
-      .get(source) as { last_message_time_created: number; last_consolidated_at: number } | null;
+	/**
+	 * Get the high-water mark cursor for a specific source.
+	 * Returns a zero-state cursor if no row exists for this source yet.
+	 */
+	getSourceCursor(source: string): SourceCursor {
+		const row = this.db
+			.prepare(
+				"SELECT last_message_time_created, last_consolidated_at FROM source_cursor WHERE source = ?",
+			)
+			.get(source) as {
+			last_message_time_created: number;
+			last_consolidated_at: number;
+		} | null;
 
-    if (!row) {
-      return { source, lastMessageTimeCreated: 0, lastConsolidatedAt: 0 };
-    }
+		if (!row) {
+			return { source, lastMessageTimeCreated: 0, lastConsolidatedAt: 0 };
+		}
 
-    return {
-      source,
-      lastMessageTimeCreated: row.last_message_time_created,
-      lastConsolidatedAt: row.last_consolidated_at,
-    };
-  }
+		return {
+			source,
+			lastMessageTimeCreated: row.last_message_time_created,
+			lastConsolidatedAt: row.last_consolidated_at,
+		};
+	}
 
-  /**
-   * Upsert the high-water mark cursor for a specific source.
-   * Uses INSERT OR REPLACE so the first call creates the row automatically.
-   */
-  updateSourceCursor(source: string, cursor: Partial<Omit<SourceCursor, "source">>): void {
-    // Read current values so we only update what's provided
-    const current = this.getSourceCursor(source);
+	/**
+	 * Upsert the high-water mark cursor for a specific source.
+	 * Uses INSERT OR REPLACE so the first call creates the row automatically.
+	 */
+	updateSourceCursor(
+		source: string,
+		cursor: Partial<Omit<SourceCursor, "source">>,
+	): void {
+		// Read current values so we only update what's provided
+		const current = this.getSourceCursor(source);
 
-    const newLastMessageTime = cursor.lastMessageTimeCreated ?? current.lastMessageTimeCreated;
-    const newLastConsolidated = cursor.lastConsolidatedAt ?? current.lastConsolidatedAt;
+		const newLastMessageTime =
+			cursor.lastMessageTimeCreated ?? current.lastMessageTimeCreated;
+		const newLastConsolidated =
+			cursor.lastConsolidatedAt ?? current.lastConsolidatedAt;
 
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO source_cursor (source, last_message_time_created, last_consolidated_at)
-         VALUES (?, ?, ?)`
-      )
-      .run(source, newLastMessageTime, newLastConsolidated);
-  }
+		this.db
+			.prepare(
+				`INSERT OR REPLACE INTO source_cursor (source, last_message_time_created, last_consolidated_at)
+         VALUES (?, ?, ?)`,
+			)
+			.run(source, newLastMessageTime, newLastConsolidated);
+	}
 
-  // ── Consolidation State ──
+	// ── Consolidation State ──
 
-  getConsolidationState(): ConsolidationState {
-    const row = this.db
-      .prepare("SELECT * FROM consolidation_state WHERE id = 1")
-      .get() as {
-      last_consolidated_at: number;
-      total_sessions_processed: number;
-      total_entries_created: number;
-      total_entries_updated: number;
-    } | null;
+	getConsolidationState(): ConsolidationState {
+		const row = this.db
+			.prepare("SELECT * FROM consolidation_state WHERE id = 1")
+			.get() as {
+			last_consolidated_at: number;
+			total_sessions_processed: number;
+			total_entries_created: number;
+			total_entries_updated: number;
+		} | null;
 
-    // The singleton row is seeded by CREATE_TABLES (INSERT OR IGNORE).
-    // If it's somehow missing (e.g. manual DB surgery), return safe zero state
-    // rather than throwing a TypeError on property access.
-    if (!row) {
-      logger.warn("[db] consolidation_state row missing — returning zero state");
-      return {
-        lastConsolidatedAt: 0,
-        totalSessionsProcessed: 0,
-        totalEntriesCreated: 0,
-        totalEntriesUpdated: 0,
-      };
-    }
+		// The singleton row is seeded by CREATE_TABLES (INSERT OR IGNORE).
+		// If it's somehow missing (e.g. manual DB surgery), return safe zero state
+		// rather than throwing a TypeError on property access.
+		if (!row) {
+			logger.warn(
+				"[db] consolidation_state row missing — returning zero state",
+			);
+			return {
+				lastConsolidatedAt: 0,
+				totalSessionsProcessed: 0,
+				totalEntriesCreated: 0,
+				totalEntriesUpdated: 0,
+			};
+		}
 
-    return {
-      lastConsolidatedAt: row.last_consolidated_at,
-      totalSessionsProcessed: row.total_sessions_processed,
-      totalEntriesCreated: row.total_entries_created,
-      totalEntriesUpdated: row.total_entries_updated,
-    };
-  }
+		return {
+			lastConsolidatedAt: row.last_consolidated_at,
+			totalSessionsProcessed: row.total_sessions_processed,
+			totalEntriesCreated: row.total_entries_created,
+			totalEntriesUpdated: row.total_entries_updated,
+		};
+	}
 
-  updateConsolidationState(state: Partial<ConsolidationState>): void {
-    const fields: string[] = [];
-    const values: SQLQueryBindings[] = [];
+	updateConsolidationState(state: Partial<ConsolidationState>): void {
+		const fields: string[] = [];
+		const values: SQLQueryBindings[] = [];
 
-    if (state.lastConsolidatedAt !== undefined) {
-      fields.push("last_consolidated_at = ?");
-      values.push(state.lastConsolidatedAt);
-    }
-    if (state.totalSessionsProcessed !== undefined) {
-      fields.push("total_sessions_processed = ?");
-      values.push(state.totalSessionsProcessed);
-    }
-    if (state.totalEntriesCreated !== undefined) {
-      fields.push("total_entries_created = ?");
-      values.push(state.totalEntriesCreated);
-    }
-    if (state.totalEntriesUpdated !== undefined) {
-      fields.push("total_entries_updated = ?");
-      values.push(state.totalEntriesUpdated);
-    }
+		if (state.lastConsolidatedAt !== undefined) {
+			fields.push("last_consolidated_at = ?");
+			values.push(state.lastConsolidatedAt);
+		}
+		if (state.totalSessionsProcessed !== undefined) {
+			fields.push("total_sessions_processed = ?");
+			values.push(state.totalSessionsProcessed);
+		}
+		if (state.totalEntriesCreated !== undefined) {
+			fields.push("total_entries_created = ?");
+			values.push(state.totalEntriesCreated);
+		}
+		if (state.totalEntriesUpdated !== undefined) {
+			fields.push("total_entries_updated = ?");
+			values.push(state.totalEntriesUpdated);
+		}
 
-    if (fields.length === 0) return;
+		if (fields.length === 0) return;
 
-    this.db
-      .prepare(`UPDATE consolidation_state SET ${fields.join(", ")} WHERE id = 1`)
-      .run(...values);
-  }
+		this.db
+			.prepare(
+				`UPDATE consolidation_state SET ${fields.join(", ")} WHERE id = 1`,
+			)
+			.run(...values);
+	}
 
-  // ── Helpers ──
+	// ── Helpers ──
 
-  private rowToEntry(row: RawEntryRow): KnowledgeEntry {
-    let embedding: number[] | undefined;
-    if (row.embedding) {
-      const buf = row.embedding as Uint8Array;
-      const float32 = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
-      embedding = Array.from(float32);
-    }
+	private rowToEntry(row: RawEntryRow): KnowledgeEntry {
+		let embedding: number[] | undefined;
+		if (row.embedding) {
+			const buf = row.embedding as Uint8Array;
+			const float32 = new Float32Array(
+				buf.buffer,
+				buf.byteOffset,
+				buf.byteLength / 4,
+			);
+			embedding = Array.from(float32);
+		}
 
-    return {
-      id: row.id,
-      type: row.type as KnowledgeEntry["type"],
-      content: row.content,
-      topics: JSON.parse(row.topics),
-      confidence: row.confidence,
-      source: row.source,
-      scope: row.scope as KnowledgeEntry["scope"],
-      status: row.status as KnowledgeEntry["status"],
-      strength: row.strength,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      lastAccessedAt: row.last_accessed_at,
-      accessCount: row.access_count,
-      observationCount: row.observation_count,
-      supersededBy: row.superseded_by,
-      derivedFrom: JSON.parse(row.derived_from),
-      embedding,
-    };
-  }
+		return {
+			id: row.id,
+			type: row.type as KnowledgeEntry["type"],
+			content: row.content,
+			topics: JSON.parse(row.topics),
+			confidence: row.confidence,
+			source: row.source,
+			scope: row.scope as KnowledgeEntry["scope"],
+			status: row.status as KnowledgeEntry["status"],
+			strength: row.strength,
+			createdAt: row.created_at,
+			updatedAt: row.updated_at,
+			lastAccessedAt: row.last_accessed_at,
+			accessCount: row.access_count,
+			observationCount: row.observation_count,
+			supersededBy: row.superseded_by,
+			derivedFrom: JSON.parse(row.derived_from),
+			embedding,
+		};
+	}
 
-  /**
-   * Merge new content into an existing entry (reconsolidation).
-   * Updates content, type, topics, confidence, and timestamps in place.
-   * The entry's derivedFrom is expanded to include the new session IDs.
-   *
-   * @param embedding  Optional pre-computed embedding for the new content.
-   *   If supplied, it is written atomically in the same UPDATE statement so the
-   *   entry never passes through a NULL-embedding state. If omitted, embedding
-   *   is set to NULL and ensureEmbeddings will regenerate it at end of run.
-   */
-  mergeEntry(
-    id: string,
-    updates: {
-      content: string;
-      type: string;
-      topics: string[];
-      confidence: number;
-      additionalSources: string[]; // session IDs from the new episode
-    },
-    embedding?: number[]
-  ): void {
-    const existing = this.getEntry(id);
-    if (!existing) return;
+	/**
+	 * Merge new content into an existing entry (reconsolidation).
+	 * Updates content, type, topics, confidence, and timestamps in place.
+	 * The entry's derivedFrom is expanded to include the new session IDs.
+	 *
+	 * @param embedding  Optional pre-computed embedding for the new content.
+	 *   If supplied, it is written atomically in the same UPDATE statement so the
+	 *   entry never passes through a NULL-embedding state. If omitted, embedding
+	 *   is set to NULL and ensureEmbeddings will regenerate it at end of run.
+	 */
+	mergeEntry(
+		id: string,
+		updates: {
+			content: string;
+			type: string;
+			topics: string[];
+			confidence: number;
+			additionalSources: string[]; // session IDs from the new episode
+		},
+		embedding?: number[],
+	): void {
+		const existing = this.getEntry(id);
+		if (!existing) return;
 
-    const mergedSources = [
-      ...new Set([...existing.derivedFrom, ...updates.additionalSources]),
-    ];
+		const mergedSources = [
+			...new Set([...existing.derivedFrom, ...updates.additionalSources]),
+		];
 
-    const safeType = clampKnowledgeType(updates.type);
+		const safeType = clampKnowledgeType(updates.type);
 
-    const embeddingBlob = embedding
-      ? new Uint8Array(new Float32Array(embedding).buffer)
-      : null;
+		const embeddingBlob = embedding
+			? new Uint8Array(new Float32Array(embedding).buffer)
+			: null;
 
-    const now = Date.now();
-    this.db
-      .prepare(
-        `UPDATE knowledge_entry
+		const now = Date.now();
+		this.db
+			.prepare(
+				`UPDATE knowledge_entry
          SET content = ?, type = ?, topics = ?, confidence = ?,
              derived_from = ?, updated_at = ?, last_accessed_at = ?,
              observation_count = observation_count + 1,
              embedding = ?
-         WHERE id = ?`
-      )
-      .run(
-        updates.content,
-        safeType,
-        JSON.stringify(updates.topics),
-        updates.confidence,
-        JSON.stringify(mergedSources),
-        now,
-        now,
-        embeddingBlob,
-        id
-      );
-  }
+         WHERE id = ?`,
+			)
+			.run(
+				updates.content,
+				safeType,
+				JSON.stringify(updates.topics),
+				updates.confidence,
+				JSON.stringify(mergedSources),
+				now,
+				now,
+				embeddingBlob,
+				id,
+			);
+	}
 
-  /**
-   * Wipe all knowledge entries, relations, episode records, and reset all cursors.
-   * Used during development/iteration to start fresh with improved extraction.
-   */
-  reinitialize(): void {
-    // All operations must succeed atomically — a crash mid-wipe would leave
-    // entries deleted but cursors not reset (or vice versa).
-    this.db.transaction(() => {
-      this.db.exec("DELETE FROM knowledge_relation");
-      this.db.exec("DELETE FROM knowledge_entry");
-      this.db.exec("DELETE FROM consolidated_episode");
-      this.db.exec("DELETE FROM source_cursor");
-      this.db.exec(
-        `UPDATE consolidation_state SET
+	/**
+	 * Wipe all knowledge entries, relations, episode records, and reset all cursors.
+	 * Used during development/iteration to start fresh with improved extraction.
+	 */
+	reinitialize(): void {
+		// All operations must succeed atomically — a crash mid-wipe would leave
+		// entries deleted but cursors not reset (or vice versa).
+		this.db.transaction(() => {
+			this.db.exec("DELETE FROM knowledge_relation");
+			this.db.exec("DELETE FROM knowledge_entry");
+			this.db.exec("DELETE FROM consolidated_episode");
+			this.db.exec("DELETE FROM source_cursor");
+			this.db.exec(
+				`UPDATE consolidation_state SET
           last_consolidated_at = 0,
           total_sessions_processed = 0,
           total_entries_created = 0,
           total_entries_updated = 0
-         WHERE id = 1`
-      );
-    })();
-  }
+         WHERE id = 1`,
+			);
+		})();
+	}
 
-  close(): void {
-    this.db.close();
-  }
+	close(): void {
+		this.db.close();
+	}
 
-  /**
-   * Compare the actual DB column set against EXPECTED_TABLE_COLUMNS for every
-   * table. Returns a list of {table, column} pairs that are expected but absent.
-   *
-   * Only reports missing columns — extra columns in the DB (from a future schema
-   * that was partially rolled back) are ignored. The intent is to detect tables
-   * that are structurally incomplete, not to enforce exact parity.
-   *
-   * Tables that don't exist yet (empty PRAGMA result) are skipped — a missing
-   * table is a normal first-run condition, not drift. CREATE_TABLES handles it.
-   */
-  private getSchemaDrift(): Array<{ table: string; column: string }> {
-    const missing: Array<{ table: string; column: string }> = [];
+	/**
+	 * Compare the actual DB column set against EXPECTED_TABLE_COLUMNS for every
+	 * table. Returns a list of {table, column} pairs that are expected but absent.
+	 *
+	 * Only reports missing columns — extra columns in the DB (from a future schema
+	 * that was partially rolled back) are ignored. The intent is to detect tables
+	 * that are structurally incomplete, not to enforce exact parity.
+	 *
+	 * Tables that don't exist yet (empty PRAGMA result) are skipped — a missing
+	 * table is a normal first-run condition, not drift. CREATE_TABLES handles it.
+	 */
+	private getSchemaDrift(): Array<{ table: string; column: string }> {
+		const missing: Array<{ table: string; column: string }> = [];
 
-    for (const [table, expectedCols] of Object.entries(EXPECTED_TABLE_COLUMNS)) {
-      const actualCols = new Set(
-        (this.db.prepare(`PRAGMA table_info("${table}")`).all() as Array<{ name: string }>)
-          .map((c) => c.name)
-      );
+		for (const [table, expectedCols] of Object.entries(
+			EXPECTED_TABLE_COLUMNS,
+		)) {
+			const actualCols = new Set(
+				(
+					this.db.prepare(`PRAGMA table_info("${table}")`).all() as Array<{
+						name: string;
+					}>
+				).map((c) => c.name),
+			);
 
-      // Table doesn't exist yet — not drift, just a fresh DB
-      if (actualCols.size === 0) continue;
+			// Table doesn't exist yet — not drift, just a fresh DB
+			if (actualCols.size === 0) continue;
 
-      for (const col of expectedCols) {
-        if (!actualCols.has(col)) {
-          missing.push({ table, column: col });
-        }
-      }
-    }
+			for (const col of expectedCols) {
+				if (!actualCols.has(col)) {
+					missing.push({ table, column: col });
+				}
+			}
+		}
 
-    return missing;
-  }
+		return missing;
+	}
 }
 
 /**
  * Raw row shape from SQLite (snake_case columns).
  */
 interface RawEntryRow {
-  id: string;
-  type: string;
-  content: string;
-  topics: string;
-  confidence: number;
-  source: string;
-  scope: string;
-  status: string;
-  strength: number;
-  created_at: number;
-  updated_at: number;
-  last_accessed_at: number;
-  access_count: number;
-  observation_count: number;
-  superseded_by: string | null;
-  derived_from: string;
-  embedding: Uint8Array | null;
+	id: string;
+	type: string;
+	content: string;
+	topics: string;
+	confidence: number;
+	source: string;
+	scope: string;
+	status: string;
+	strength: number;
+	created_at: number;
+	updated_at: number;
+	last_accessed_at: number;
+	access_count: number;
+	observation_count: number;
+	superseded_by: string | null;
+	derived_from: string;
+	embedding: Uint8Array | null;
 }

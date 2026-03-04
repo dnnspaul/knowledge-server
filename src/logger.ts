@@ -27,110 +27,112 @@ type LogLevel = "INFO" | "WARN" | "ERROR";
 
 /** Safely serialize an unknown value, handling circular references. */
 function serialize(a: unknown): string {
-  if (typeof a === "string") return a;
-  if (a instanceof Error) {
-    // a.stack already includes "Error: <message>" in most runtimes — don't double it.
-    return a.stack ?? a.message;
-  }
-  try {
-    return JSON.stringify(a, null, 2);
-  } catch {
-    // Circular reference or other serialization failure — fall back to String().
-    return String(a);
-  }
+	if (typeof a === "string") return a;
+	if (a instanceof Error) {
+		// a.stack already includes "Error: <message>" in most runtimes — don't double it.
+		return a.stack ?? a.message;
+	}
+	try {
+		return JSON.stringify(a, null, 2);
+	} catch {
+		// Circular reference or other serialization failure — fall back to String().
+		return String(a);
+	}
 }
 
 class Logger {
-  private logPath: string;
+	private logPath: string;
 
-  constructor(logPath: string) {
-    this.logPath = logPath;
-    if (logPath) {
-      // Ensure the log directory exists before the first write.
-      // Wrapped in try/catch so a temporarily unavailable FS (e.g. NFS home dir)
-      // degrades to stdout-only rather than crashing before any output reaches the user.
-      try {
-        mkdirSync(dirname(logPath), { recursive: true });
-      } catch (err) {
-        process.stderr.write(`[logger] Could not create log directory for ${logPath}: ${serialize(err)}\n`);
-        this.logPath = "";
-      }
-    }
-  }
+	constructor(logPath: string) {
+		this.logPath = logPath;
+		if (logPath) {
+			// Ensure the log directory exists before the first write.
+			// Wrapped in try/catch so a temporarily unavailable FS (e.g. NFS home dir)
+			// degrades to stdout-only rather than crashing before any output reaches the user.
+			try {
+				mkdirSync(dirname(logPath), { recursive: true });
+			} catch (err) {
+				process.stderr.write(
+					`[logger] Could not create log directory for ${logPath}: ${serialize(err)}\n`,
+				);
+				this.logPath = "";
+			}
+		}
+	}
 
-  private write(level: LogLevel, args: unknown[]): void {
-    const ts = new Date().toISOString();
-    const message = args.map(serialize).join(" ");
-    const line = `${ts} [${level}] ${message}`;
+	private write(level: LogLevel, args: unknown[]): void {
+		const ts = new Date().toISOString();
+		const message = args.map(serialize).join(" ");
+		const line = `${ts} [${level}] ${message}`;
 
-    // Tee to stdout/stderr (always)
-    if (level === "ERROR") {
-      process.stderr.write(`${line}\n`);
-    } else {
-      process.stdout.write(`${line}\n`);
-    }
+		// Tee to stdout/stderr (always)
+		if (level === "ERROR") {
+			process.stderr.write(`${line}\n`);
+		} else {
+			process.stdout.write(`${line}\n`);
+		}
 
-    // Write to file (when configured)
-    if (this.logPath) {
-      try {
-        appendFileSync(this.logPath, `${line}\n`);
-      } catch {
-        // If the file write fails, don't crash the server — stdout is still intact.
-        // Avoid recursively calling logger here; use process.stderr directly.
-        process.stderr.write(`[logger] Failed to write to ${this.logPath}\n`);
-      }
-    }
-  }
+		// Write to file (when configured)
+		if (this.logPath) {
+			try {
+				appendFileSync(this.logPath, `${line}\n`);
+			} catch {
+				// If the file write fails, don't crash the server — stdout is still intact.
+				// Avoid recursively calling logger here; use process.stderr directly.
+				process.stderr.write(`[logger] Failed to write to ${this.logPath}\n`);
+			}
+		}
+	}
 
-  log(...args: unknown[]): void {
-    this.write("INFO", args);
-  }
+	log(...args: unknown[]): void {
+		this.write("INFO", args);
+	}
 
-  warn(...args: unknown[]): void {
-    this.write("WARN", args);
-  }
+	warn(...args: unknown[]): void {
+		this.write("WARN", args);
+	}
 
-  error(...args: unknown[]): void {
-    this.write("ERROR", args);
-  }
+	error(...args: unknown[]): void {
+		this.write("ERROR", args);
+	}
 
-  /**
-   * Log a raw line without the timestamp/level prefix on stdout.
-   * Used for the startup banner where terminal formatting matters.
-   *
-   * The file still gets a timestamped line so the log file remains
-   * fully parseable with grep/awk without mixed-format lines.
-   *
-   * Lines containing sensitive values (e.g. the admin token) should
-   * use rawStdoutOnly() instead so they are never persisted to disk.
-   */
-  private toDisplay(args: unknown[]): string {
-    return args.map((a) => (typeof a === "string" ? a : String(a))).join(" ");
-  }
+	/**
+	 * Log a raw line without the timestamp/level prefix on stdout.
+	 * Used for the startup banner where terminal formatting matters.
+	 *
+	 * The file still gets a timestamped line so the log file remains
+	 * fully parseable with grep/awk without mixed-format lines.
+	 *
+	 * Lines containing sensitive values (e.g. the admin token) should
+	 * use rawStdoutOnly() instead so they are never persisted to disk.
+	 */
+	private toDisplay(args: unknown[]): string {
+		return args.map((a) => (typeof a === "string" ? a : String(a))).join(" ");
+	}
 
-  raw(...args: unknown[]): void {
-    // stdout: use String() for display fidelity (banner lines are always strings in practice)
-    const displayMessage = this.toDisplay(args);
-    process.stdout.write(`${displayMessage}\n`);
-    if (this.logPath) {
-      // file: use serialize() so Errors and circular objects are represented faithfully
-      const fileMessage = args.map(serialize).join(" ");
-      const ts = new Date().toISOString();
-      try {
-        appendFileSync(this.logPath, `${ts} [INFO] ${fileMessage}\n`);
-      } catch {
-        process.stderr.write(`[logger] Failed to write to ${this.logPath}\n`);
-      }
-    }
-  }
+	raw(...args: unknown[]): void {
+		// stdout: use String() for display fidelity (banner lines are always strings in practice)
+		const displayMessage = this.toDisplay(args);
+		process.stdout.write(`${displayMessage}\n`);
+		if (this.logPath) {
+			// file: use serialize() so Errors and circular objects are represented faithfully
+			const fileMessage = args.map(serialize).join(" ");
+			const ts = new Date().toISOString();
+			try {
+				appendFileSync(this.logPath, `${ts} [INFO] ${fileMessage}\n`);
+			} catch {
+				process.stderr.write(`[logger] Failed to write to ${this.logPath}\n`);
+			}
+		}
+	}
 
-  /**
-   * Write a raw line to stdout only — never persisted to the log file.
-   * Use for sensitive values (admin token) and interactive-only output.
-   */
-  rawStdoutOnly(...args: unknown[]): void {
-    process.stdout.write(`${this.toDisplay(args)}\n`);
-  }
+	/**
+	 * Write a raw line to stdout only — never persisted to the log file.
+	 * Use for sensitive values (admin token) and interactive-only output.
+	 */
+	rawStdoutOnly(...args: unknown[]): void {
+		process.stdout.write(`${this.toDisplay(args)}\n`);
+	}
 }
 
 // Singleton — initialized lazily on first import of logger.ts.
@@ -141,12 +143,12 @@ class Logger {
 let _logger = new Logger("");
 
 export const logger = {
-  init(logPath: string): void {
-    _logger = new Logger(logPath);
-  },
-  log: (...args: unknown[]) => _logger.log(...args),
-  warn: (...args: unknown[]) => _logger.warn(...args),
-  error: (...args: unknown[]) => _logger.error(...args),
-  raw: (...args: unknown[]) => _logger.raw(...args),
-  rawStdoutOnly: (...args: unknown[]) => _logger.rawStdoutOnly(...args),
+	init(logPath: string): void {
+		_logger = new Logger(logPath);
+	},
+	log: (...args: unknown[]) => _logger.log(...args),
+	warn: (...args: unknown[]) => _logger.warn(...args),
+	error: (...args: unknown[]) => _logger.error(...args),
+	raw: (...args: unknown[]) => _logger.raw(...args),
+	rawStdoutOnly: (...args: unknown[]) => _logger.rawStdoutOnly(...args),
 };

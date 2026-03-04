@@ -228,8 +228,14 @@ async function main() {
 		);
 	}
 
-	// Graceful shutdown — signal loops to stop, wait up to 30s for the current
-	// batch to finish before closing the DB. Prevents losing in-flight LLM results.
+	// Maximum time (ms) to wait for an in-flight consolidation batch to finish
+	// before the process exits on SIGINT / SIGTERM. 30 s is generous enough for
+	// a typical LLM round-trip but short enough to not hang interactive shutdown.
+	const SHUTDOWN_TIMEOUT_MS = 30_000;
+
+	// Graceful shutdown — signal loops to stop, wait up to SHUTDOWN_TIMEOUT_MS
+	// for the current batch to finish before closing the DB. Prevents losing
+	// in-flight LLM results.
 	async function shutdown(signal: string) {
 		logger.log(`[${signal}] Shutting down gracefully...`);
 		shutdownRequested = true;
@@ -237,12 +243,12 @@ async function main() {
 		const result = await Promise.race([
 			Promise.all(activeLoops).then(() => null),
 			new Promise<typeof TIMED_OUT>((r) =>
-				setTimeout(() => r(TIMED_OUT), 30_000),
+				setTimeout(() => r(TIMED_OUT), SHUTDOWN_TIMEOUT_MS),
 			),
 		]);
 		if (result === TIMED_OUT) {
 			logger.warn(
-				"[shutdown] 30s timeout reached — in-flight consolidation batch abandoned.",
+				`[shutdown] ${SHUTDOWN_TIMEOUT_MS / 1000}s timeout reached — in-flight consolidation batch abandoned.`,
 			);
 		}
 		consolidation.close();

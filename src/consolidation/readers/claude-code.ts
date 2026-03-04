@@ -7,30 +7,14 @@ import type {
 	IEpisodeReader,
 	ProcessedRange,
 } from "../../types.js";
-
-/**
- * Maximum tokens per episode segment (same soft limit as OpenCodeEpisodeReader).
- */
-const MAX_TOKENS_PER_EPISODE = 50_000;
-
-/**
- * Maximum characters to include from a single tool result output.
- * ~20K chars ≈ 5K tokens.
- */
-const MAX_TOOL_OUTPUT_CHARS = 20_000;
-
-/**
- * Maximum characters for a fully assembled message.
- * ~60K chars ≈ 15K tokens.
- */
-const MAX_MESSAGE_CHARS = 60_000;
-
-/**
- * Approximate token count from character count (1 token ~ 4 chars).
- */
-function approxTokens(text: string): number {
-	return Math.ceil(text.length / 4);
-}
+import {
+	MAX_MESSAGE_CHARS,
+	MAX_TOKENS_PER_EPISODE,
+	MAX_TOOL_OUTPUT_CHARS,
+	approxTokens,
+	chunkByTokenBudget,
+	formatMessages,
+} from "./shared.js";
 
 // ── Claude Code JSONL record types ────────────────────────────────────────────
 
@@ -118,6 +102,21 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 
 	private readonly claudeDir: string;
 
+	/**
+	 * Cache of the last `loadModifiedSessions` result, keyed by session UUID.
+	 *
+	 * `getCandidateSessions` populates this map so that the immediately-following
+	 * `getNewEpisodes` call — which needs the same parsed session data — can reuse
+	 * it without re-scanning the filesystem. This eliminates the old
+	 * `buildSessionMap()` full rescan that `getNewEpisodes` previously triggered.
+	 *
+	 * The cache is intentionally replaced (not merged) on every
+	 * `getCandidateSessions` call: the consolidation engine always calls
+	 * `getCandidateSessions` immediately before `getNewEpisodes`, so the data is
+	 * always fresh.
+	 */
+	private _sessionCache = new Map<string, ParsedSession>();
+
 	constructor(claudeDir?: string) {
 		this.claudeDir = claudeDir ?? config.claudeDbPath;
 	}
@@ -129,6 +128,9 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 		limit: number = config.consolidation.maxSessionsPerRun,
 	): Array<{ id: string; maxMessageTime: number }> {
 		const sessions = this.loadModifiedSessions(afterMessageTimeCreated);
+
+		// Populate the cache so getNewEpisodes can reuse the already-parsed data.
+		this._sessionCache = new Map(sessions.map((s) => [s.sessionId, s]));
 
 		// Return sessions that have messages newer than the cursor, ordered by
 		// max message time ASC so the consolidation loop advances the cursor in
@@ -152,12 +154,24 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 	): Episode[] {
 		if (candidateSessionIds.length === 0) return [];
 
-		// Build a lookup map so we can find session files by UUID efficiently.
-		const sessionMap = this.buildSessionMap();
+		// Use the session cache populated by getCandidateSessions (same call cycle).
+		// If any candidate IDs are missing (e.g. tests that call getNewEpisodes
+		// directly without a prior getCandidateSessions call), build a fallback map
+		// by scanning the filesystem for those specific session UUIDs.
+		const missingIds = candidateSessionIds.filter(
+			(id) => !this._sessionCache.has(id),
+		);
+		if (missingIds.length > 0) {
+			const fallback = this.loadSessionsByIds(missingIds);
+			for (const [id, session] of fallback) {
+				this._sessionCache.set(id, session);
+			}
+		}
+
 		const episodes: Episode[] = [];
 
 		for (const sessionId of candidateSessionIds) {
-			const session = sessionMap.get(sessionId);
+			const session = this._sessionCache.get(sessionId);
 			if (!session) continue;
 
 			const sessionProcessed = processedRanges.get(sessionId) ?? [];
@@ -173,6 +187,50 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 	}
 
 	// ── Private helpers ───────────────────────────────────────────────────────
+
+	/**
+	 * Scan all project directories for specific session UUIDs and return a map
+	 * of sessionId → ParsedSession for any that are found.
+	 *
+	 * Used as a fallback by getNewEpisodes when the _sessionCache doesn't already
+	 * contain the requested IDs (e.g. tests that call getNewEpisodes directly).
+	 * In normal operation getCandidateSessions populates the cache first, so this
+	 * path is only taken in tests or unusual call patterns.
+	 */
+	private loadSessionsByIds(sessionIds: string[]): Map<string, ParsedSession> {
+		const needed = new Set(sessionIds);
+		const result = new Map<string, ParsedSession>();
+		const projectsDir = join(this.claudeDir, "projects");
+		let projectDirs: string[];
+		try {
+			projectDirs = readdirSync(projectsDir, { withFileTypes: true })
+				.filter((d) => d.isDirectory())
+				.map((d) => d.name);
+		} catch {
+			return result;
+		}
+
+		for (const projectDir of projectDirs) {
+			if (result.size === needed.size) break; // found everything — stop early
+			const projectPath = join(projectsDir, projectDir);
+			let files: string[];
+			try {
+				files = readdirSync(projectPath).filter((f) => f.endsWith(".jsonl"));
+			} catch {
+				continue;
+			}
+
+			for (const file of files) {
+				const sessionId = file.replace(/\.jsonl$/, "");
+				if (!needed.has(sessionId)) continue; // not one we're looking for
+				const filePath = join(projectPath, file);
+				const parsed = this.parseSessionFile(filePath, sessionId);
+				if (parsed) result.set(sessionId, parsed);
+			}
+		}
+
+		return result;
+	}
 
 	/**
 	 * Enumerate all JSONL session files under ~/.claude/projects/ and parse only
@@ -229,42 +287,6 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 		}
 
 		return sessions;
-	}
-
-	/**
-	 * Build a full map of all sessions (no mtime pre-filter) for getNewEpisodes.
-	 * Called once per getNewEpisodes invocation; candidate IDs are already known.
-	 */
-	private buildSessionMap(): Map<string, ParsedSession> {
-		const map = new Map<string, ParsedSession>();
-		const projectsDir = join(this.claudeDir, "projects");
-		let projectDirs: string[];
-		try {
-			projectDirs = readdirSync(projectsDir, { withFileTypes: true })
-				.filter((d) => d.isDirectory())
-				.map((d) => d.name);
-		} catch {
-			return map;
-		}
-
-		for (const projectDir of projectDirs) {
-			const projectPath = join(projectsDir, projectDir);
-			let files: string[];
-			try {
-				files = readdirSync(projectPath).filter((f) => f.endsWith(".jsonl"));
-			} catch {
-				continue;
-			}
-
-			for (const file of files) {
-				const filePath = join(projectPath, file);
-				const sessionId = file.replace(/\.jsonl$/, "");
-				const parsed = this.parseSessionFile(filePath, sessionId);
-				if (parsed) map.set(sessionId, parsed);
-			}
-		}
-
-		return map;
 	}
 
 	/**
@@ -497,12 +519,9 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 		);
 
 		if (tailMessages.length >= config.consolidation.minSessionMessages) {
-			const chunks = this.chunkByTokenBudget(
-				tailMessages,
-				MAX_TOKENS_PER_EPISODE,
-			);
+			const chunks = chunkByTokenBudget(tailMessages, MAX_TOKENS_PER_EPISODE);
 			for (const chunk of chunks) {
-				const content = this.formatMessages(chunk);
+				const content = formatMessages(chunk);
 				if (content.trim()) {
 					episodes.push({
 						sessionId: session.sessionId,
@@ -566,11 +585,11 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 
 		if (messages.length < config.consolidation.minSessionMessages) return [];
 
-		const chunks = this.chunkByTokenBudget(messages, MAX_TOKENS_PER_EPISODE);
+		const chunks = chunkByTokenBudget(messages, MAX_TOKENS_PER_EPISODE);
 		const episodes: Episode[] = [];
 
 		for (const chunk of chunks) {
-			const content = this.formatMessages(chunk);
+			const content = formatMessages(chunk);
 			if (content.trim()) {
 				episodes.push({
 					sessionId: session.sessionId,
@@ -719,39 +738,5 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 			content,
 			timestamp: timestampMs,
 		};
-	}
-
-	/**
-	 * Chunk messages into groups that fit within a token budget.
-	 * A single oversized message is placed alone in its own chunk (soft limit).
-	 */
-	private chunkByTokenBudget(
-		messages: EpisodeMessage[],
-		maxTokens: number,
-	): EpisodeMessage[][] {
-		const chunks: EpisodeMessage[][] = [];
-		let currentChunk: EpisodeMessage[] = [];
-		let currentTokens = 0;
-
-		for (const msg of messages) {
-			const msgTokens = approxTokens(msg.content);
-			if (currentTokens + msgTokens > maxTokens && currentChunk.length > 0) {
-				chunks.push(currentChunk);
-				currentChunk = [];
-				currentTokens = 0;
-			}
-			currentChunk.push(msg);
-			currentTokens += msgTokens;
-		}
-
-		if (currentChunk.length > 0) chunks.push(currentChunk);
-		return chunks;
-	}
-
-	/**
-	 * Format messages into a text block for the LLM.
-	 */
-	private formatMessages(messages: EpisodeMessage[]): string {
-		return messages.map((m) => `  ${m.role}: ${m.content}`).join("\n");
 	}
 }

@@ -1,14 +1,17 @@
-import type { KnowledgeDB } from "../db/database.js";
 import type { ActivationEngine } from "../activation/activate.js";
-import type { EmbeddingClient } from "../activation/embeddings.js";
-import { ConsolidationLLM, formatEpisodes, formatExistingKnowledge } from "./llm.js";
-import { Reconsolidator } from "./reconsolidate.js";
-import { ContradictionScanner } from "./contradiction.js";
-import { computeStrength } from "./decay.js";
 import { config } from "../config.js";
+import type { KnowledgeDB } from "../db/database.js";
 import { logger } from "../logger.js";
 import type { IEpisodeReader, KnowledgeEntry } from "../types.js";
 import type { ConsolidationResult } from "../types.js";
+import { ContradictionScanner } from "./contradiction.js";
+import { computeStrength } from "./decay.js";
+import {
+	ConsolidationLLM,
+	formatEpisodes,
+	formatExistingKnowledge,
+} from "./llm.js";
+import { Reconsolidator } from "./reconsolidate.js";
 
 /**
  * The consolidation engine — the heart of the knowledge system.
@@ -29,430 +32,489 @@ import type { ConsolidationResult } from "../types.js";
  * 7. After all sources: apply decay and generate embeddings
  */
 export class ConsolidationEngine {
-  private db: KnowledgeDB;
-  private activation: ActivationEngine;
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private embeddings: EmbeddingClient;
-  private readers: IEpisodeReader[];
-  private llm: ConsolidationLLM;
-  private reconsolidator: Reconsolidator;
-  private contradictionScanner: ContradictionScanner;
+	private db: KnowledgeDB;
+	private activation: ActivationEngine;
+	private readers: IEpisodeReader[];
+	private llm: ConsolidationLLM;
+	private reconsolidator: Reconsolidator;
+	private contradictionScanner: ContradictionScanner;
 
-  /**
-   * Concurrency guard — only one consolidation run at a time, regardless of
-   * whether it was triggered by the startup background loop or an API call.
-   * Lives here (not in the API closure) so both paths share the same flag.
-   *
-   * Use tryLock() / unlock() instead of mutating directly — this keeps external
-   * callers from accidentally bypassing or prematurely clearing the guard.
-   */
-  private _isConsolidating = false;
+	/**
+	 * Concurrency guard — only one consolidation run at a time, regardless of
+	 * whether it was triggered by the startup background loop or an API call.
+	 * Lives here (not in the API closure) so both paths share the same flag.
+	 *
+	 * Use tryLock() / unlock() instead of mutating directly — this keeps external
+	 * callers from accidentally bypassing or prematurely clearing the guard.
+	 */
+	private _isConsolidating = false;
 
-  get isConsolidating(): boolean {
-    return this._isConsolidating;
-  }
+	get isConsolidating(): boolean {
+		return this._isConsolidating;
+	}
 
-  /**
-   * Atomically claim the consolidation lock.
-   * Returns true if the lock was acquired (caller should proceed),
-   * false if another run is already in progress (caller should abort).
-   *
-   * Must be called synchronously (no await before this call) to be race-free
-   * under Node/Bun's single-threaded event loop.
-   */
-  tryLock(): boolean {
-    if (this._isConsolidating) return false;
-    this._isConsolidating = true;
-    return true;
-  }
+	/**
+	 * Atomically claim the consolidation lock.
+	 * Returns true if the lock was acquired (caller should proceed),
+	 * false if another run is already in progress (caller should abort).
+	 *
+	 * Must be called synchronously (no await before this call) to be race-free
+	 * under Node/Bun's single-threaded event loop.
+	 */
+	tryLock(): boolean {
+		if (this._isConsolidating) return false;
+		this._isConsolidating = true;
+		return true;
+	}
 
-  unlock(): void {
-    this._isConsolidating = false;
-  }
+	unlock(): void {
+		this._isConsolidating = false;
+	}
 
-  /**
-   * @param db         Knowledge DB instance
-   * @param activation ActivationEngine (provides shared EmbeddingClient)
-   * @param readers    Episode readers, one per source. Passed in by the caller
-   *                   (via createEpisodeReaders()) so construction is testable
-   *                   without real source DBs on disk.
-   */
-  constructor(db: KnowledgeDB, activation: ActivationEngine, readers: IEpisodeReader[] = []) {
-    this.db = db;
-    this.activation = activation;
-    // Reuse the EmbeddingClient from ActivationEngine — one shared HTTP client
-    // for both retrieval and consolidation embedding calls.
-    this.embeddings = activation.embeddings;
-    this.readers = readers;
-    this.llm = new ConsolidationLLM();
-    this.reconsolidator = new Reconsolidator(db, this.embeddings, this.llm);
-    this.contradictionScanner = new ContradictionScanner(db, this.llm);
-  }
+	/**
+	 * @param db         Knowledge DB instance
+	 * @param activation ActivationEngine (provides shared EmbeddingClient)
+	 * @param readers    Episode readers, one per source. Passed in by the caller
+	 *                   (via createEpisodeReaders()) so construction is testable
+	 *                   without real source DBs on disk.
+	 */
+	constructor(
+		db: KnowledgeDB,
+		activation: ActivationEngine,
+		readers: IEpisodeReader[] = [],
+	) {
+		this.db = db;
+		this.activation = activation;
+		this.readers = readers;
+		this.llm = new ConsolidationLLM();
+		this.reconsolidator = new Reconsolidator(
+			db,
+			activation.embeddings,
+			this.llm,
+		);
+		this.contradictionScanner = new ContradictionScanner(db, this.llm);
+	}
 
-  /**
-   * Check how many sessions are pending consolidation without running it.
-   * Used at startup to decide whether to kick off a background consolidation.
-   * Aggregates across all active readers.
-   */
-  checkPending(): { pendingSessions: number; lastConsolidatedAt: number } {
-    const state = this.db.getConsolidationState();
-    let pendingSessions = 0;
+	/**
+	 * Check how many sessions are pending consolidation without running it.
+	 * Used at startup to decide whether to kick off a background consolidation.
+	 * Aggregates across all active readers.
+	 */
+	checkPending(): { pendingSessions: number; lastConsolidatedAt: number } {
+		const state = this.db.getConsolidationState();
+		let pendingSessions = 0;
 
-    for (const reader of this.readers) {
-      const cursor = this.db.getSourceCursor(reader.source);
-      pendingSessions += reader.countNewSessions(cursor.lastMessageTimeCreated);
-    }
+		for (const reader of this.readers) {
+			const cursor = this.db.getSourceCursor(reader.source);
+			pendingSessions += reader.countNewSessions(cursor.lastMessageTimeCreated);
+		}
 
-    return { pendingSessions, lastConsolidatedAt: state.lastConsolidatedAt };
-  }
+		return { pendingSessions, lastConsolidatedAt: state.lastConsolidatedAt };
+	}
 
-  /**
-   * Run a consolidation cycle.
-   *
-   * This is the main entry point — called by HTTP API or CLI.
-   *
-   * Per-source per-run steps:
-   * 1. Fetch candidate sessions since the source cursor
-   * 2. Load already-processed episode ranges for this source
-   * 3. Segment sessions into episodes, skipping already-processed ranges
-   * 4. For each chunk: extract → reconsolidate → contradiction scan → record episodes
-   * 5. Advance the source cursor past all fetched candidates
-   *
-   * After all sources:
-   * 6. Apply decay to all active entries
-   * 7. Generate embeddings for new/updated entries
-   */
-  async consolidate(): Promise<ConsolidationResult> {
-    const startTime = Date.now();
-    const state = this.db.getConsolidationState();
+	/**
+	 * Run a consolidation cycle.
+	 *
+	 * This is the main entry point — called by HTTP API or CLI.
+	 *
+	 * Per-source per-run steps:
+	 * 1. Fetch candidate sessions since the source cursor
+	 * 2. Load already-processed episode ranges for this source
+	 * 3. Segment sessions into episodes, skipping already-processed ranges
+	 * 4. For each chunk: extract → reconsolidate → contradiction scan → record episodes
+	 * 5. Advance the source cursor past all fetched candidates
+	 *
+	 * After all sources:
+	 * 6. Apply decay to all active entries
+	 * 7. Generate embeddings for new/updated entries
+	 */
+	async consolidate(): Promise<ConsolidationResult> {
+		const startTime = Date.now();
+		const state = this.db.getConsolidationState();
 
-    logger.log(
-      `[consolidation] Starting. Last run: ${state.lastConsolidatedAt ? new Date(state.lastConsolidatedAt).toISOString() : "never"}`
-    );
+		logger.log(
+			`[consolidation] Starting. Last run: ${state.lastConsolidatedAt ? new Date(state.lastConsolidatedAt).toISOString() : "never"}`,
+		);
 
-    let totalSessionsProcessed = 0;
-    let totalSegmentsProcessed = 0;
-    let totalCreated = 0;
-    let totalUpdated = 0;
-    let totalConflictsDetected = 0;
-    let totalConflictsResolved = 0;
+		let totalSessionsProcessed = 0;
+		let totalSegmentsProcessed = 0;
+		let totalCreated = 0;
+		let totalUpdated = 0;
+		let totalConflictsDetected = 0;
+		let totalConflictsResolved = 0;
 
-    // Process each reader source independently with its own cursor.
-    for (const reader of this.readers) {
-      const sourceTotals = await this.consolidateSource(reader);
-      totalSessionsProcessed += sourceTotals.sessionsProcessed;
-      totalSegmentsProcessed += sourceTotals.segmentsProcessed;
-      totalCreated += sourceTotals.entriesCreated;
-      totalUpdated += sourceTotals.entriesUpdated;
-      totalConflictsDetected += sourceTotals.conflictsDetected;
-      totalConflictsResolved += sourceTotals.conflictsResolved;
-    }
+		// Process each reader source independently with its own cursor.
+		for (const reader of this.readers) {
+			const sourceTotals = await this.consolidateSource(reader);
+			totalSessionsProcessed += sourceTotals.sessionsProcessed;
+			totalSegmentsProcessed += sourceTotals.segmentsProcessed;
+			totalCreated += sourceTotals.entriesCreated;
+			totalUpdated += sourceTotals.entriesUpdated;
+			totalConflictsDetected += sourceTotals.conflictsDetected;
+			totalConflictsResolved += sourceTotals.conflictsResolved;
+		}
 
-    if (totalSessionsProcessed === 0) {
-      logger.log("[consolidation] No new sessions to process.");
-    }
+		if (totalSessionsProcessed === 0) {
+			logger.log("[consolidation] No new sessions to process.");
+		}
 
-    // Apply decay to ALL active entries (once, after all sources are processed).
-    const archived = this.applyDecay();
+		// Apply decay to ALL active entries (once, after all sources are processed).
+		const archived = this.applyDecay();
 
-    // Generate embeddings for new entries (once, shared across all sources).
-    const embeddedCount = await this.activation.ensureEmbeddings();
-    logger.log(`[consolidation] Generated embeddings for ${embeddedCount} entries.`);
+		// Generate embeddings for new entries (once, shared across all sources).
+		const embeddedCount = await this.activation.ensureEmbeddings();
+		logger.log(
+			`[consolidation] Generated embeddings for ${embeddedCount} entries.`,
+		);
 
-    this.db.updateConsolidationState({
-      lastConsolidatedAt: Date.now(),
-      totalSessionsProcessed: state.totalSessionsProcessed + totalSessionsProcessed,
-      totalEntriesCreated: state.totalEntriesCreated + totalCreated,
-      totalEntriesUpdated: state.totalEntriesUpdated + totalUpdated,
-    });
+		this.db.updateConsolidationState({
+			lastConsolidatedAt: Date.now(),
+			totalSessionsProcessed:
+				state.totalSessionsProcessed + totalSessionsProcessed,
+			totalEntriesCreated: state.totalEntriesCreated + totalCreated,
+			totalEntriesUpdated: state.totalEntriesUpdated + totalUpdated,
+		});
 
-    const result: ConsolidationResult = {
-      sessionsProcessed: totalSessionsProcessed,
-      segmentsProcessed: totalSegmentsProcessed,
-      entriesCreated: totalCreated,
-      entriesUpdated: totalUpdated,
-      entriesArchived: archived,
-      conflictsDetected: totalConflictsDetected,
-      conflictsResolved: totalConflictsResolved,
-      duration: Date.now() - startTime,
-    };
+		const result: ConsolidationResult = {
+			sessionsProcessed: totalSessionsProcessed,
+			segmentsProcessed: totalSegmentsProcessed,
+			entriesCreated: totalCreated,
+			entriesUpdated: totalUpdated,
+			entriesArchived: archived,
+			conflictsDetected: totalConflictsDetected,
+			conflictsResolved: totalConflictsResolved,
+			duration: Date.now() - startTime,
+		};
 
-    logger.log(
-      `[consolidation] Complete. ${result.sessionsProcessed} sessions (${result.segmentsProcessed} segments) -> ${result.entriesCreated} entries (${result.entriesArchived} archived, ${result.conflictsDetected} conflicts, ${result.conflictsResolved} resolved) in ${result.duration}ms`
-    );
+		logger.log(
+			`[consolidation] Complete. ${result.sessionsProcessed} sessions (${result.segmentsProcessed} segments) -> ${result.entriesCreated} entries (${result.entriesArchived} archived, ${result.conflictsDetected} conflicts, ${result.conflictsResolved} resolved) in ${result.duration}ms`,
+		);
 
-    return result;
-  }
+		return result;
+	}
 
-  /**
-   * Run consolidation for a single source reader.
-   * Returns partial counts that the caller aggregates across all readers.
-   */
-  private async consolidateSource(
-    reader: IEpisodeReader
-  ): Promise<{
-    sessionsProcessed: number;
-    segmentsProcessed: number;
-    entriesCreated: number;
-    entriesUpdated: number;
-    conflictsDetected: number;
-    conflictsResolved: number;
-  }> {
-    const cursor = this.db.getSourceCursor(reader.source);
+	/**
+	 * Run consolidation for a single source reader.
+	 * Returns partial counts that the caller aggregates across all readers.
+	 */
+	private async consolidateSource(reader: IEpisodeReader): Promise<{
+		sessionsProcessed: number;
+		segmentsProcessed: number;
+		entriesCreated: number;
+		entriesUpdated: number;
+		conflictsDetected: number;
+		conflictsResolved: number;
+	}> {
+		const cursor = this.db.getSourceCursor(reader.source);
 
-    // 1. Fetch candidate sessions: those with messages newer than this source's cursor.
-    //    Returns session IDs plus the max message timestamp per session,
-    //    ordered by max message time ASC for deterministic batching.
-    const candidateSessions = reader.getCandidateSessions(
-      cursor.lastMessageTimeCreated,
-      config.consolidation.maxSessionsPerRun
-    );
+		// 1. Fetch candidate sessions: those with messages newer than this source's cursor.
+		//    Returns session IDs plus the max message timestamp per session,
+		//    ordered by max message time ASC for deterministic batching.
+		const candidateSessions = reader.getCandidateSessions(
+			cursor.lastMessageTimeCreated,
+			config.consolidation.maxSessionsPerRun,
+		);
 
-    if (candidateSessions.length === 0) {
-      return { sessionsProcessed: 0, segmentsProcessed: 0, entriesCreated: 0, entriesUpdated: 0, conflictsDetected: 0, conflictsResolved: 0 };
-    }
+		if (candidateSessions.length === 0) {
+			return {
+				sessionsProcessed: 0,
+				segmentsProcessed: 0,
+				entriesCreated: 0,
+				entriesUpdated: 0,
+				conflictsDetected: 0,
+				conflictsResolved: 0,
+			};
+		}
 
-    const candidateIds = candidateSessions.map((s) => s.id);
+		const candidateIds = candidateSessions.map((s) => s.id);
 
-    // 2. Load already-processed episode ranges for this source's batch of sessions.
-    const processedRanges = this.db.getProcessedEpisodeRanges(reader.source, candidateIds);
+		// 2. Load already-processed episode ranges for this source's batch of sessions.
+		const processedRanges = this.db.getProcessedEpisodeRanges(
+			reader.source,
+			candidateIds,
+		);
 
-    // 3. Segment sessions into episodes, skipping already-processed ranges.
-    const episodes = reader.getNewEpisodes(candidateIds, processedRanges);
+		// 3. Segment sessions into episodes, skipping already-processed ranges.
+		//    Wrapped in try/catch so a reader failure (e.g. corrupt JSONL file)
+		//    skips this source rather than aborting the entire consolidation run.
+		let episodes: ReturnType<typeof reader.getNewEpisodes>;
+		try {
+			episodes = reader.getNewEpisodes(candidateIds, processedRanges);
+		} catch (err) {
+			logger.error(
+				`[consolidation/${reader.source}] getNewEpisodes failed — skipping source this run:`,
+				err,
+			);
+			return {
+				sessionsProcessed: 0,
+				segmentsProcessed: 0,
+				entriesCreated: 0,
+				entriesUpdated: 0,
+				conflictsDetected: 0,
+				conflictsResolved: 0,
+			};
+		}
 
-    // Count unique sessions that produced at least one new episode
-    const uniqueSessionIds = new Set(episodes.map((e) => e.sessionId));
+		// Count unique sessions that produced at least one new episode
+		const uniqueSessionIds = new Set(episodes.map((e) => e.sessionId));
 
-    // Directly classify each skipped session rather than computing by subtraction
-    // (subtraction can go negative for partially-processed sessions that still have new episodes).
-    let alreadyDone = 0; // had prior episodes recorded, nothing new
-    let tooFew = 0;      // no prior episodes, didn't pass minSessionMessages filter
-    for (const id of candidateIds) {
-      if (uniqueSessionIds.has(id)) continue; // produced new episodes — not skipped
-      if (processedRanges.has(id)) {
-        alreadyDone++;  // some episodes were previously recorded; no new tail
-      } else {
-        tooFew++;       // never produced episodes — below minSessionMessages
-      }
-    }
+		// Directly classify each skipped session rather than computing by subtraction
+		// (subtraction can go negative for partially-processed sessions that still have new episodes).
+		let alreadyDone = 0; // had prior episodes recorded, nothing new
+		let tooFew = 0; // no prior episodes, didn't pass minSessionMessages filter
+		for (const id of candidateIds) {
+			if (uniqueSessionIds.has(id)) continue; // produced new episodes — not skipped
+			if (processedRanges.has(id)) {
+				alreadyDone++; // some episodes were previously recorded; no new tail
+			} else {
+				tooFew++; // never produced episodes — below minSessionMessages
+			}
+		}
 
-    logger.log(
-      `[consolidation/${reader.source}] Found ${episodes.length} episodes from ${uniqueSessionIds.size} sessions` +
-      ` (${tooFew} skipped — too few messages, ${alreadyDone} skipped — already processed).`
-    );
+		logger.log(
+			`[consolidation/${reader.source}] Found ${episodes.length} episodes from ${uniqueSessionIds.size} sessions` +
+				` (${tooFew} skipped — too few messages, ${alreadyDone} skipped — already processed).`,
+		);
 
-    // 4. Process episodes in chunks
-    let totalCreated = 0;
-    let totalUpdated = 0;
-    let totalConflictsDetected = 0;
-    let totalConflictsResolved = 0;
+		// 4. Process episodes in chunks
+		let totalCreated = 0;
+		let totalUpdated = 0;
+		let totalConflictsDetected = 0;
+		let totalConflictsResolved = 0;
 
-    const chunkSize = config.consolidation.chunkSize;
+		const chunkSize = config.consolidation.chunkSize;
 
-    for (let i = 0; i < episodes.length; i += chunkSize) {
-      const chunk = episodes.slice(i, i + chunkSize);
-      const chunkSummary = formatEpisodes(chunk);
+		for (let i = 0; i < episodes.length; i += chunkSize) {
+			const chunk = episodes.slice(i, i + chunkSize);
+			const chunkSummary = formatEpisodes(chunk);
 
-      logger.log(
-        `[consolidation/${reader.source}] Chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(episodes.length / chunkSize)} (${chunk.length} episodes)`
-      );
+			logger.log(
+				`[consolidation/${reader.source}] Chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(episodes.length / chunkSize)} (${chunk.length} episodes)`,
+			);
 
-      // Load entries once for this chunk — used both for relevance selection
-      // (prompt context) and reconsolidation (dedup). Loaded here so getRelevantKnowledge
-      // doesn't make a second DB call when we immediately need the same data below.
-      const allEntriesForChunk = this.db.getActiveEntriesWithEmbeddings();
+			// Load entries once for this chunk — used both for relevance selection
+			// (prompt context) and reconsolidation (dedup). Loaded here so getRelevantKnowledge
+			// doesn't make a second DB call when we immediately need the same data below.
+			const allEntriesForChunk = this.db.getActiveEntriesWithEmbeddings();
 
-      // Retrieve only RELEVANT existing knowledge for this chunk
-      // (instead of dumping the entire knowledge base into the prompt)
-      const relevantKnowledge = await this.reconsolidator.getRelevantKnowledge(chunkSummary, allEntriesForChunk);
-      const existingKnowledgeSummary = formatExistingKnowledge(relevantKnowledge);
+			// Retrieve only RELEVANT existing knowledge for this chunk
+			// (instead of dumping the entire knowledge base into the prompt)
+			const relevantKnowledge = await this.reconsolidator.getRelevantKnowledge(
+				chunkSummary,
+				allEntriesForChunk,
+			);
+			const existingKnowledgeSummary =
+				formatExistingKnowledge(relevantKnowledge);
 
-      logger.log(
-        `[consolidation/${reader.source}] Using ${relevantKnowledge.length} relevant existing entries as context.`
-      );
+			logger.log(
+				`[consolidation/${reader.source}] Using ${relevantKnowledge.length} relevant existing entries as context.`,
+			);
 
-      // Extract knowledge via LLM
-      const extractStart = Date.now();
-      const extracted = await this.llm.extractKnowledge(
-        chunkSummary,
-        existingKnowledgeSummary
-      );
-      logger.log(
-        `[consolidation/${reader.source}] Extracted ${extracted.length} entries in ${((Date.now() - extractStart) / 1000).toFixed(1)}s.`
-      );
+			// Extract knowledge via LLM
+			const extractStart = Date.now();
+			const extracted = await this.llm.extractKnowledge(
+				chunkSummary,
+				existingKnowledgeSummary,
+			);
+			logger.log(
+				`[consolidation/${reader.source}] Extracted ${extracted.length} entries in ${((Date.now() - extractStart) / 1000).toFixed(1)}s.`,
+			);
 
-      // Reconsolidate each extracted entry against existing knowledge.
-      // Performance: load all entries with embeddings ONCE per chunk into an in-memory
-      // Map. On insert/update, mutate the Map in place rather than reloading from DB.
-      const sessionIds = [...new Set(chunk.map((e) => e.sessionId))];
-      // Reuse the entries already loaded for getRelevantKnowledge — no second DB read.
-      const entriesMap = new Map(allEntriesForChunk.map((e) => [e.id, e]));
-      let chunkCreated = 0;
-      let chunkUpdated = 0;
+			// Reconsolidate each extracted entry against existing knowledge.
+			// Performance: load all entries with embeddings ONCE per chunk into an in-memory
+			// Map. On insert/update, mutate the Map in place rather than reloading from DB.
+			const sessionIds = [...new Set(chunk.map((e) => e.sessionId))];
+			// Reuse the entries already loaded for getRelevantKnowledge — no second DB read.
+			const entriesMap = new Map(allEntriesForChunk.map((e) => [e.id, e]));
+			let chunkCreated = 0;
+			let chunkUpdated = 0;
 
-      // Track IDs that were inserted or updated this chunk — only these are
-      // eligible for the contradiction scan (pre-existing entries were already
-      // checked in a previous consolidation run).
-      const changedIds = new Set<string>();
+			// Track IDs that were inserted or updated this chunk — only these are
+			// eligible for the contradiction scan (pre-existing entries were already
+			// checked in a previous consolidation run).
+			const changedIds = new Set<string>();
 
-      for (const entry of extracted) {
-        try {
-          await this.reconsolidator.reconsolidate(entry, sessionIds, entriesMap, {
-            onInsert: (inserted) => {
-              totalCreated++;
-              chunkCreated++;
-              changedIds.add(inserted.id);
-              // Add to cache so subsequent entries in this chunk can deduplicate against it.
-              // Embedding is available immediately since insertNewEntry stores it.
-              if (inserted.embedding) {
-                entriesMap.set(inserted.id, inserted as KnowledgeEntry & { embedding: number[] });
-              }
-            },
-            onUpdate: (id, updated, freshEmbedding) => {
-              totalUpdated++;
-              chunkUpdated++;
-              changedIds.add(id);
-              // Update the cache with the new content and fresh embedding.
-              const existing = entriesMap.get(id);
-              if (existing) {
-                entriesMap.set(id, {
-                  ...existing,
-                  content: updated.content ?? existing.content,
-                  type: (updated.type as KnowledgeEntry["type"]) ?? existing.type,
-                  topics: updated.topics ?? existing.topics,
-                  confidence: updated.confidence ?? existing.confidence,
-                  embedding: freshEmbedding,
-                });
-              }
-            },
-            onKeep: () => {},
-          });
-        } catch (err) {
-          // Log and skip this extracted entry — do NOT rethrow.
-          // Rethrowing would skip recordEpisode for the whole chunk, causing all
-          // entries in this chunk to be re-processed on the next run and producing
-          // duplicates for the entries that were already successfully inserted.
-          logger.error(
-            `[consolidation/${reader.source}] Failed to reconsolidate entry "${String(entry.content ?? "").slice(0, 60)}..." — skipping:`,
-            err
-          );
-        }
-      }
+			for (const entry of extracted) {
+				try {
+					await this.reconsolidator.reconsolidate(
+						entry,
+						sessionIds,
+						entriesMap,
+						{
+							onInsert: (inserted) => {
+								totalCreated++;
+								chunkCreated++;
+								changedIds.add(inserted.id);
+								// Add to cache so subsequent entries in this chunk can deduplicate against it.
+								// Embedding is available immediately since insertNewEntry stores it.
+								if (inserted.embedding) {
+									entriesMap.set(
+										inserted.id,
+										inserted as KnowledgeEntry & { embedding: number[] },
+									);
+								}
+							},
+							onUpdate: (id, updated, freshEmbedding) => {
+								totalUpdated++;
+								chunkUpdated++;
+								changedIds.add(id);
+								// Update the cache with the new content and fresh embedding.
+								const existing = entriesMap.get(id);
+								if (existing) {
+									entriesMap.set(id, {
+										...existing,
+										content: updated.content ?? existing.content,
+										type:
+											(updated.type as KnowledgeEntry["type"]) ?? existing.type,
+										topics: updated.topics ?? existing.topics,
+										confidence: updated.confidence ?? existing.confidence,
+										embedding: freshEmbedding,
+									});
+								}
+							},
+							onKeep: () => {},
+						},
+					);
+				} catch (err) {
+					// Log and skip this extracted entry — do NOT rethrow.
+					// Rethrowing would skip recordEpisode for the whole chunk, causing all
+					// entries in this chunk to be re-processed on the next run and producing
+					// duplicates for the entries that were already successfully inserted.
+					logger.error(
+						`[consolidation/${reader.source}] Failed to reconsolidate entry "${String(entry.content ?? "").slice(0, 60)}..." — skipping:`,
+						err,
+					);
+				}
+			}
 
-      // 5. Post-extraction contradiction scan.
-      const chunkContradictions = await this.contradictionScanner.scan(entriesMap, changedIds);
-      totalConflictsDetected += chunkContradictions.detected;
-      totalConflictsResolved += chunkContradictions.resolved;
+			// 5. Post-extraction contradiction scan.
+			const chunkContradictions = await this.contradictionScanner.scan(
+				entriesMap,
+				changedIds,
+			);
+			totalConflictsDetected += chunkContradictions.detected;
+			totalConflictsResolved += chunkContradictions.resolved;
 
-      // 6. Record each episode in this chunk as processed.
-      //    This happens after the LLM call and DB writes succeed, making
-      //    consolidation idempotent on crash/retry at the episode level.
-      const entriesPerEp = chunk.length > 0 ? Math.round((chunkCreated + chunkUpdated) / chunk.length) : 0;
-      for (const ep of chunk) {
-        this.db.recordEpisode(
-          reader.source,
-          ep.sessionId,
-          ep.startMessageId,
-          ep.endMessageId,
-          ep.contentType,
-          entriesPerEp
-        );
-      }
-    }
+			// 6. Record each episode in this chunk as processed.
+			//    This happens after the LLM call and DB writes succeed, making
+			//    consolidation idempotent on crash/retry at the episode level.
+			const entriesPerEp =
+				chunk.length > 0
+					? Math.round((chunkCreated + chunkUpdated) / chunk.length)
+					: 0;
+			for (const ep of chunk) {
+				this.db.recordEpisode(
+					reader.source,
+					ep.sessionId,
+					ep.startMessageId,
+					ep.endMessageId,
+					ep.contentType,
+					entriesPerEp,
+				);
+			}
+		}
 
-    // 7. Advance the source cursor past all fetched candidates.
-    //    Same boundary-safety logic as before, but now per-source.
-    const maxEpisodeMessageTime = episodes.length > 0
-      ? episodes.reduce((max, ep) => ep.maxMessageTime > max ? ep.maxMessageTime : max, 0)
-      : 0;
+		// 7. Advance the source cursor past all fetched candidates.
+		//    Same boundary-safety logic as before, but now per-source.
+		const maxEpisodeMessageTime =
+			episodes.length > 0
+				? episodes.reduce(
+						(max, ep) => (ep.maxMessageTime > max ? ep.maxMessageTime : max),
+						0,
+					)
+				: 0;
 
-    let newCursor = Math.max(maxEpisodeMessageTime, cursor.lastMessageTimeCreated);
+		let newCursor = Math.max(
+			maxEpisodeMessageTime,
+			cursor.lastMessageTimeCreated,
+		);
 
-    const lastSession = candidateSessions[candidateSessions.length - 1];
-    const hitBatchLimit = candidateSessions.length === config.consolidation.maxSessionsPerRun;
+		const lastSession = candidateSessions[candidateSessions.length - 1];
+		const hitBatchLimit =
+			candidateSessions.length === config.consolidation.maxSessionsPerRun;
 
-    // Boundary-timestamp safety: if the batch is full, there may be additional
-    // unprocessed sessions beyond the boundary that share the exact same maxMessageTime.
-    // The next query uses `>`, so cap the cursor just below the boundary to re-fetch them.
-    if (hitBatchLimit) {
-      const cap = lastSession.maxMessageTime - 1;
-      if (cap > cursor.lastMessageTimeCreated) {
-        newCursor = Math.min(newCursor, cap);
-      }
-    } else {
-      // Batch is not full — advance past all candidates so sessions that produced
-      // no episodes don't re-appear as candidates next run.
-      newCursor = Math.max(newCursor, lastSession.maxMessageTime);
-    }
+		// Boundary-timestamp safety: if the batch is full, there may be additional
+		// unprocessed sessions beyond the boundary that share the exact same maxMessageTime.
+		// The next query uses `>`, so cap the cursor just below the boundary to re-fetch them.
+		if (hitBatchLimit) {
+			const cap = lastSession.maxMessageTime - 1;
+			if (cap > cursor.lastMessageTimeCreated) {
+				newCursor = Math.min(newCursor, cap);
+			}
+		} else {
+			// Batch is not full — advance past all candidates so sessions that produced
+			// no episodes don't re-appear as candidates next run.
+			newCursor = Math.max(newCursor, lastSession.maxMessageTime);
+		}
 
-    // Safety floor: never move the cursor backwards.
-    newCursor = Math.max(newCursor, cursor.lastMessageTimeCreated);
+		// Safety floor: never move the cursor backwards.
+		newCursor = Math.max(newCursor, cursor.lastMessageTimeCreated);
 
-    this.db.updateSourceCursor(reader.source, {
-      lastMessageTimeCreated: newCursor,
-      lastConsolidatedAt: Date.now(),
-    });
+		this.db.updateSourceCursor(reader.source, {
+			lastMessageTimeCreated: newCursor,
+			lastConsolidatedAt: Date.now(),
+		});
 
-    return {
-      sessionsProcessed: candidateSessions.length,
-      segmentsProcessed: episodes.length,
-      entriesCreated: totalCreated,
-      entriesUpdated: totalUpdated,
-      conflictsDetected: totalConflictsDetected,
-      conflictsResolved: totalConflictsResolved,
-    };
-  }
+		return {
+			sessionsProcessed: candidateSessions.length,
+			segmentsProcessed: episodes.length,
+			entriesCreated: totalCreated,
+			entriesUpdated: totalUpdated,
+			conflictsDetected: totalConflictsDetected,
+			conflictsResolved: totalConflictsResolved,
+		};
+	}
 
-  /**
-   * Apply decay to all active entries.
-   * Returns the number of entries that were archived.
-   */
-  private applyDecay(): number {
-    // Include conflicted entries — their strength must continue aging.
-    // A conflicted entry whose strength falls to zero is effectively forgotten
-    // regardless of the conflict, and should still be archived.
-    // Single query avoids the TOCTOU window of two separate status queries.
-    const entries = this.db.getActiveAndConflictedEntries();
-    let archived = 0;
+	/**
+	 * Apply decay to all active entries.
+	 * Returns the number of entries that were archived.
+	 */
+	private applyDecay(): number {
+		// Include conflicted entries — their strength must continue aging.
+		// A conflicted entry whose strength falls to zero is effectively forgotten
+		// regardless of the conflict, and should still be archived.
+		// Single query avoids the TOCTOU window of two separate status queries.
+		const entries = this.db.getActiveAndConflictedEntries();
+		let archived = 0;
 
-    for (const entry of entries) {
-      const newStrength = computeStrength(entry);
+		for (const entry of entries) {
+			const newStrength = computeStrength(entry);
 
-      if (newStrength < config.decay.archiveThreshold) {
-        this.db.updateEntry(entry.id, {
-          status: "archived",
-          strength: newStrength,
-        });
-        archived++;
-        logger.log(
-          `[decay] Archived: "${entry.content.slice(0, 60)}..." (strength: ${newStrength.toFixed(3)})`
-        );
-      } else if (Math.abs(newStrength - entry.strength) > 0.01) {
-        // Only update if strength changed meaningfully
-        this.db.updateStrength(entry.id, newStrength);
-      }
-    }
+			if (newStrength < config.decay.archiveThreshold) {
+				this.db.updateEntry(entry.id, {
+					status: "archived",
+					strength: newStrength,
+				});
+				archived++;
+				logger.log(
+					`[decay] Archived: "${entry.content.slice(0, 60)}..." (strength: ${newStrength.toFixed(3)})`,
+				);
+			} else if (Math.abs(newStrength - entry.strength) > 0.01) {
+				// Only update if strength changed meaningfully
+				this.db.updateStrength(entry.id, newStrength);
+			}
+		}
 
-    // Tombstone long-archived entries
-    const archivedEntries = this.db.getEntriesByStatus("archived");
-    const tombstoneThreshold =
-      Date.now() - config.decay.tombstoneAfterDays * 24 * 60 * 60 * 1000;
+		// Tombstone long-archived entries
+		const archivedEntries = this.db.getEntriesByStatus("archived");
+		const tombstoneThreshold =
+			Date.now() - config.decay.tombstoneAfterDays * 24 * 60 * 60 * 1000;
 
-    for (const entry of archivedEntries) {
-      if (entry.updatedAt < tombstoneThreshold) {
-        this.db.updateEntry(entry.id, { status: "tombstoned" });
-        logger.log(
-          `[decay] Tombstoned: "${entry.content.slice(0, 60)}..." (archived for ${config.decay.tombstoneAfterDays}+ days)`
-        );
-      }
-    }
+		for (const entry of archivedEntries) {
+			if (entry.updatedAt < tombstoneThreshold) {
+				this.db.updateEntry(entry.id, { status: "tombstoned" });
+				logger.log(
+					`[decay] Tombstoned: "${entry.content.slice(0, 60)}..." (archived for ${config.decay.tombstoneAfterDays}+ days)`,
+				);
+			}
+		}
 
-    return archived;
-  }
+		return archived;
+	}
 
-  close(): void {
-    for (const reader of this.readers) {
-      reader.close();
-    }
-  }
+	close(): void {
+		for (const reader of this.readers) {
+			reader.close();
+		}
+	}
 }

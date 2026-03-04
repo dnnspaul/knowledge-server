@@ -3,6 +3,7 @@ import {
 	existsSync,
 	mkdirSync,
 	readFileSync,
+	renameSync,
 	symlinkSync,
 	unlinkSync,
 	writeFileSync,
@@ -269,12 +270,20 @@ function setupClaudeCode(): void {
 	}
 	settings.hooks = hooks;
 
-	writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+	// Write atomically via a temp file + rename so a crash mid-write never
+	// leaves settings.json in a truncated/unparseable state.
+	const tmpPath = `${settingsPath}.tmp`;
+	writeFileSync(tmpPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+	renameSync(tmpPath, settingsPath);
 	console.log(`  ✓ Wrote ${settingsPath}`);
+
+	const startHint = isSourceInstall()
+		? `bun run ${join(getProjectDir(), "src", "index.ts")}`
+		: "knowledge-server";
 
 	console.log(`
 Start the knowledge server before using Claude Code:
-  bun run ${join(getProjectDir(), "src", "index.ts")}
+  ${startHint}
 
 Setup complete!`);
 }

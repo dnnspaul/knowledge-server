@@ -44,35 +44,37 @@ import type { KnowledgeEntry } from "../types.js";
  *   are measured against the same instant (avoids per-entry clock skew and
  *   makes the function pure/testable).
  */
-export function computeStrength(entry: KnowledgeEntry, nowMs = Date.now()): number {
-  const daysSinceAccess =
-    (nowMs - entry.lastAccessedAt) / (1000 * 60 * 60 * 24);
+export function computeStrength(
+	entry: KnowledgeEntry,
+	nowMs = Date.now(),
+): number {
+	const daysSinceAccess =
+		(nowMs - entry.lastAccessedAt) / (1000 * 60 * 60 * 24);
 
-  // Base half-life in days (type-specific)
-  const baseHalfLife =
-    config.decay.typeHalfLife[entry.type] ??
-    config.decay.typeHalfLife.fact;
+	// Base half-life in days (type-specific)
+	const baseHalfLife =
+		config.decay.typeHalfLife[entry.type] ?? config.decay.typeHalfLife.fact;
 
-  // Observation bonus: more evidence → longer effective half-life
-  // observationCount=1 (new): 1 + log2(2) = 2×
-  // observationCount=3:       1 + log2(4) = 3×
-  // observationCount=7:       1 + log2(8) = 4×
-  const observationBonus = 1 + Math.log2(1 + entry.observationCount);
+	// Observation bonus: more evidence → longer effective half-life
+	// observationCount=1 (new): 1 + log2(2) = 2×
+	// observationCount=3:       1 + log2(4) = 3×
+	// observationCount=7:       1 + log2(8) = 4×
+	const observationBonus = 1 + Math.log2(1 + entry.observationCount);
 
-  // Access bonus: more retrievals → longer effective half-life
-  // log2(1+0) = 0 → bonus = 1× for accessCount=0 (no retrieval boost yet)
-  const accessBonus = 1 + Math.log2(1 + entry.accessCount);
+	// Access bonus: more retrievals → longer effective half-life
+	// log2(1+0) = 0 → bonus = 1× for accessCount=0 (no retrieval boost yet)
+	const accessBonus = 1 + Math.log2(1 + entry.accessCount);
 
-  // Combined effective half-life
-  const effectiveHalfLife = baseHalfLife * observationBonus * accessBonus;
+	// Combined effective half-life
+	const effectiveHalfLife = baseHalfLife * observationBonus * accessBonus;
 
-  // Exponential decay from last access point
-  const decayFactor = Math.exp(
-    (-Math.LN2 * daysSinceAccess) / effectiveHalfLife
-  );
+	// Exponential decay from last access point
+	const decayFactor = Math.exp(
+		(-Math.LN2 * daysSinceAccess) / effectiveHalfLife,
+	);
 
-  // Confidence is a ceiling — decay only brings strength down from it
-  const strength = entry.confidence * decayFactor;
+	// Confidence is a ceiling — decay only brings strength down from it
+	const strength = entry.confidence * decayFactor;
 
-  return Math.max(0, Math.min(1, strength));
+	return Math.max(0, Math.min(1, strength));
 }

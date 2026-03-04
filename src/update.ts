@@ -1,7 +1,7 @@
-import { rename, chmod, unlink, writeFile, readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join, dirname, basename } from "node:path";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { chmod, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 const REPO = "MAnders333/knowledge-server";
 const GITHUB_API = "https://api.github.com";
@@ -12,15 +12,15 @@ const GITHUB_RELEASES = `https://github.com/${REPO}/releases/download`;
  * Matches the suffixes produced by the CI build matrix.
  */
 function detectPlatform(): string {
-  const os = process.platform;
-  const arch = process.arch;
+	const os = process.platform;
+	const arch = process.arch;
 
-  if (os === "linux" && arch === "x64") return "linux-x64";
-  if (os === "darwin" && arch === "arm64") return "darwin-arm64";
+	if (os === "linux" && arch === "x64") return "linux-x64";
+	if (os === "darwin" && arch === "arm64") return "darwin-arm64";
 
-  throw new Error(
-    `Unsupported platform: ${os}/${arch}. Supported: linux/x64, darwin/arm64. To update manually, download from https://github.com/${REPO}/releases`
-  );
+	throw new Error(
+		`Unsupported platform: ${os}/${arch}. Supported: linux/x64, darwin/arm64. To update manually, download from https://github.com/${REPO}/releases`,
+	);
 }
 
 /**
@@ -28,59 +28,73 @@ function detectPlatform(): string {
  * Returns a version string like "v1.2.3".
  */
 async function fetchLatestVersion(): Promise<string> {
-  const res = await fetch(`${GITHUB_API}/repos/${REPO}/releases/latest`, {
-    headers: { "Accept": "application/vnd.github+json", "User-Agent": "knowledge-server-updater" },
-  });
-  if (!res.ok) {
-    throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
-  }
-  const data = (await res.json()) as { tag_name?: string };
-  if (!data.tag_name || !/^v\d+\.\d+\.\d+$/.test(data.tag_name)) {
-    throw new Error(`Unexpected tag_name from GitHub API: ${JSON.stringify(data.tag_name)}`);
-  }
-  return data.tag_name;
+	const res = await fetch(`${GITHUB_API}/repos/${REPO}/releases/latest`, {
+		headers: {
+			Accept: "application/vnd.github+json",
+			"User-Agent": "knowledge-server-updater",
+		},
+	});
+	if (!res.ok) {
+		throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
+	}
+	const data = (await res.json()) as { tag_name?: string };
+	if (!data.tag_name || !/^v\d+\.\d+\.\d+$/.test(data.tag_name)) {
+		throw new Error(
+			`Unexpected tag_name from GitHub API: ${JSON.stringify(data.tag_name)}`,
+		);
+	}
+	return data.tag_name;
 }
 
 /**
  * Fetch the SHA256SUMS file for a given platform from the release and return
  * a map of { assetFilename → expectedHex }.
  */
-async function fetchChecksums(targetVersion: string, platform: string): Promise<Map<string, string>> {
-  const url = `${GITHUB_RELEASES}/${targetVersion}/SHA256SUMS-${platform}`;
-  const res = await fetch(url, {
-    headers: { "User-Agent": "knowledge-server-updater" },
-    redirect: "follow",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch checksums: ${res.status} ${res.statusText} (${url})`);
-  }
-  const text = await res.text();
-  const map = new Map<string, string>();
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    // sha256sum format: "<hash>  <filename>" (two spaces) or "<hash> <filename>"
-    const spaceIdx = trimmed.indexOf(" ");
-    if (spaceIdx < 0) continue;
-    const hash = trimmed.slice(0, spaceIdx).trim();
-    const filename = trimmed.slice(spaceIdx).trim().replace(/^\*/, ""); // strip leading * (binary mode)
-    map.set(filename, hash);
-  }
-  return map;
+async function fetchChecksums(
+	targetVersion: string,
+	platform: string,
+): Promise<Map<string, string>> {
+	const url = `${GITHUB_RELEASES}/${targetVersion}/SHA256SUMS-${platform}`;
+	const res = await fetch(url, {
+		headers: { "User-Agent": "knowledge-server-updater" },
+		redirect: "follow",
+	});
+	if (!res.ok) {
+		throw new Error(
+			`Failed to fetch checksums: ${res.status} ${res.statusText} (${url})`,
+		);
+	}
+	const text = await res.text();
+	const map = new Map<string, string>();
+	for (const line of text.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		// sha256sum format: "<hash>  <filename>" (two spaces) or "<hash> <filename>"
+		const spaceIdx = trimmed.indexOf(" ");
+		if (spaceIdx < 0) continue;
+		const hash = trimmed.slice(0, spaceIdx).trim();
+		const filename = trimmed.slice(spaceIdx).trim().replace(/^\*/, ""); // strip leading * (binary mode)
+		map.set(filename, hash);
+	}
+	return map;
 }
 
 /**
  * Verify the SHA256 checksum of a downloaded file against an expected hex string.
  * Throws if the checksum does not match.
  */
-async function verifyChecksum(filePath: string, expectedHex: string, label: string): Promise<void> {
-  const data = await readFile(filePath);
-  const actual = createHash("sha256").update(data).digest("hex");
-  if (actual !== expectedHex) {
-    throw new Error(
-      `Checksum mismatch for ${label}:\n  expected: ${expectedHex}\n  actual:   ${actual}\n  Aborting — the download may be corrupt or tampered.`
-    );
-  }
+async function verifyChecksum(
+	filePath: string,
+	expectedHex: string,
+	label: string,
+): Promise<void> {
+	const data = await readFile(filePath);
+	const actual = createHash("sha256").update(data).digest("hex");
+	if (actual !== expectedHex) {
+		throw new Error(
+			`Checksum mismatch for ${label}:\n  expected: ${expectedHex}\n  actual:   ${actual}\n  Aborting — the download may be corrupt or tampered.`,
+		);
+	}
 }
 
 /**
@@ -93,30 +107,35 @@ async function verifyChecksum(filePath: string, expectedHex: string, label: stri
  *
  * Returns the temp file path (caller is responsible for cleanup on error).
  */
-async function downloadBinary(url: string, targetPath: string): Promise<string> {
-  const tmpPath = join(
-    dirname(targetPath),
-    `.knowledge-server-update-${Date.now()}-${Math.random().toString(36).slice(2)}`
-  );
+async function downloadBinary(
+	url: string,
+	targetPath: string,
+): Promise<string> {
+	const tmpPath = join(
+		dirname(targetPath),
+		`.knowledge-server-update-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+	);
 
-  const res = await fetch(url, {
-    headers: { "User-Agent": "knowledge-server-updater" },
-    redirect: "follow",
-  });
-  if (!res.ok) {
-    throw new Error(`Download failed: ${res.status} ${res.statusText} (${url})`);
-  }
-  if (!res.body) {
-    throw new Error(`No response body from ${url}`);
-  }
+	const res = await fetch(url, {
+		headers: { "User-Agent": "knowledge-server-updater" },
+		redirect: "follow",
+	});
+	if (!res.ok) {
+		throw new Error(
+			`Download failed: ${res.status} ${res.statusText} (${url})`,
+		);
+	}
+	if (!res.body) {
+		throw new Error(`No response body from ${url}`);
+	}
 
-  try {
-    await Bun.write(tmpPath, res);
-  } catch (err) {
-    await unlink(tmpPath).catch(() => {});
-    throw err;
-  }
-  return tmpPath;
+	try {
+		await Bun.write(tmpPath, res);
+	} catch (err) {
+		await unlink(tmpPath).catch(() => {});
+		throw err;
+	}
+	return tmpPath;
 }
 
 /**
@@ -124,14 +143,17 @@ async function downloadBinary(url: string, targetPath: string): Promise<string> 
  * chmod 0o755 is applied before rename so the binary is never non-executable
  * during the swap (chmod is on the temp file, not the live binary).
  */
-async function installBinary(tmpPath: string, targetPath: string): Promise<void> {
-  try {
-    await chmod(tmpPath, 0o755);
-    await rename(tmpPath, targetPath);
-  } catch (err) {
-    await unlink(tmpPath).catch(() => {});
-    throw err;
-  }
+async function installBinary(
+	tmpPath: string,
+	targetPath: string,
+): Promise<void> {
+	try {
+		await chmod(tmpPath, 0o755);
+		await rename(tmpPath, targetPath);
+	} catch (err) {
+		await unlink(tmpPath).catch(() => {});
+		throw err;
+	}
 }
 
 /**
@@ -146,208 +168,230 @@ async function installBinary(tmpPath: string, targetPath: string): Promise<void>
  * @param argv - process.argv slice after "update" (e.g. ["--version", "v1.2.3"])
  * @param currentVersion - the version string of the currently running binary (e.g. "v1.0.1")
  */
-export async function runUpdate(argv: string[], currentVersion: string): Promise<void> {
-  // Parse optional --version flag
-  let targetVersion = "";
-  const versionIdx = argv.indexOf("--version");
-  if (versionIdx !== -1) {
-    targetVersion = argv[versionIdx + 1] ?? "";
-    if (!targetVersion || !/^v\d+\.\d+\.\d+$/.test(targetVersion)) {
-      console.error(`Invalid version: ${targetVersion || "(missing)"}. Expected format: v1.2.3`);
-      process.exit(1);
-    }
-  }
+export async function runUpdate(
+	argv: string[],
+	currentVersion: string,
+): Promise<void> {
+	// Parse optional --version flag
+	let targetVersion = "";
+	const versionIdx = argv.indexOf("--version");
+	if (versionIdx !== -1) {
+		targetVersion = argv[versionIdx + 1] ?? "";
+		if (!targetVersion || !/^v\d+\.\d+\.\d+$/.test(targetVersion)) {
+			console.error(
+				`Invalid version: ${targetVersion || "(missing)"}. Expected format: v1.2.3`,
+			);
+			process.exit(1);
+		}
+	}
 
-  const execPath = process.execPath;
+	const execPath = process.execPath;
 
-  // Fail fast: running via `bun run src/index.ts` sets process.execPath to the
-  // Bun runtime binary (e.g. ~/.bun/bin/bun), not the compiled knowledge-server binary.
-  // Replacing that path would overwrite the Bun runtime. Check the binary name
-  // before doing any network I/O so the error is immediate and clear.
-  if (basename(execPath) !== "knowledge-server") {
-    console.error(`  ✗ Unexpected executable path: ${execPath}`);
-    console.error("    'knowledge-server update' only works with the compiled binary, not 'bun run'.");
-    process.exit(1);
-  }
-  if (!existsSync(execPath)) {
-    console.error(`  ✗ Compiled binary not found at: ${execPath}`);
-    process.exit(1);
-  }
+	// Fail fast: running via `bun run src/index.ts` sets process.execPath to the
+	// Bun runtime binary (e.g. ~/.bun/bin/bun), not the compiled knowledge-server binary.
+	// Replacing that path would overwrite the Bun runtime. Check the binary name
+	// before doing any network I/O so the error is immediate and clear.
+	if (basename(execPath) !== "knowledge-server") {
+		console.error(`  ✗ Unexpected executable path: ${execPath}`);
+		console.error(
+			"    'knowledge-server update' only works with the compiled binary, not 'bun run'.",
+		);
+		process.exit(1);
+	}
+	if (!existsSync(execPath)) {
+		console.error(`  ✗ Compiled binary not found at: ${execPath}`);
+		process.exit(1);
+	}
 
-  // Detect platform
-  let platform: string;
-  try {
-    platform = detectPlatform();
-  } catch (err) {
-    console.error(`  ✗ ${err instanceof Error ? err.message : err}`);
-    process.exit(1);
-  }
+	// Detect platform
+	let platform: string;
+	try {
+		platform = detectPlatform();
+	} catch (err) {
+		console.error(`  ✗ ${err instanceof Error ? err.message : err}`);
+		process.exit(1);
+	}
 
-  console.log(`  Current version:  ${currentVersion}`);
-  console.log(`  Executable:       ${execPath}`);
-  console.log(`  Platform:         ${platform}`);
+	console.log(`  Current version:  ${currentVersion}`);
+	console.log(`  Executable:       ${execPath}`);
+	console.log(`  Platform:         ${platform}`);
 
-  // Resolve target version
-  if (!targetVersion) {
-    process.stdout.write("  Fetching latest release... ");
-    try {
-      targetVersion = await fetchLatestVersion();
-      console.log(targetVersion);
-    } catch (err) {
-      console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
-    }
-  }
+	// Resolve target version
+	if (!targetVersion) {
+		process.stdout.write("  Fetching latest release... ");
+		try {
+			targetVersion = await fetchLatestVersion();
+			console.log(targetVersion);
+		} catch (err) {
+			console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
+			process.exit(1);
+		}
+	}
 
-  if (targetVersion === currentVersion) {
-    console.log(`\n  Already at ${currentVersion} — nothing to do.`);
-    return;
-  }
+	if (targetVersion === currentVersion) {
+		console.log(`\n  Already at ${currentVersion} — nothing to do.`);
+		return;
+	}
 
-  console.log(`\n  Updating ${currentVersion} → ${targetVersion}`);
+	console.log(`\n  Updating ${currentVersion} → ${targetVersion}`);
 
-  // Fetch checksums before downloading — fail fast if the checksums file is unavailable
-  process.stdout.write("  Fetching checksums... ");
-  let checksums: Map<string, string>;
-  try {
-    checksums = await fetchChecksums(targetVersion, platform);
-    console.log("done");
-  } catch (err) {
-    console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
-    process.exit(1);
-  }
+	// Fetch checksums before downloading — fail fast if the checksums file is unavailable
+	process.stdout.write("  Fetching checksums... ");
+	let checksums: Map<string, string>;
+	try {
+		checksums = await fetchChecksums(targetVersion, platform);
+		console.log("done");
+	} catch (err) {
+		console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
+		process.exit(1);
+	}
 
-  // Download both binaries to temp files BEFORE replacing either.
-  // This prevents a split-version install if the second download fails after
-  // the first binary has already been replaced.
-  const binaryAsset = `knowledge-server-${platform}`;
-  const binaryUrl = `${GITHUB_RELEASES}/${targetVersion}/${binaryAsset}`;
-  const mcpPath = join(dirname(execPath), "knowledge-server-mcp");
-  const mcpAsset = `knowledge-server-mcp-${platform}`;
-  const mcpUrl = `${GITHUB_RELEASES}/${targetVersion}/${mcpAsset}`;
-  const hasMcp = existsSync(mcpPath);
+	// Download both binaries to temp files BEFORE replacing either.
+	// This prevents a split-version install if the second download fails after
+	// the first binary has already been replaced.
+	const binaryAsset = `knowledge-server-${platform}`;
+	const binaryUrl = `${GITHUB_RELEASES}/${targetVersion}/${binaryAsset}`;
+	const mcpPath = join(dirname(execPath), "knowledge-server-mcp");
+	const mcpAsset = `knowledge-server-mcp-${platform}`;
+	const mcpUrl = `${GITHUB_RELEASES}/${targetVersion}/${mcpAsset}`;
+	const hasMcp = existsSync(mcpPath);
 
-  process.stdout.write(`  Downloading ${binaryAsset}... `);
-  let mainTmpPath = "";
-  try {
-    mainTmpPath = await downloadBinary(binaryUrl, execPath);
-    const expectedHash = checksums.get(binaryAsset);
-    if (expectedHash) {
-      await verifyChecksum(mainTmpPath, expectedHash, binaryAsset);
-    } else {
-      console.error(`\n  ⚠ No checksum found for ${binaryAsset} — proceeding without verification`);
-    }
-    console.log("done");
-  } catch (err) {
-    await unlink(mainTmpPath).catch(() => {});
-    console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
-    process.exit(1);
-  }
+	process.stdout.write(`  Downloading ${binaryAsset}... `);
+	let mainTmpPath = "";
+	try {
+		mainTmpPath = await downloadBinary(binaryUrl, execPath);
+		const expectedHash = checksums.get(binaryAsset);
+		if (expectedHash) {
+			await verifyChecksum(mainTmpPath, expectedHash, binaryAsset);
+		} else {
+			console.error(
+				`\n  ⚠ No checksum found for ${binaryAsset} — proceeding without verification`,
+			);
+		}
+		console.log("done");
+	} catch (err) {
+		await unlink(mainTmpPath).catch(() => {});
+		console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
+		process.exit(1);
+	}
 
-  let mcpTmpPath = "";
-  if (hasMcp) {
-    process.stdout.write(`  Downloading ${mcpAsset}... `);
-    try {
-      mcpTmpPath = await downloadBinary(mcpUrl, mcpPath);
-      const expectedMcpHash = checksums.get(mcpAsset);
-      if (expectedMcpHash) {
-        await verifyChecksum(mcpTmpPath, expectedMcpHash, mcpAsset);
-      } else {
-        console.error(`\n  ⚠ No checksum found for ${mcpAsset} — proceeding without verification`);
-      }
-      console.log("done");
-    } catch (err) {
-      // Clean up the already-downloaded main binary temp file before exiting
-      await unlink(mainTmpPath).catch(() => {});
-      await unlink(mcpTmpPath).catch(() => {});
-      console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
-      process.exit(1);
-    }
-  }
+	let mcpTmpPath = "";
+	if (hasMcp) {
+		process.stdout.write(`  Downloading ${mcpAsset}... `);
+		try {
+			mcpTmpPath = await downloadBinary(mcpUrl, mcpPath);
+			const expectedMcpHash = checksums.get(mcpAsset);
+			if (expectedMcpHash) {
+				await verifyChecksum(mcpTmpPath, expectedMcpHash, mcpAsset);
+			} else {
+				console.error(
+					`\n  ⚠ No checksum found for ${mcpAsset} — proceeding without verification`,
+				);
+			}
+			console.log("done");
+		} catch (err) {
+			// Clean up the already-downloaded main binary temp file before exiting
+			await unlink(mainTmpPath).catch(() => {});
+			await unlink(mcpTmpPath).catch(() => {});
+			console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
+			process.exit(1);
+		}
+	}
 
-  // Both downloads succeeded — now atomically replace the binaries.
-  // Main and MCP installs are kept in separate try/catch blocks so that a failure
-  // on the MCP rename (after the main binary is already replaced) produces a clear
-  // recovery message rather than a generic error with no indication of partial success.
-  process.stdout.write("  Installing main binary... ");
-  try {
-    await installBinary(mainTmpPath, execPath);
-    console.log("done");
-  } catch (err) {
-    // Main install failed — clean up both temp files and exit
-    if (mcpTmpPath) await unlink(mcpTmpPath).catch(() => {});
-    console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
-    process.exit(1);
-  }
+	// Both downloads succeeded — now atomically replace the binaries.
+	// Main and MCP installs are kept in separate try/catch blocks so that a failure
+	// on the MCP rename (after the main binary is already replaced) produces a clear
+	// recovery message rather than a generic error with no indication of partial success.
+	process.stdout.write("  Installing main binary... ");
+	try {
+		await installBinary(mainTmpPath, execPath);
+		console.log("done");
+	} catch (err) {
+		// Main install failed — clean up both temp files and exit
+		if (mcpTmpPath) await unlink(mcpTmpPath).catch(() => {});
+		console.error(`\n  ✗ ${err instanceof Error ? err.message : err}`);
+		process.exit(1);
+	}
 
-  if (mcpTmpPath) {
-    process.stdout.write("  Installing MCP binary... ");
-    try {
-      await installBinary(mcpTmpPath, mcpPath);
-      console.log("done");
-    } catch (err) {
-      // Main binary was already replaced. MCP is still the old version.
-      // NOTE: Re-running `knowledge-server update` (with or without --version) will NOT
-      // fix this — the main binary now reports the new version, so the equality check
-      // exits early with "nothing to do". Recovery requires re-running install.sh, which
-      // has no version equality check and will replace both binaries unconditionally.
-      console.error(`\n  ⚠ MCP binary update failed: ${err instanceof Error ? err.message : err}`);
-      console.error(`    Main binary was updated to ${targetVersion}.`);
-      console.error("    To finish updating the MCP binary, re-run the installer: curl … | bash");
-    }
-  }
+	if (mcpTmpPath) {
+		process.stdout.write("  Installing MCP binary... ");
+		try {
+			await installBinary(mcpTmpPath, mcpPath);
+			console.log("done");
+		} catch (err) {
+			// Main binary was already replaced. MCP is still the old version.
+			// NOTE: Re-running `knowledge-server update` (with or without --version) will NOT
+			// fix this — the main binary now reports the new version, so the equality check
+			// exits early with "nothing to do". Recovery requires re-running install.sh, which
+			// has no version equality check and will replace both binaries unconditionally.
+			console.error(
+				`\n  ⚠ MCP binary update failed: ${err instanceof Error ? err.message : err}`,
+			);
+			console.error(`    Main binary was updated to ${targetVersion}.`);
+			console.error(
+				"    To finish updating the MCP binary, re-run the installer: curl … | bash",
+			);
+		}
+	}
 
-  // Update plugin and command files if the install dir can be inferred.
-  // Convention from install.sh: binary lives at <install-dir>/libexec/knowledge-server,
-  // so the install dir is two levels up from process.execPath.
-  const inferredInstallDir = dirname(dirname(execPath));
-  const pluginDest = join(inferredInstallDir, "knowledge.ts");
-  const commandFiles: Array<[string, string]> = [
-    ["consolidate.md", join(inferredInstallDir, "consolidate.md")],
-    ["knowledge-review.md", join(inferredInstallDir, "knowledge-review.md")],
-  ];
+	// Update plugin and command files if the install dir can be inferred.
+	// Convention from install.sh: binary lives at <install-dir>/libexec/knowledge-server,
+	// so the install dir is two levels up from process.execPath.
+	const inferredInstallDir = dirname(dirname(execPath));
+	const pluginDest = join(inferredInstallDir, "knowledge.ts");
+	const commandFiles: Array<[string, string]> = [
+		["consolidate.md", join(inferredInstallDir, "consolidate.md")],
+		["knowledge-review.md", join(inferredInstallDir, "knowledge-review.md")],
+	];
 
-  if (existsSync(pluginDest)) {
-    process.stdout.write("  Updating plugin and commands... ");
-    try {
-      const assets = [
-        ["knowledge.ts", pluginDest],
-        ...commandFiles.filter(([, dest]) => existsSync(dest)),
-      ] as Array<[string, string]>;
+	if (existsSync(pluginDest)) {
+		process.stdout.write("  Updating plugin and commands... ");
+		try {
+			const assets = [
+				["knowledge.ts", pluginDest],
+				...commandFiles.filter(([, dest]) => existsSync(dest)),
+			] as Array<[string, string]>;
 
-      // Asset names are hardcoded constants in this function — not user-controlled.
-      await Promise.all(assets.map(async ([name, dest]) => {
-        const url = `${GITHUB_RELEASES}/${targetVersion}/${name}`;
-        const res = await fetch(url, {
-          headers: { "User-Agent": "knowledge-server-updater" },
-          redirect: "follow",
-        });
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText} (${name})`);
-        // Write to a temp file beside the destination then rename atomically,
-        // matching the binary install pattern so a crash mid-write doesn't corrupt
-        // the live plugin file.
-        // Include `name` in the temp path so concurrent writes in Promise.all
-        // can never share the same temp file (Date.now() is the same millisecond
-        // for all promises launched in the same tick).
-        const tmpDest = join(
-          dirname(dest),
-          `.knowledge-server-update-${name}-${Date.now()}-${Math.random().toString(36).slice(2)}`
-        );
-        try {
-          await writeFile(tmpDest, await res.text(), "utf8");
-          await rename(tmpDest, dest);
-        } catch (err) {
-          await unlink(tmpDest).catch(() => {});
-          throw err;
-        }
-      }));
-      console.log("done");
-    } catch (err) {
-      console.error(`\n  ⚠ Plugin/command update failed: ${err instanceof Error ? err.message : err}`);
-      console.error("    Binaries were updated. Re-run install.sh to refresh plugin files.");
-    }
-  }
+			// Asset names are hardcoded constants in this function — not user-controlled.
+			await Promise.all(
+				assets.map(async ([name, dest]) => {
+					const url = `${GITHUB_RELEASES}/${targetVersion}/${name}`;
+					const res = await fetch(url, {
+						headers: { "User-Agent": "knowledge-server-updater" },
+						redirect: "follow",
+					});
+					if (!res.ok)
+						throw new Error(`${res.status} ${res.statusText} (${name})`);
+					// Write to a temp file beside the destination then rename atomically,
+					// matching the binary install pattern so a crash mid-write doesn't corrupt
+					// the live plugin file.
+					// Include `name` in the temp path so concurrent writes in Promise.all
+					// can never share the same temp file (Date.now() is the same millisecond
+					// for all promises launched in the same tick).
+					const tmpDest = join(
+						dirname(dest),
+						`.knowledge-server-update-${name}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+					);
+					try {
+						await writeFile(tmpDest, await res.text(), "utf8");
+						await rename(tmpDest, dest);
+					} catch (err) {
+						await unlink(tmpDest).catch(() => {});
+						throw err;
+					}
+				}),
+			);
+			console.log("done");
+		} catch (err) {
+			console.error(
+				`\n  ⚠ Plugin/command update failed: ${err instanceof Error ? err.message : err}`,
+			);
+			console.error(
+				"    Binaries were updated. Re-run install.sh to refresh plugin files.",
+			);
+		}
+	}
 
-  console.log(`\n  Updated to ${targetVersion}.`);
-  console.log("  Restart the server to pick up the new binary.");
+	console.log(`\n  Updated to ${targetVersion}.`);
+	console.log("  Restart the server to pick up the new binary.");
 }

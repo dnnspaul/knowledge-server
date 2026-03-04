@@ -8,10 +8,13 @@
  * Returns a staleness annotation tag, or an empty string if not stale.
  * e.g. " [may be outdated — last accessed 47d ago]"
  */
-export function staleTag(staleness: { mayBeStale: boolean; lastAccessedDaysAgo: number }): string {
-  return staleness.mayBeStale
-    ? ` [may be outdated — last accessed ${staleness.lastAccessedDaysAgo}d ago]`
-    : "";
+export function staleTag(staleness: {
+	mayBeStale: boolean;
+	lastAccessedDaysAgo: number;
+}): string {
+	return staleness.mayBeStale
+		? ` [may be outdated — last accessed ${staleness.lastAccessedDaysAgo}d ago]`
+		: "";
 }
 
 /**
@@ -21,10 +24,10 @@ export function staleTag(staleness: { mayBeStale: boolean; lastAccessedDaysAgo: 
  * e.g. " [CONFLICTED — conflicts with: "<full content>". <caveat>]"
  */
 export function contradictionTagInline(
-  contradiction: { conflictingContent: string; caveat: string } | undefined
+	contradiction: { conflictingContent: string; caveat: string } | undefined,
 ): string {
-  if (!contradiction) return "";
-  return ` [CONFLICTED — conflicts with: "${contradiction.conflictingContent}". ${contradiction.caveat}]`;
+	if (!contradiction) return "";
+	return ` [CONFLICTED — conflicts with: "${contradiction.conflictingContent}". ${contradiction.caveat}]`;
 }
 
 /**
@@ -34,8 +37,8 @@ export function contradictionTagInline(
  * e.g. "\n   ⚠ CONFLICTED — conflicts with: "<full content>"\n   Caveat: <caveat>"
  */
 export function contradictionTagBlock(
-  contradiction: { conflictingContent: string; caveat: string } | undefined
+	contradiction: { conflictingContent: string; caveat: string } | undefined,
 ): string {
-  if (!contradiction) return "";
-  return `\n   ⚠ CONFLICTED — conflicts with: "${contradiction.conflictingContent}"\n   Caveat: ${contradiction.caveat}`;
+	if (!contradiction) return "";
+	return `\n   ⚠ CONFLICTED — conflicts with: "${contradiction.conflictingContent}"\n   Caveat: ${contradiction.caveat}`;
 }
