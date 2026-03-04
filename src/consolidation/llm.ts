@@ -150,7 +150,7 @@ async function complete(
 	}
 
 	logger.error(
-		`[llm] Call to ${modelString} failed after ${maxAttempts} attempt(s) — giving up.`,
+		`[llm] Call to ${modelString} failed after ${maxAttempts} attempt(s) — giving up. Last error: ${formatLlmError(lastError)}`,
 	);
 	throw lastError;
 }
