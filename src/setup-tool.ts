@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -8,6 +9,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { config } from "./config.js";
 
 /**
  * `knowledge-server setup-tool <opencode|claude-code>`
@@ -22,13 +24,25 @@ import { dirname, join, resolve } from "node:path";
  * claude-code:
  *   - Merge MCP server + UserPromptSubmit hook into ~/.claude/settings.json
  *
- * The binary's own directory is used as the project root (fallback: cwd).
- * When running via `bun run src/index.ts`, Bun.main resolves to the source file.
- * When running as a compiled binary, `process.execPath` is the binary itself.
+ * There are two installation modes:
+ *
+ *   Source install  — cloned repo, run via `bun run src/index.ts`.
+ *                     Bun.main ends in `.ts`. MCP server → `bun run src/mcp/index.ts`.
+ *
+ *   Binary install  — compiled binary on PATH (`knowledge-server`).
+ *                     Bun.main does NOT end in `.ts`. MCP server → `knowledge-server-mcp`
+ *                     (the companion binary, expected to be on PATH alongside the main one).
  */
+
+/** True when running from source (`bun run src/index.ts`), false when compiled binary. */
+function isSourceInstall(): boolean {
+	const mainFile = typeof Bun !== "undefined" ? Bun.main : process.argv[1];
+	return mainFile.endsWith(".ts");
+}
+
 function getProjectDir(): string {
-	// Compiled binary: execPath is the binary in dist/ — project root is one level up.
-	// Source mode: Bun.main is src/index.ts — project root is one level up from src/.
+	// dirname(src/index.ts) = src/ → resolve(..) = project root.
+	// Only meaningful for source installs; binary installs use the companion binary directly.
 	const mainFile = typeof Bun !== "undefined" ? Bun.main : process.argv[1];
 	return resolve(dirname(mainFile), "..");
 }
@@ -86,8 +100,8 @@ To enable the MCP 'activate' tool, add this to ~/.config/opencode/opencode.jsonc
       "command": ["bun", "run", "${join(projectDir, "src", "mcp", "index.ts")}"],
       "enabled": true,
       "environment": {
-        "LLM_API_KEY": "<copy from .env>",
-        "LLM_BASE_ENDPOINT": "<copy from .env>"
+        "KNOWLEDGE_HOST": "${config.host}",
+        "KNOWLEDGE_PORT": "${config.port}"
       }
     }
   }
@@ -98,24 +112,73 @@ Setup complete!`);
 // ── Claude Code setup ──────────────────────────────────────────────────────────
 
 /**
- * The knowledge-server MCP entry for Claude Code.
- * Uses the `knowledge-server-mcp` compiled binary (must be on PATH).
- * If the binary is not on PATH, the user can substitute `bun run <path>/src/mcp/index.ts`.
+ * Build the MCP server entry for Claude Code.
+ *
+ * Source install: `bun run <projectDir>/src/mcp/index.ts`
+ *   - Always reflects current source; no stale compiled binary risk.
+ *   - Bun executable resolved from the running process or ~/.bun/bin/bun.
+ *
+ * Binary install: `knowledge-server-mcp` (companion binary, must be on PATH
+ *   alongside `knowledge-server`).
  */
-const CLAUDE_MCP_ENTRY = {
-	type: "stdio",
-	command: "knowledge-server-mcp",
-} as const;
+function makeClaudeMcpEntry() {
+	if (isSourceInstall()) {
+		const projectDir = getProjectDir();
+		// In source mode, process.execPath is the bun binary itself.
+		const bunBin = process.execPath.endsWith("bun")
+			? process.execPath
+			: join(homedir(), ".bun", "bin", "bun");
+		return {
+			type: "stdio",
+			command: bunBin,
+			args: ["run", join(projectDir, "src", "mcp", "index.ts")],
+			env: {
+				// The MCP server is a thin HTTP proxy — it only needs to locate the
+				// knowledge HTTP server. No LLM credentials required here.
+				KNOWLEDGE_HOST: config.host,
+				KNOWLEDGE_PORT: String(config.port),
+			},
+		};
+	}
+	// Binary install: companion binary knowledge-server-mcp must be on PATH.
+	return {
+		type: "stdio",
+		command: "knowledge-server-mcp",
+		env: {
+			// Same as source install — just KNOWLEDGE_HOST / KNOWLEDGE_PORT.
+			KNOWLEDGE_HOST: config.host,
+			KNOWLEDGE_PORT: String(config.port),
+		},
+	};
+}
 
 /**
  * The UserPromptSubmit hook entry for Claude Code.
  * Points to the local knowledge server's hook endpoint.
+ *
+ * The URL is derived from KNOWLEDGE_HOST / KNOWLEDGE_PORT env vars (same as the
+ * server uses), so running `setup-tool claude-code` with the same env as the
+ * server will always write the correct URL into settings.json.
+ *
+ * Claude Code hook format: each entry in the UserPromptSubmit array is a
+ * matcher group: { matcher?: string, hooks: [...] }. UserPromptSubmit does not
+ * support matchers (fires on every prompt), so matcher is omitted.
  */
-const CLAUDE_HOOK_ENTRY = {
-	type: "http",
-	url: "http://127.0.0.1:3179/hooks/claude-code/user-prompt",
-	timeout: 5,
-} as const;
+function claudeHookUrl(): string {
+	return `http://${config.host}:${config.port}/hooks/claude-code/user-prompt`;
+}
+
+function makeClaudeHookEntry() {
+	return {
+		hooks: [
+			{
+				type: "http",
+				url: claudeHookUrl(),
+				timeout: 5,
+			},
+		],
+	};
+}
 
 function setupClaudeCode(): void {
 	const claudeDir =
@@ -127,7 +190,42 @@ function setupClaudeCode(): void {
 
 	console.log("Setting up Claude Code integration...\n");
 
-	// Read existing settings (create empty object if file doesn't exist)
+	// ── MCP server — registered via `claude mcp add-json` (user scope → ~/.claude.json) ──
+	// Claude Code does NOT read mcpServers from settings.json (that's Claude Desktop format).
+	// We use add-json to safely embed env var values (which may contain +, =, etc.)
+	// without shell quoting issues.
+	const mcpEntry = makeClaudeMcpEntry();
+	const mcpJson = JSON.stringify(mcpEntry);
+
+	// Check if already registered — `claude mcp get knowledge` exits 0 if found.
+	const getResult = spawnSync("claude", ["mcp", "get", "knowledge"], {
+		encoding: "utf8",
+	});
+	if (getResult.status === 0) {
+		console.log("  ✓ MCP server 'knowledge' already registered (no change)");
+		console.log(
+			"    To update: run `claude mcp remove knowledge -s user` then re-run this command",
+		);
+	} else {
+		// Not registered yet — add via add-json with --scope user.
+		// spawnSync avoids shell quoting/injection issues with JSON values.
+		const addResult = spawnSync(
+			"claude",
+			["mcp", "add-json", "knowledge", mcpJson, "--scope", "user"],
+			{ encoding: "utf8" },
+		);
+		if (addResult.status === 0) {
+			console.log(
+				"  ✓ MCP server 'knowledge' registered (claude mcp add-json --scope user)",
+			);
+		} else {
+			console.error("  ✗ Failed to register MCP server:", addResult.stderr);
+			console.error("    Make sure `claude` is on your PATH, then retry.");
+		}
+	}
+
+	// ── UserPromptSubmit hook — written to ~/.claude/settings.json ──
+	// Hooks live in settings.json (not ~/.claude.json).
 	let settings: Record<string, unknown> = {};
 	if (existsSync(settingsPath)) {
 		try {
@@ -135,7 +233,6 @@ function setupClaudeCode(): void {
 				string,
 				unknown
 			>;
-			console.log(`  ✓ Read existing settings: ${settingsPath}`);
 		} catch (e) {
 			console.error(`  ✗ Failed to parse ${settingsPath}: ${e}`);
 			console.error("    Fix the JSON syntax error and retry.");
@@ -143,55 +240,41 @@ function setupClaudeCode(): void {
 		}
 	} else {
 		mkdirSync(claudeDir, { recursive: true });
-		console.log(`  ✓ Creating settings: ${settingsPath}`);
 	}
 
-	// Merge MCP server entry
-	const mcpServers = (settings.mcpServers ?? {}) as Record<string, unknown>;
-	const existingMcp = mcpServers.knowledge as
-		| Record<string, unknown>
-		| undefined;
-
-	if (existingMcp) {
-		console.log("  ✓ MCP server 'knowledge' already configured (no change)");
-	} else {
-		mcpServers.knowledge = CLAUDE_MCP_ENTRY;
-		console.log("  ✓ MCP server 'knowledge' added");
-	}
-	settings.mcpServers = mcpServers;
-
-	// Merge UserPromptSubmit hook
 	const hooks = (settings.hooks ?? {}) as Record<string, unknown>;
 	const existingHooks = (hooks.UserPromptSubmit ?? []) as unknown[];
 
-	const alreadyHasHook = existingHooks.some(
-		(h) =>
-			typeof h === "object" &&
-			h !== null &&
-			(h as Record<string, unknown>).url === CLAUDE_HOOK_ENTRY.url,
-	);
+	const alreadyHasHook = existingHooks.some((h) => {
+		if (typeof h !== "object" || h === null) return false;
+		const entry = h as Record<string, unknown>;
+		const innerHooks = entry.hooks;
+		if (Array.isArray(innerHooks)) {
+			return innerHooks.some(
+				(ih) =>
+					typeof ih === "object" &&
+					ih !== null &&
+					(ih as Record<string, unknown>).url === claudeHookUrl(),
+			);
+		}
+		// Old format (pre-matcher): { type, url, ... }
+		return entry.url === claudeHookUrl();
+	});
 
 	if (alreadyHasHook) {
 		console.log("  ✓ UserPromptSubmit hook already configured (no change)");
 	} else {
-		hooks.UserPromptSubmit = [...existingHooks, CLAUDE_HOOK_ENTRY];
-		console.log("  ✓ UserPromptSubmit hook added");
+		hooks.UserPromptSubmit = [...existingHooks, makeClaudeHookEntry()];
+		console.log(`  ✓ UserPromptSubmit hook added (${claudeHookUrl()})`);
 	}
 	settings.hooks = hooks;
 
-	// Write back
 	writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
-	console.log(`\n  ✓ Wrote ${settingsPath}`);
+	console.log(`  ✓ Wrote ${settingsPath}`);
 
 	console.log(`
-Note: 'knowledge-server-mcp' must be on your PATH for the MCP tool to work.
-If it isn't, edit mcpServers.knowledge in ${settingsPath} to use:
-
-  "command": "bun",
-  "args": ["run", "${join(getProjectDir(), "src", "mcp", "index.ts")}"]
-
 Start the knowledge server before using Claude Code:
-  knowledge-server   (or: bun run ${join(getProjectDir(), "src", "index.ts")})
+  bun run ${join(getProjectDir(), "src", "index.ts")}
 
 Setup complete!`);
 }

@@ -1,8 +1,8 @@
 # knowledge-server
 
-Persistent semantic memory for [OpenCode](https://opencode.ai) agents — fully local, no external service required.
+Persistent semantic memory for [OpenCode](https://opencode.ai) and [Claude Code](https://claude.ai/code) — fully local, no external service required.
 
-Reads your OpenCode session history, extracts what's worth keeping into a local SQLite knowledge store, and injects relevant entries into new conversations automatically.
+Reads your session history, extracts what's worth keeping into a local SQLite knowledge store, and injects relevant entries into new conversations automatically.
 
 ## Install
 
@@ -28,7 +28,7 @@ knowledge-server update
 
 ### From source
 
-**Prerequisites:** [Bun](https://bun.sh), OpenCode with an active session database.
+**Prerequisites:** [Bun](https://bun.sh), OpenCode or Claude Code with an active session history.
 
 ```bash
 git clone https://github.com/MAnders333/knowledge-server
@@ -41,11 +41,20 @@ bun run start
 
 `bun run setup` installs dependencies, creates the data directory, and symlinks the plugin and commands into your OpenCode config.
 
+## Supported session sources
+
+| Source | What is read |
+|---|---|
+| **OpenCode** | `~/.local/share/opencode/opencode.db` (SQLite) |
+| **Claude Code** | `~/.claude/projects/**/*.jsonl` (JSONL conversation logs) |
+
+Both sources are enabled by default and read automatically on startup. Disable either with `OPENCODE_ENABLED=false` or `CLAUDE_ENABLED=false`.
+
 ## How it works
 
 Once running, three things happen automatically:
 
-1. **On startup** — the server reads any OpenCode sessions you've had since it last ran and extracts knowledge entries worth keeping. Most sessions produce nothing; the LLM applies a high bar.
+1. **On startup** — the server reads any sessions you've had since it last ran and extracts knowledge entries worth keeping. Most sessions produce nothing; the LLM applies a high bar.
 2. **On each new message** — the query is embedded and matched against stored entries. Semantically relevant entries are injected into the conversation as background context before the LLM sees your message.
 3. **Over time** — entries that haven't been accessed decay and are eventually archived. The store updates rather than accumulates.
 
@@ -72,40 +81,42 @@ The similarity thresholds (0.82 for reconsolidation, 0.4 for the contradiction s
 ## Architecture
 
 ```
-OpenCode session DB (read-only)
-        │
-        ▼
-  EpisodeReader          reads new sessions since cursor
-        │
-        ▼
-  ConsolidationLLM       extracts knowledge entries (high bar: most sessions → [])
-  [extractionModel]
-        │
-        ▼
-  Reconsolidation        embed → nearest-neighbor → LLM merge decision
-  [mergeModel]           (sim ≥ 0.82 → keep/update/replace/insert)
-        │
-        ▼
-  Contradiction scan     topic overlap → mid-band similarity filter → LLM resolution
-  [contradictionModel]   (0.4 ≤ sim < 0.82 → supersede/merge/flag)
-        │
-        ▼
-  KnowledgeDB (SQLite)   persistent graph with embeddings, strength, decay, relations
-        │
-        ▼
-  ActivationEngine       cosine similarity search over embeddings
-        │
-   ┌────┴────┐
-   ▼         ▼
-HTTP API    MCP server
-   │
-   ▼
-OpenCode plugin (passive injection on every user message)
+OpenCode sessions (SQLite)    Claude Code sessions (JSONL)
+         │                              │
+         └──────────────┬───────────────┘
+                        ▼
+                  EpisodeReader          reads new sessions since cursor (per source)
+                        │
+                        ▼
+              ConsolidationLLM       extracts knowledge entries (high bar: most sessions → [])
+              [extractionModel]
+                        │
+                        ▼
+              Reconsolidation        embed → nearest-neighbor → LLM merge decision
+              [mergeModel]           (sim ≥ 0.82 → keep/update/replace/insert)
+                        │
+                        ▼
+              Contradiction scan     topic overlap → mid-band similarity filter → LLM resolution
+              [contradictionModel]   (0.4 ≤ sim < 0.82 → supersede/merge/flag)
+                        │
+                        ▼
+              KnowledgeDB (SQLite)   persistent graph with embeddings, strength, decay, relations
+                        │
+                        ▼
+              ActivationEngine       cosine similarity search over embeddings
+                        │
+                   ┌────┴────┐
+                   ▼         ▼
+               HTTP API    MCP server (thin HTTP proxy → GET /activate)
+                   │
+                   ▼
+         OpenCode plugin (passive injection on every user message)
+         Claude Code hook (passive injection via UserPromptSubmit)
 ```
 
 ## Components
 
-### HTTP API (`src/index.ts`, `src/api/server.ts`)
+### HTTP API (`src/api/server.ts`)
 
 Hono-based HTTP server. Starts on `127.0.0.1:3179` by default.
 
@@ -121,28 +132,33 @@ Hono-based HTTP server. Starts on `127.0.0.1:3179` by default.
 | `/entries/:id/resolve` | POST | admin | Resolve a conflicted entry pair |
 | `/entries/:id` | DELETE | admin | Hard-delete an entry |
 | `/review` | GET | — | Surface conflicted, stale, and team-relevant entries |
+| `/hooks/claude-code/user-prompt` | POST | — | Claude Code `UserPromptSubmit` hook endpoint |
 
 ### MCP server (`src/mcp/index.ts`)
 
-Exposes a single tool: `activate`. Agents use this for deliberate recall — when they want to pull knowledge about a specific topic mid-task. Same underlying mechanism as the passive plugin.
+Exposes a single tool: `activate`. Agents use this for deliberate recall — when they want to pull knowledge about a specific topic mid-task.
+
+The MCP server is a **thin HTTP proxy** — it forwards `activate` calls to the already-running knowledge HTTP server via `GET /activate`. It does not open the database or call any LLM directly. Only `KNOWLEDGE_HOST` and `KNOWLEDGE_PORT` are required; no LLM credentials are needed.
+
+**OpenCode** (`~/.config/opencode/opencode.jsonc`):
 
 ```json
-{
-  "mcp": {
-    "knowledge": {
-      "type": "local",
-      "command": ["/home/you/.local/share/knowledge-server/libexec/knowledge-server-mcp"],
-      "enabled": true,
-      "environment": {
-        "LLM_API_KEY": "<your key>",
-        "LLM_BASE_ENDPOINT": "<your endpoint>"
-      }
+"mcp": {
+  "knowledge": {
+    "type": "local",
+    "command": ["/home/you/.local/share/knowledge-server/libexec/knowledge-server-mcp"],
+    "enabled": true,
+    "environment": {
+      "KNOWLEDGE_HOST": "127.0.0.1",
+      "KNOWLEDGE_PORT": "3179"
     }
   }
 }
 ```
 
-> The binary installer prints a ready-to-paste version of this block with the exact path already filled in. For a source install, `bun run setup` prints the same block with the correct absolute path and your `.env` values interpolated. If you copy the example above manually, replace the placeholder path with your actual home directory — tilde (`~`) is not shell-expanded inside JSON.
+**Claude Code** — registered automatically by `knowledge-server setup-tool claude-code` (or `bun run src/index.ts setup-tool claude-code` from source). This uses `claude mcp add-json` to write to `~/.claude.json`.
+
+> The binary installer prints a ready-to-paste version of the OpenCode block with the exact path already filled in. For a source install, `bun run setup` prints the same block with the correct absolute path interpolated. If you copy the example above manually, replace the placeholder path with your actual home directory — tilde (`~`) is not shell-expanded inside JSON.
 
 ### OpenCode plugin (`plugin/knowledge.ts`)
 
@@ -152,12 +168,43 @@ Design principle: **never throws**. All errors are caught and silently swallowed
 
 Install by symlinking to `~/.config/opencode/plugins/knowledge.ts` (the installer does this automatically).
 
+### Claude Code hook (`~/.claude/settings.json`)
+
+Passive injection for Claude Code. A `UserPromptSubmit` HTTP hook calls `POST /hooks/claude-code/user-prompt` before each prompt is processed. The server queries `/activate` and prepends matching knowledge as a system reminder injected into the hook response.
+
+Registered automatically by `setup-tool claude-code`.
+
 ### Consolidation engine (`src/consolidation/`)
 
-- `episodes.ts` — reads OpenCode's SQLite session DB, segments long sessions, respects compaction summaries
+- `readers/opencode.ts` — reads OpenCode's SQLite session DB, segments long sessions, respects compaction summaries
+- `readers/claude-code.ts` — reads Claude Code JSONL session files, handles compacted sessions, correlates tool call results
+- `consolidate.ts` — orchestrates the full cycle: read → extract → reconsolidate → contradiction scan → decay → embed → advance cursor (per source)
 - `llm.ts` — three LLM calls across two model slots: `extractKnowledge` (extraction model), `decideMerge` (merge model — cheaper), `detectAndResolveContradiction` (contradiction model)
-- `consolidate.ts` — orchestrates the full cycle: read → extract → reconsolidate → contradiction scan → decay → embed → advance cursor
 - `decay.ts` — forgetting curve with type-specific half-lives (facts decay faster than procedures)
+
+## Setup
+
+### OpenCode
+
+```bash
+knowledge-server setup-tool opencode    # binary install
+bun run src/index.ts setup-tool opencode  # source install
+```
+
+This symlinks the plugin and commands into `~/.config/opencode/`, then prints an MCP config block to paste into `opencode.jsonc`.
+
+### Claude Code
+
+```bash
+knowledge-server setup-tool claude-code    # binary install
+bun run src/index.ts setup-tool claude-code  # source install
+```
+
+This:
+1. Registers the `knowledge` MCP server in `~/.claude.json` via `claude mcp add-json` (user scope)
+2. Adds a `UserPromptSubmit` hook to `~/.claude/settings.json` pointing at the knowledge server
+
+Both steps are idempotent — re-running is safe.
 
 ## Configuration
 
@@ -177,6 +224,9 @@ All config is via environment variables in `.env`. Defaults are sensible for loc
 | `KNOWLEDGE_DB_PATH` | `~/.local/share/knowledge-server/knowledge.db` | Knowledge database path |
 | `KNOWLEDGE_ADMIN_TOKEN` | *(random)* | Fixed admin token (≥16 chars) for scripted use. If unset, a random token is generated per process lifetime and printed at startup |
 | `OPENCODE_DB_PATH` | `~/.local/share/opencode/opencode.db` | OpenCode session database (read-only) |
+| `OPENCODE_ENABLED` | `true` | Set to `false` to disable OpenCode session reading |
+| `CLAUDE_DB_PATH` | `~/.claude` | Root directory for Claude Code JSONL session files |
+| `CLAUDE_ENABLED` | `true` | Set to `false` to disable Claude Code session reading |
 | `CONSOLIDATION_MAX_SESSIONS` | `50` | Sessions per consolidation batch |
 | `CONSOLIDATION_CHUNK_SIZE` | `10` | Episodes per LLM extraction call |
 | `CONTRADICTION_MIN_SIMILARITY` | `0.4` | Lower bound of the contradiction scan similarity band (upper bound is always 0.82) |
@@ -192,7 +242,7 @@ knowledge-server        # binary install
 bun run start           # source install
 ```
 
-On startup, the server counts pending sessions and runs background consolidation if any are found. The HTTP API is available immediately while consolidation runs behind it.
+On startup, the server counts pending sessions across all sources and runs background consolidation if any are found. The HTTP API is available immediately while consolidation runs behind it.
 
 ### Trigger consolidation manually
 
@@ -281,7 +331,7 @@ Release binaries are verified with SHA-256 checksums before installation when `s
 
 ```bash
 bun run dev          # Watch mode
-bun test             # Run tests (185 tests)
+bun test             # Run tests
 bun run lint         # Biome lint
 bun run format       # Biome format
 ```
