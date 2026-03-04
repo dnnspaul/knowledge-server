@@ -9,9 +9,10 @@ import type { EpisodeMessage } from "../../types.js";
 
 /**
  * Maximum tokens per episode segment (soft limit — see chunkByTokenBudget).
- * The LLM sees: system prompt + existing knowledge + episode batch.
- * Keeping each episode under 50K tokens means a chunk of ~10 typical episodes
- * stays well within context limits even with a large existing knowledge base.
+ * The LLM sees: system prompt + episode batch (no existing knowledge context —
+ * deduplication is handled by the reconsolidation step, not extraction).
+ * Keeping each episode under 50K tokens means a chunk of ~5 typical episodes
+ * stays well within the 200K context limit.
  *
  * Note: a single message capped at MAX_MESSAGE_CHARS (~15K tokens) can
  * occupy up to 30% of this budget on its own; the chunker places oversized

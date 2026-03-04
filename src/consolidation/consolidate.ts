@@ -6,11 +6,7 @@ import type { IEpisodeReader, KnowledgeEntry } from "../types.js";
 import type { ConsolidationResult } from "../types.js";
 import { ContradictionScanner } from "./contradiction.js";
 import { computeStrength } from "./decay.js";
-import {
-	ConsolidationLLM,
-	formatEpisodes,
-	formatExistingKnowledge,
-} from "./llm.js";
+import { ConsolidationLLM, formatEpisodes } from "./llm.js";
 import { Reconsolidator } from "./reconsolidate.js";
 
 /**
@@ -292,30 +288,16 @@ export class ConsolidationEngine {
 				`[consolidation/${reader.source}] Chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(episodes.length / chunkSize)} (${chunk.length} episodes)`,
 			);
 
-			// Load entries once for this chunk — used both for relevance selection
-			// (prompt context) and reconsolidation (dedup). Loaded here so getRelevantKnowledge
-			// doesn't make a second DB call when we immediately need the same data below.
+			// Load entries for reconsolidation (dedup against existing knowledge).
+			// Existing knowledge is no longer passed to the extraction LLM — deduplication
+			// is handled robustly by the reconsolidation step (embedding similarity +
+			// decideMerge). Sending 50 context entries to extractKnowledge was unreliable
+			// (one coarse embedding for 10 diverse episodes) and caused token overflow.
 			const allEntriesForChunk = this.db.getActiveEntriesWithEmbeddings();
 
-			// Retrieve only RELEVANT existing knowledge for this chunk
-			// (instead of dumping the entire knowledge base into the prompt)
-			const relevantKnowledge = await this.reconsolidator.getRelevantKnowledge(
-				chunkSummary,
-				allEntriesForChunk,
-			);
-			const existingKnowledgeSummary =
-				formatExistingKnowledge(relevantKnowledge);
-
-			logger.log(
-				`[consolidation/${reader.source}] Using ${relevantKnowledge.length} relevant existing entries as context.`,
-			);
-
-			// Extract knowledge via LLM
+			// Extract knowledge via LLM (episodes only — no existing knowledge context)
 			const extractStart = Date.now();
-			const extracted = await this.llm.extractKnowledge(
-				chunkSummary,
-				existingKnowledgeSummary,
-			);
+			const extracted = await this.llm.extractKnowledge(chunkSummary);
 			logger.log(
 				`[consolidation/${reader.source}] Extracted ${extracted.length} entries in ${((Date.now() - extractStart) / 1000).toFixed(1)}s.`,
 			);
@@ -324,7 +306,7 @@ export class ConsolidationEngine {
 			// Performance: load all entries with embeddings ONCE per chunk into an in-memory
 			// Map. On insert/update, mutate the Map in place rather than reloading from DB.
 			const sessionIds = [...new Set(chunk.map((e) => e.sessionId))];
-			// Reuse the entries already loaded for getRelevantKnowledge — no second DB read.
+			// Reuse the entries already loaded above — no second DB read.
 			const entriesMap = new Map(allEntriesForChunk.map((e) => [e.id, e]));
 			let chunkCreated = 0;
 			let chunkUpdated = 0;
