@@ -36,8 +36,8 @@ jobs:
         run: |
           gh release upload "${{ steps.release.outputs.tag_name }}" \
             plugin/knowledge.ts \
-            opencode/command/consolidate.md \
-            opencode/command/knowledge-review.md \
+            commands/consolidate.md \
+            commands/knowledge-review.md \
             scripts/install.sh
 
   build-binaries:
