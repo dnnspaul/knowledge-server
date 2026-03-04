@@ -80,6 +80,32 @@ function createModel(modelString: string) {
  * - On final failure after all retries, throws so the chunk-level error handler
  *   in consolidate.ts can decide whether to skip or abort the run.
  */
+/**
+ * Unwrap the Vercel AI SDK's error chain to surface the actual HTTP status
+ * code and response body, which are otherwise buried inside AI_RetryError.
+ *
+ * Chain: AI_RetryError { lastError: AI_APICallError { statusCode, responseBody } }
+ */
+function formatLlmError(err: unknown): string {
+	if (!(err instanceof Error)) return String(err);
+
+	// Unwrap AI_RetryError → lastError
+	const inner =
+		"lastError" in err && err.lastError instanceof Error ? err.lastError : err;
+
+	// Extract HTTP details from AI_APICallError
+	const status =
+		"statusCode" in inner && inner.statusCode != null
+			? ` HTTP ${inner.statusCode}`
+			: "";
+	const body =
+		"responseBody" in inner && typeof inner.responseBody === "string"
+			? ` — ${inner.responseBody.slice(0, 500)}`
+			: "";
+
+	return `${inner.message}${status}${body}`;
+}
+
 async function complete(
 	modelString: string,
 	systemPrompt: string,
@@ -113,10 +139,8 @@ async function complete(
 			lastError = err;
 			if (attempt < maxAttempts) {
 				const delay = Math.min(retryBaseDelayMs * 2 ** (attempt - 1), 60_000);
-				const errMsg =
-					err instanceof Error ? (err.stack ?? err.message) : String(err);
 				logger.warn(
-					`[llm] Call to ${modelString} failed on attempt ${attempt}/${maxAttempts} — retrying in ${delay / 1000}s. Error: ${errMsg}`,
+					`[llm] Call to ${modelString} failed on attempt ${attempt}/${maxAttempts} — retrying in ${delay / 1000}s. Error: ${formatLlmError(err)}`,
 				);
 				await new Promise((resolve) => setTimeout(resolve, delay));
 			}
