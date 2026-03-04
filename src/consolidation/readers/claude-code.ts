@@ -364,13 +364,20 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 		session: ParsedSession,
 		processedRanges: ProcessedRange[],
 	): Episode[] {
+		// Build the tool name map once here so both segmentation paths share it
+		// rather than each building it independently.
+		const toolNameMap = this.buildToolNameMap(session.records);
 		const compactionPoints = this.getCompactionPoints(session);
 
 		let episodes: Episode[];
 		if (compactionPoints.length > 0) {
-			episodes = this.segmentWithCompactions(session, compactionPoints);
+			episodes = this.segmentWithCompactions(
+				session,
+				compactionPoints,
+				toolNameMap,
+			);
 		} else {
-			episodes = this.segmentWithoutCompactions(session);
+			episodes = this.segmentWithoutCompactions(session, toolNameMap);
 		}
 
 		if (processedRanges.length === 0) return episodes;
@@ -449,6 +456,8 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 	/**
 	 * Segment a session with compactions.
 	 * Each compaction summary → one episode; messages after the last compaction → final episode(s).
+	 *
+	 * @param toolNameMap - pre-built by segmentSession; passed through to avoid re-scanning.
 	 */
 	private segmentWithCompactions(
 		session: ParsedSession,
@@ -458,10 +467,8 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 			summaryUuid: string;
 			summaryTimestampMs: number;
 		}>,
+		toolNameMap: Map<string, string>,
 	): Episode[] {
-		// Build the tool name map once for the whole session rather than
-		// re-scanning all records inside getMessagesAfterCompaction.
-		const toolNameMap = this.buildToolNameMap(session.records);
 		const episodes: Episode[] = [];
 
 		for (const point of compactionPoints) {
@@ -548,9 +555,14 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 	/**
 	 * Segment a session without compactions.
 	 * All messages → one or more episodes chunked by token budget.
+	 *
+	 * @param toolNameMap - pre-built by segmentSession; passed through to avoid re-scanning.
 	 */
-	private segmentWithoutCompactions(session: ParsedSession): Episode[] {
-		const messages = this.extractAllMessages(session);
+	private segmentWithoutCompactions(
+		session: ParsedSession,
+		toolNameMap: Map<string, string>,
+	): Episode[] {
+		const messages = this.extractAllMessages(session, toolNameMap);
 
 		if (messages.length < config.consolidation.minSessionMessages) return [];
 
@@ -604,9 +616,13 @@ export class ClaudeCodeEpisodeReader implements IEpisodeReader {
 
 	/**
 	 * Extract all user/assistant messages from a session's records.
+	 *
+	 * @param toolNameMap - pre-built by segmentSession; passed through to avoid re-scanning.
 	 */
-	private extractAllMessages(session: ParsedSession): EpisodeMessage[] {
-		const toolNameMap = this.buildToolNameMap(session.records);
+	private extractAllMessages(
+		session: ParsedSession,
+		toolNameMap: Map<string, string>,
+	): EpisodeMessage[] {
 		const messages: EpisodeMessage[] = [];
 		for (const rec of session.records) {
 			if (rec.type !== "user" && rec.type !== "assistant") continue;
