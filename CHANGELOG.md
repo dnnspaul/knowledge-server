@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.2](https://github.com/MAnders333/knowledge-server/compare/v1.3.1...v1.3.2) (2026-03-04)
+
+
+### Bug Fixes
+
+* address code review findings (A-1, A-2, B-1, B-3, C-1, C-2, D-1, B-6, W1, W2) ([82d674b](https://github.com/MAnders333/knowledge-server/commit/82d674be007650662990fda8019f3f0d4ffae907))
+* raise MAX_MESSAGE_CHARS from 60K to 120K chars ([3b59078](https://github.com/MAnders333/knowledge-server/commit/3b59078ba295d3ed76fdadd1d2a5606533ae175c))
+* raise MAX_TOOL_OUTPUT_CHARS from 20K to 40K chars ([3dcc11d](https://github.com/MAnders333/knowledge-server/commit/3dcc11d7d93457998439efcd229630a52c291e36))
+
 ## [1.3.1](https://github.com/MAnders333/knowledge-server/compare/v1.3.0...v1.3.1) (2026-03-04)
 
 
