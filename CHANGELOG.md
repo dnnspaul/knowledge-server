@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/MAnders333/knowledge-server/compare/v1.4.3...v1.5.0) (2026-03-05)
+
+
+### Features
+
+* add pre-flight token guard for extraction chunks, restore chunkSize default to 10 ([246e921](https://github.com/MAnders333/knowledge-server/commit/246e9217b6e5e6a80b884898cbaff9ace2fa4383))
+
 ## [1.4.3](https://github.com/MAnders333/knowledge-server/compare/v1.4.2...v1.4.3) (2026-03-04)
 
 
