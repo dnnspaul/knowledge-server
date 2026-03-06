@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.4](https://github.com/MAnders333/knowledge-server/compare/v2.0.3...v2.0.4) (2026-03-06)
+
+
+### Bug Fixes
+
+* only show MCP migration notice when upgrading from v1.x (&lt; v1.7.0) ([b67fcda](https://github.com/MAnders333/knowledge-server/commit/b67fcda41bd940f08250d00ff7c9bbdc3b19474d))
+* use argv[2] for subcommand in both binary and source installs ([1375095](https://github.com/MAnders333/knowledge-server/commit/1375095e1d9fc55196174dedcc80854c7347eae1))
+
 ## [2.0.3](https://github.com/MAnders333/knowledge-server/compare/v2.0.2...v2.0.3) (2026-03-06)
 
 
