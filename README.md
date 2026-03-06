@@ -52,12 +52,14 @@ This registers the MCP server (via `claude mcp add-json`), adds the `UserPromptS
 
 ## Supported session sources
 
-| Source | What is read |
-|---|---|
-| **OpenCode** | `~/.local/share/opencode/opencode.db` (SQLite) |
-| **Claude Code** | `~/.claude/projects/**/*.jsonl` (JSONL conversation logs) |
+| Source | What is read | Platform |
+|---|---|---|
+| **OpenCode** | `~/.local/share/opencode/opencode.db` (SQLite) | macOS, Linux |
+| **Claude Code** | `~/.claude/projects/**/*.jsonl` (JSONL conversation logs) | macOS, Linux |
+| **Cursor** | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (SQLite) | macOS |
+| **Cursor** | `~/.config/Cursor/User/globalStorage/state.vscdb` (SQLite) | Linux |
 
-Both sources are enabled by default and read automatically on startup. Disable either with `OPENCODE_ENABLED=false` or `CLAUDE_ENABLED=false`.
+All sources are enabled by default and auto-detected on startup. Disable any with `OPENCODE_ENABLED=false`, `CLAUDE_ENABLED=false`, or `CURSOR_ENABLED=false`. Override a path with `OPENCODE_DB_PATH`, `CLAUDE_DB_PATH`, or `CURSOR_DB_PATH`.
 
 ## How it works
 
@@ -171,6 +173,7 @@ Registered automatically by `setup-tool claude-code`.
 
 - `readers/opencode.ts` — reads OpenCode's SQLite session DB, segments long sessions, respects compaction summaries
 - `readers/claude-code.ts` — reads Claude Code JSONL session files, handles compacted sessions, correlates tool call results
+- `readers/cursor.ts` — reads Cursor's SQLite state DB (`state.vscdb`), handles both inline (Format A) and bubble-per-KV (Format B) conversation layouts
 - `consolidate.ts` — orchestrates the full cycle: read → extract → reconsolidate → contradiction scan → decay → embed → advance cursor (per source)
 - `llm.ts` — three LLM calls across three model slots: `extractKnowledge` (extraction model), `decideMerge` (merge model — cheaper), `detectAndResolveContradiction` (contradiction model)
 - `decay.ts` — forgetting curve with type-specific half-lives (facts decay faster than procedures)
@@ -221,6 +224,8 @@ All config is via environment variables in `.env`. Defaults are sensible for loc
 | `OPENCODE_ENABLED` | `true` | Set to `false` to disable OpenCode session reading |
 | `CLAUDE_DB_PATH` | `~/.claude` | Root directory for Claude Code JSONL session files |
 | `CLAUDE_ENABLED` | `true` | Set to `false` to disable Claude Code session reading |
+| `CURSOR_DB_PATH` | *(auto-detected)* | Path to Cursor's `state.vscdb`. Auto-detected per platform (macOS: `~/Library/Application Support/Cursor/…`, Linux: `~/.config/Cursor/…`) |
+| `CURSOR_ENABLED` | `true` | Set to `false` to disable Cursor session reading |
 | `CONSOLIDATION_MAX_SESSIONS` | `50` | Sessions per consolidation batch |
 | `CONSOLIDATION_CHUNK_SIZE` | `10` | Episodes per LLM extraction call |
 | `CONTRADICTION_MIN_SIMILARITY` | `0.4` | Lower bound of the contradiction scan similarity band (upper bound is always 0.82) |

@@ -75,10 +75,18 @@ export const config = {
 		process.env.CLAUDE_CONFIG_DIR ||
 		join(homedir(), ".claude"),
 
+	// cursorDbPath: explicit override for Cursor's state.vscdb path.
+	//   Auto-detected by resolveCursorDbPath() in cursor.ts using a platform-specific
+	//   probe list (macOS: ~/Library/Application Support/…, Linux: ~/.config/…).
+	//   Only set here when CURSOR_DB_PATH is explicitly provided — an empty string
+	//   means "auto-detect" rather than "path was not found".
+	cursorDbPath: process.env.CURSOR_DB_PATH || "",
+
 	// Explicit source enable/disable.
-	// Both default to true (auto-detect); set to "false" to hard-disable a source.
+	// All default to true (auto-detect); set to "false" to hard-disable a source.
 	opencodeEnabled: process.env.OPENCODE_ENABLED !== "false",
 	claudeEnabled: process.env.CLAUDE_ENABLED !== "false",
+	cursorEnabled: process.env.CURSOR_ENABLED !== "false",
 
 	// Unified endpoint — single API key, base URL routes by provider.
 	// Set LLM_BASE_ENDPOINT in .env. No default is provided since this is
@@ -239,6 +247,14 @@ export function validateConfig(): string[] {
 	if (process.env.OPENCODE_DB_PATH && !existsSync(config.opencodeDbPath)) {
 		errors.push(
 			`OPENCODE_DB_PATH is set but OpenCode database not found at ${config.opencodeDbPath}.`,
+		);
+	}
+
+	// Same pattern for CURSOR_DB_PATH: explicit env var pointing to missing file = hard error.
+	// No explicit env var = auto-detect at startup (non-fatal if Cursor isn't installed).
+	if (process.env.CURSOR_DB_PATH && !existsSync(process.env.CURSOR_DB_PATH)) {
+		errors.push(
+			`CURSOR_DB_PATH is set but Cursor database not found at ${process.env.CURSOR_DB_PATH}.`,
 		);
 	}
 

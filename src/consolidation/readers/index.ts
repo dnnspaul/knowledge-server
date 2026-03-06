@@ -4,10 +4,12 @@ import { config } from "../../config.js";
 import { logger } from "../../logger.js";
 import type { IEpisodeReader } from "../../types.js";
 import { ClaudeCodeEpisodeReader } from "./claude-code.js";
+import { CursorEpisodeReader, resolveCursorDbPath } from "./cursor.js";
 import { OpenCodeEpisodeReader } from "./opencode.js";
 
 export { OpenCodeEpisodeReader } from "./opencode.js";
 export { ClaudeCodeEpisodeReader } from "./claude-code.js";
+export { CursorEpisodeReader } from "./cursor.js";
 
 /**
  * Probe list of candidate OpenCode DB paths to check when OPENCODE_DB_PATH is not set.
@@ -117,6 +119,24 @@ export function createEpisodeReaders(): IEpisodeReader[] {
 		}
 	} else {
 		logger.log("[sources] Claude Code: disabled (CLAUDE_ENABLED=false)");
+	}
+
+	// ── Cursor ──
+	if (config.cursorEnabled) {
+		const cursorDbPath = resolveCursorDbPath();
+		if (cursorDbPath) {
+			readers.push(new CursorEpisodeReader(cursorDbPath));
+			logger.log(`[sources] Cursor: ${cursorDbPath}`);
+		} else {
+			const hint = config.cursorDbPath
+				? `Expected at ${config.cursorDbPath}.`
+				: "Auto-detection found no Cursor installation on this platform.";
+			logger.warn(
+				`[sources] Cursor source enabled but database not found. ${hint} Set CURSOR_DB_PATH or disable with CURSOR_ENABLED=false.`,
+			);
+		}
+	} else {
+		logger.log("[sources] Cursor: disabled (CURSOR_ENABLED=false)");
 	}
 
 	return readers;
