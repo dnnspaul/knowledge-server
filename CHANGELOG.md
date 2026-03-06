@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.6.0](https://github.com/MAnders333/knowledge-server/compare/v1.5.0...v1.6.0) (2026-03-06)
+
+
+### Features
+
+* add Codex CLI episode reader and setup-tool support for Cursor + Codex ([71119e7](https://github.com/MAnders333/knowledge-server/commit/71119e768d2353c04d1208e5ce6ffd3d72c572cd))
+* add Cursor episode reader with cross-platform DB path resolution ([b8b69fd](https://github.com/MAnders333/knowledge-server/commit/b8b69fdc1e023fbb2512808a9d4b10aa76028848))
+
+
+### Bug Fixes
+
+* **cursor:** bound _sessionCache to selected sessions per cycle to prevent unbounded growth ([03b0833](https://github.com/MAnders333/knowledge-server/commit/03b08337ab19c72b2ace32fd4968c40aac327363))
+
 ## [1.5.0](https://github.com/MAnders333/knowledge-server/compare/v1.4.3...v1.5.0) (2026-03-05)
 
 
