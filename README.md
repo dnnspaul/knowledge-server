@@ -1,6 +1,6 @@
 # knowledge-server
 
-Persistent semantic memory for [OpenCode](https://opencode.ai) and [Claude Code](https://claude.ai/code) — fully local, no external service required.
+Persistent semantic memory for [OpenCode](https://opencode.ai), [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), [Cursor](https://cursor.com), and [Codex CLI](https://github.com/openai/codex) — fully local, no external service required.
 
 Reads your session history, extracts what's worth keeping into a local SQLite knowledge store, and injects relevant entries into new conversations automatically.
 
@@ -17,9 +17,12 @@ This downloads the server binaries into `~/.local/share/knowledge-server/` and g
 **After running:**
 
 1. Edit `~/.local/share/knowledge-server/.env` — set `LLM_API_KEY` and `LLM_BASE_ENDPOINT`
-2. *(OpenCode)* Run `knowledge-server setup-tool opencode` — symlinks the plugin and commands, and registers the MCP server in `opencode.jsonc` automatically
-3. *(Claude Code)* Run `knowledge-server setup-tool claude-code` — registers the MCP server, `UserPromptSubmit` hook, and slash commands automatically
-4. Start the server: `knowledge-server`
+2. Run the setup command for your tool(s):
+   - `knowledge-server setup-tool opencode` — symlinks the plugin and commands, registers the MCP server in `opencode.jsonc`
+   - `knowledge-server setup-tool claude-code` — registers the MCP server, `UserPromptSubmit` hook, and slash commands
+   - `knowledge-server setup-tool cursor` — registers the MCP server in `~/.cursor/mcp.json`
+   - `knowledge-server setup-tool codex` — registers the MCP server in `~/.codex/config.toml`
+3. Start the server: `knowledge-server`
 
 **To update later:**
 
@@ -29,7 +32,7 @@ knowledge-server update
 
 ### From source
 
-**Prerequisites:** [Bun](https://bun.sh), OpenCode or Claude Code with an active session history.
+**Prerequisites:** [Bun](https://bun.sh) and at least one supported tool with an active session history.
 
 ```bash
 git clone https://github.com/MAnders333/knowledge-server
@@ -40,15 +43,17 @@ bun run setup
 bun run start
 ```
 
-`bun run setup` installs dependencies, creates the data directory, symlinks the plugin and commands into `~/.config/opencode/`, and registers the MCP server in `opencode.jsonc` automatically.
+`bun run setup` installs dependencies, creates the data directory, and runs `setup-tool opencode` (symlinks the plugin and commands into `~/.config/opencode/`, registers the MCP server in `opencode.jsonc`).
 
-For Claude Code, run the additional setup step after `bun run setup`:
+For other tools, run the corresponding setup step:
 
 ```bash
-bun run src/index.ts setup-tool claude-code
+bun run src/index.ts setup-tool claude-code  # MCP server + hook + slash commands
+bun run src/index.ts setup-tool cursor       # MCP server in ~/.cursor/mcp.json
+bun run src/index.ts setup-tool codex        # MCP server in ~/.codex/config.toml
 ```
 
-This registers the MCP server (via `claude mcp add-json`), adds the `UserPromptSubmit` hook to `~/.claude/settings.json`, and symlinks slash commands into `~/.claude/commands/`. All three steps are idempotent.
+All setup steps are idempotent — re-running is safe.
 
 ## Supported session sources
 
@@ -93,10 +98,10 @@ The similarity thresholds (0.82 for reconsolidation, 0.4 for the contradiction s
 ## Architecture
 
 ```
-OpenCode sessions (SQLite)    Claude Code sessions (JSONL)
-         │                              │
-         └──────────────┬───────────────┘
-                        ▼
+OpenCode (SQLite)   Claude Code (JSONL)   Cursor (SQLite)   Codex CLI (JSONL)
+       │                   │                    │                  │
+       └───────────────────┴────────────────────┴──────────────────┘
+                                       ▼
                   EpisodeReader          reads new sessions since cursor (per source)
                         │
                         ▼
@@ -152,9 +157,13 @@ Exposes a single tool: `activate`. Agents use this for deliberate recall — whe
 
 The MCP server is a **thin HTTP proxy** — it forwards `activate` calls to the already-running knowledge HTTP server via `GET /activate`. It does not open the database or call any LLM directly. Only `KNOWLEDGE_HOST` and `KNOWLEDGE_PORT` are required; no LLM credentials are needed.
 
-**OpenCode** — registered automatically by `knowledge-server setup-tool opencode` (or `bun run setup` from source). This writes the `mcp.knowledge` entry directly into `~/.config/opencode/opencode.jsonc`.
+**OpenCode** — registered automatically by `knowledge-server setup-tool opencode` (or `bun run setup` from source). Writes the `mcp.knowledge` entry directly into `~/.config/opencode/opencode.jsonc`.
 
-**Claude Code** — registered automatically by `knowledge-server setup-tool claude-code` (or `bun run src/index.ts setup-tool claude-code` from source). This uses `claude mcp add-json` to write to `~/.claude.json`.
+**Claude Code** — registered automatically by `knowledge-server setup-tool claude-code` (or `bun run src/index.ts setup-tool claude-code` from source). Uses `claude mcp add-json` to write to `~/.claude.json`.
+
+**Cursor** — registered automatically by `knowledge-server setup-tool cursor`. Writes the `knowledge` entry into `~/.cursor/mcp.json`.
+
+**Codex CLI** — registered automatically by `knowledge-server setup-tool codex`. Appends `[mcp_servers.knowledge]` to `~/.codex/config.toml`.
 
 ### OpenCode plugin (`plugin/knowledge.ts`)
 
@@ -175,6 +184,7 @@ Registered automatically by `setup-tool claude-code`.
 - `readers/opencode.ts` — reads OpenCode's SQLite session DB, segments long sessions, respects compaction summaries
 - `readers/claude-code.ts` — reads Claude Code JSONL session files, handles compacted sessions, correlates tool call results
 - `readers/cursor.ts` — reads Cursor's SQLite state DB (`state.vscdb`), handles both inline (Format A) and bubble-per-KV (Format B) conversation layouts
+- `readers/codex.ts` — reads Codex CLI JSONL rollout files, two-pass parse for stable session IDs, skips injected context blocks
 - `consolidate.ts` — orchestrates the full cycle: read → extract → reconsolidate → contradiction scan → decay → embed → advance cursor (per source)
 - `llm.ts` — three LLM calls across three model slots: `extractKnowledge` (extraction model), `decideMerge` (merge model — cheaper), `detectAndResolveContradiction` (contradiction model)
 - `decay.ts` — forgetting curve with type-specific half-lives (facts decay faster than procedures)
@@ -203,6 +213,24 @@ This:
 3. Symlinks slash commands (`consolidate.md`, `knowledge-review.md`) into `~/.claude/commands/`
 
 All three steps are idempotent — re-running is safe.
+
+### Cursor
+
+```bash
+knowledge-server setup-tool cursor    # binary install
+bun run src/index.ts setup-tool cursor  # source install
+```
+
+Registers the `knowledge` MCP server in `~/.cursor/mcp.json`. Idempotent — re-running is safe. Cursor does not support user-defined slash commands, so no command symlinks are created.
+
+### Codex CLI
+
+```bash
+knowledge-server setup-tool codex    # binary install
+bun run src/index.ts setup-tool codex  # source install
+```
+
+Appends the `[mcp_servers.knowledge]` block to `~/.codex/config.toml`. Idempotent — re-running is safe. Codex CLI has no user-defined slash command directory, so no command symlinks are created.
 
 ## Configuration
 
@@ -280,7 +308,7 @@ Returns:
 - **stale** — active entries with low strength (haven't been accessed recently)
 - **team-relevant** — high-confidence `team`-scoped entries that may warrant external documentation
 
-OpenCode and Claude Code users also have a `/knowledge-review` slash command (installed by `setup-tool opencode` and `setup-tool claude-code` respectively) for an interactive review workflow inside the TUI.
+OpenCode and Claude Code users also have a `/knowledge-review` slash command (installed by `setup-tool opencode` and `setup-tool claude-code` respectively) for an interactive review workflow inside the TUI. Cursor and Codex CLI do not support user-defined slash commands.
 
 ## Knowledge entry types
 
