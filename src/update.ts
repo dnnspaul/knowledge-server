@@ -394,18 +394,15 @@ export async function runUpdate(
 	console.log(`\n  Updated to ${targetVersion}.`);
 	console.log("  Restart the server to pick up the new binary.");
 
-	// The MCP command changed in v1.7.0: knowledge-server-mcp no longer exists.
-	// Show this notice whenever the user has updated to v1.7.0 or later — regardless
-	// of whether the old binary was found on disk — because their existing MCP configs
-	// still point to the old command and will be broken until they re-run setup-tool.
-	// targetVersion is already validated as /^v\d+\.\d+\.\d+$/ earlier in this
-	// function, so this regex match is guaranteed to succeed.
-	const versionMatch = /^v(\d+)\.(\d+)/.exec(targetVersion);
-	if (!versionMatch) throw new Error(`Unexpected version format: ${targetVersion}`);
-	const isV17orLater =
-		Number(versionMatch[1]) > 1 ||
-		(Number(versionMatch[1]) === 1 && Number(versionMatch[2]) >= 7);
-	if (isV17orLater) {
+	// The MCP command changed in v1.7.0 / v2.0.0: knowledge-server-mcp no longer exists.
+	// Only show the migration notice when the user was previously on a version that
+	// still had the separate binary (i.e. currentVersion < v1.7.0 / v2.0.0).
+	// Users already on v2.x have already re-run setup-tool and don't need the reminder.
+	const currentMatch = /^v(\d+)\.(\d+)/.exec(currentVersion);
+	if (!currentMatch) throw new Error(`Unexpected currentVersion format: ${currentVersion}`);
+	const wasOnOldBinary =
+		Number(currentMatch[1]) === 1 && Number(currentMatch[2]) < 7;
+	if (wasOnOldBinary) {
 		console.log(`
   ⚠ Breaking change: the separate knowledge-server-mcp binary has been
     replaced by \`knowledge-server mcp\`. Re-run setup-tool for each of your
