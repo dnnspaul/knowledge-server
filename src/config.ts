@@ -82,11 +82,20 @@ export const config = {
 	//   means "auto-detect" rather than "path was not found".
 	cursorDbPath: process.env.CURSOR_DB_PATH || "",
 
+	// codexSessionsDir: root directory for Codex CLI JSONL rollout files.
+	//   Layout: <sessionsDir>/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
+	//   Auto-detected by resolveCodexSessionsDir() in codex.ts:
+	//     1. CODEX_SESSIONS_DIR env var (this field, when non-empty)
+	//     2. $CODEX_HOME/sessions (or ~/.codex/sessions when CODEX_HOME is unset)
+	//   An empty string means "auto-detect".
+	codexSessionsDir: process.env.CODEX_SESSIONS_DIR || "",
+
 	// Explicit source enable/disable.
 	// All default to true (auto-detect); set to "false" to hard-disable a source.
 	opencodeEnabled: process.env.OPENCODE_ENABLED !== "false",
 	claudeEnabled: process.env.CLAUDE_ENABLED !== "false",
 	cursorEnabled: process.env.CURSOR_ENABLED !== "false",
+	codexEnabled: process.env.CODEX_ENABLED !== "false",
 
 	// Unified endpoint — single API key, base URL routes by provider.
 	// Set LLM_BASE_ENDPOINT in .env. No default is provided since this is
@@ -255,6 +264,16 @@ export function validateConfig(): string[] {
 	if (process.env.CURSOR_DB_PATH && !existsSync(process.env.CURSOR_DB_PATH)) {
 		errors.push(
 			`CURSOR_DB_PATH is set but Cursor database not found at ${process.env.CURSOR_DB_PATH}.`,
+		);
+	}
+
+	// Same pattern for CODEX_SESSIONS_DIR.
+	if (
+		process.env.CODEX_SESSIONS_DIR &&
+		!existsSync(process.env.CODEX_SESSIONS_DIR)
+	) {
+		errors.push(
+			`CODEX_SESSIONS_DIR is set but directory not found at ${process.env.CODEX_SESSIONS_DIR}.`,
 		);
 	}
 

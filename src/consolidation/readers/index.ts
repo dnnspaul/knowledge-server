@@ -4,12 +4,14 @@ import { config } from "../../config.js";
 import { logger } from "../../logger.js";
 import type { IEpisodeReader } from "../../types.js";
 import { ClaudeCodeEpisodeReader } from "./claude-code.js";
+import { CodexEpisodeReader, resolveCodexSessionsDir } from "./codex.js";
 import { CursorEpisodeReader, resolveCursorDbPath } from "./cursor.js";
 import { OpenCodeEpisodeReader } from "./opencode.js";
 
 export { OpenCodeEpisodeReader } from "./opencode.js";
 export { ClaudeCodeEpisodeReader } from "./claude-code.js";
 export { CursorEpisodeReader } from "./cursor.js";
+export { CodexEpisodeReader } from "./codex.js";
 
 /**
  * Probe list of candidate OpenCode DB paths to check when OPENCODE_DB_PATH is not set.
@@ -119,6 +121,24 @@ export function createEpisodeReaders(): IEpisodeReader[] {
 		}
 	} else {
 		logger.log("[sources] Claude Code: disabled (CLAUDE_ENABLED=false)");
+	}
+
+	// ── Codex CLI ──
+	if (config.codexEnabled) {
+		const sessionsDir = resolveCodexSessionsDir();
+		if (existsSync(sessionsDir)) {
+			readers.push(new CodexEpisodeReader(sessionsDir));
+			logger.log(`[sources] Codex: ${sessionsDir}`);
+		} else {
+			const hint = config.codexSessionsDir
+				? `Expected at ${config.codexSessionsDir}.`
+				: "Auto-detection found no Codex sessions directory on this platform.";
+			logger.warn(
+				`[sources] Codex source enabled but sessions directory not found. ${hint} Set CODEX_SESSIONS_DIR or disable with CODEX_ENABLED=false.`,
+			);
+		}
+	} else {
+		logger.log("[sources] Codex: disabled (CODEX_ENABLED=false)");
 	}
 
 	// ── Cursor ──

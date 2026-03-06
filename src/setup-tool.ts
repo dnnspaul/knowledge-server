@@ -519,6 +519,187 @@ Start the knowledge server before using Claude Code:
 Setup complete!`);
 }
 
+// ── Cursor setup ───────────────────────────────────────────────────────────────
+
+/**
+ * Build the MCP server entry for Cursor's ~/.cursor/mcp.json.
+ *
+ * Cursor uses the standard `mcpServers` JSON format (same as Claude Desktop).
+ * Each entry: { command, args?, env? }
+ */
+function makeCursorMcpEntry() {
+	const env = {
+		KNOWLEDGE_HOST: config.host,
+		KNOWLEDGE_PORT: String(config.port),
+	};
+
+	if (isSourceInstall()) {
+		const projectDir = getProjectDir();
+		const bunBin = process.execPath.endsWith("bun")
+			? process.execPath
+			: join(homedir(), ".bun", "bin", "bun");
+		return {
+			command: bunBin,
+			args: ["run", join(projectDir, "src", "mcp", "index.ts")],
+			env,
+		};
+	}
+	return { command: "knowledge-server-mcp", env };
+}
+
+export function setupCursor(): void {
+	const cursorDir = process.env.CURSOR_HOME ?? join(homedir(), ".cursor");
+	const mcpPath = join(cursorDir, "mcp.json");
+
+	console.log("Setting up Cursor integration...\n");
+
+	// Read or create ~/.cursor/mcp.json
+	let mcpConfig: { mcpServers: Record<string, unknown> } = { mcpServers: {} };
+	if (existsSync(mcpPath)) {
+		try {
+			mcpConfig = JSON.parse(readFileSync(mcpPath, "utf8")) as {
+				mcpServers: Record<string, unknown>;
+			};
+			if (!mcpConfig.mcpServers || typeof mcpConfig.mcpServers !== "object") {
+				mcpConfig.mcpServers = {};
+			}
+		} catch (e) {
+			console.error(`  ✗ Failed to parse ${mcpPath}: ${e}`);
+			console.error("    Fix the JSON syntax error and retry.");
+			process.exit(1);
+		}
+	} else {
+		mkdirSync(cursorDir, { recursive: true });
+	}
+
+	const entry = makeCursorMcpEntry();
+	const existing = mcpConfig.mcpServers.knowledge as
+		| { command: string; args?: string[] }
+		| undefined;
+
+	let needsWrite = true;
+	if (existing) {
+		const existingCmd = JSON.stringify([existing.command, ...(existing.args ?? [])]);
+		const newCmd = JSON.stringify([entry.command, ...(entry.args ?? [])]);
+		if (existingCmd === newCmd) {
+			console.log("  ✓ MCP server 'knowledge' already in ~/.cursor/mcp.json (no change)");
+			console.log("    To update: remove the 'knowledge' entry from ~/.cursor/mcp.json and re-run this command.");
+			needsWrite = false;
+		} else {
+			mcpConfig.mcpServers.knowledge = entry;
+			console.log("  ✓ MCP server 'knowledge' updated in ~/.cursor/mcp.json (command changed)");
+		}
+	} else {
+		mcpConfig.mcpServers.knowledge = entry;
+		console.log("  ✓ MCP server 'knowledge' added to ~/.cursor/mcp.json");
+	}
+
+	if (needsWrite) {
+		const tmpPath = `${mcpPath}.tmp`;
+		try {
+			writeFileSync(tmpPath, `${JSON.stringify(mcpConfig, null, 2)}\n`, "utf8");
+			renameSync(tmpPath, mcpPath);
+		} catch (e) {
+			try { unlinkSync(tmpPath); } catch { /* ignore */ }
+			throw e;
+		}
+		console.log(`  ✓ Wrote ${mcpPath}`);
+	}
+
+	const startHint = isSourceInstall()
+		? `bun run ${join(getProjectDir(), "src", "index.ts")}`
+		: "knowledge-server";
+
+	console.log(`
+Start the knowledge server before using Cursor:
+  ${startHint}
+
+Setup complete!`);
+}
+
+// ── Codex setup ─────────────────────────────────────────────────────────────────
+
+/**
+ * Merge the `[mcp_servers.knowledge]` entry into ~/.codex/config.toml.
+ *
+ * Codex uses TOML. We do not parse/rewrite the whole file to avoid
+ * disturbing existing content and comments. Instead we:
+ *   1. Check if `[mcp_servers.knowledge]` is already present (string search).
+ *   2. If not, append the new block at the end of the file.
+ *   3. If present with a different command, warn and skip — TOML merging is
+ *      error-prone and a manual update is safer for an existing entry.
+ *
+ * This is deliberately simpler than the opencode.jsonc approach because
+ * config.toml typically has user-authored content we don't want to disturb.
+ */
+export function setupCodex(): void {
+	const codexHome = process.env.CODEX_HOME ?? join(homedir(), ".codex");
+	const configPath = join(codexHome, "config.toml");
+
+	console.log("Setting up Codex CLI integration...\n");
+
+	mkdirSync(codexHome, { recursive: true });
+
+	// Build the MCP command string for TOML.
+	let commandToml: string;
+	if (isSourceInstall()) {
+		const projectDir = getProjectDir();
+		const bunBin = process.execPath.endsWith("bun")
+			? process.execPath
+			: join(homedir(), ".bun", "bin", "bun");
+		// TOML array: ["bun", "run", "/path/to/src/mcp/index.ts"]
+		const args = ["run", join(projectDir, "src", "mcp", "index.ts")];
+		const argsToml = args.map((a) => `"${a.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`).join(", ");
+		commandToml = `command = "${bunBin.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"\nargs = [${argsToml}]`;
+	} else {
+		commandToml = `command = "knowledge-server-mcp"`;
+	}
+
+	const block = `
+[mcp_servers.knowledge]
+${commandToml}
+env = { KNOWLEDGE_HOST = "${config.host}", KNOWLEDGE_PORT = "${config.port}" }
+`;
+
+	// Check if the section already exists (simple string match on the header).
+	let existing = "";
+	if (existsSync(configPath)) {
+		try {
+			existing = readFileSync(configPath, "utf8");
+		} catch (e) {
+			console.error(`  ✗ Failed to read ${configPath}: ${e}`);
+			process.exit(1);
+		}
+	}
+
+	if (existing.includes("[mcp_servers.knowledge]")) {
+		console.log("  ✓ MCP server 'knowledge' already in ~/.codex/config.toml (no change)");
+		console.log("    To update: remove the [mcp_servers.knowledge] block and re-run this command.");
+	} else {
+		const updated = `${existing.trimEnd()}\n${block}`;
+		const tmpPath = `${configPath}.tmp`;
+		try {
+			writeFileSync(tmpPath, updated, "utf8");
+			renameSync(tmpPath, configPath);
+		} catch (e) {
+			try { unlinkSync(tmpPath); } catch { /* ignore */ }
+			throw e;
+		}
+		console.log("  ✓ MCP server 'knowledge' added to ~/.codex/config.toml");
+		console.log(`  ✓ Wrote ${configPath}`);
+	}
+
+	const startHint = isSourceInstall()
+		? `bun run ${join(getProjectDir(), "src", "index.ts")}`
+		: "knowledge-server";
+
+	console.log(`
+Start the knowledge server before using Codex:
+  ${startHint}
+
+Setup complete!`);
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 /**
@@ -543,6 +724,8 @@ export function runSetupTool(args: string[]): void {
 Available tools:
   opencode      Symlink plugin + commands; register MCP server in opencode.jsonc
   claude-code   Register MCP server + hook; symlink commands into ~/.claude/commands/
+  cursor        Register MCP server in ~/.cursor/mcp.json
+  codex         Register MCP server in ~/.codex/config.toml
 `);
 		process.exit(0);
 	}
@@ -554,9 +737,15 @@ Available tools:
 		case "claude-code":
 			setupClaudeCode();
 			break;
+		case "cursor":
+			setupCursor();
+			break;
+		case "codex":
+			setupCodex();
+			break;
 		default:
 			console.error(`Unknown tool: ${tool}`);
-			console.error("Valid options: opencode, claude-code");
+			console.error("Valid options: opencode, claude-code, cursor, codex");
 			process.exit(1);
 	}
 }

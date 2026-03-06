@@ -23,7 +23,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CursorEpisodeReader, resolveCursorDbPath } from "../src/consolidation/readers/cursor";
+import {
+	CursorEpisodeReader,
+	resolveCursorDbPath,
+} from "../src/consolidation/readers/cursor";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -106,7 +109,11 @@ function insertFormatB(
 	for (const turn of opts.turns) {
 		db.run("INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)", [
 			`bubbleId:${composerId}:${turn.bubbleId}`,
-			JSON.stringify({ type: turn.type, bubbleId: turn.bubbleId, text: turn.text ?? "" }),
+			JSON.stringify({
+				type: turn.type,
+				bubbleId: turn.bubbleId,
+				text: turn.text ?? "",
+			}),
 		]);
 	}
 }
@@ -124,9 +131,11 @@ function dbToFile(db: Database): { path: string; cleanup: () => void } {
       value TEXT NOT NULL
     )
   `);
-	const rows = db.query<{ key: string; value: string }, []>(
-		"SELECT key, value FROM cursorDiskKV",
-	).all();
+	const rows = db
+		.query<{ key: string; value: string }, []>(
+			"SELECT key, value FROM cursorDiskKV",
+		)
+		.all();
 	for (const row of rows) {
 		fileDb.run("INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)", [
 			row.key,
@@ -601,10 +610,18 @@ describe("CursorEpisodeReader.getNewEpisodes — processedRanges exclusion", () 
 			const processedRanges = new Map([
 				[
 					COMPOSER_A,
-					[{ startMessageId: episodes[0].startMessageId, endMessageId: episodes[0].endMessageId }],
+					[
+						{
+							startMessageId: episodes[0].startMessageId,
+							endMessageId: episodes[0].endMessageId,
+						},
+					],
 				],
 			]);
-			const episodes2 = reader.getNewEpisodes([candidates[0].id], processedRanges);
+			const episodes2 = reader.getNewEpisodes(
+				[candidates[0].id],
+				processedRanges,
+			);
 			expect(episodes2).toHaveLength(0);
 			reader.close();
 		} finally {
@@ -671,12 +688,22 @@ describe("CursorEpisodeReader — edge cases", () => {
 		// Format A: empty conversation[]
 		db.run("INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)", [
 			`composerData:${COMPOSER_A}`,
-			JSON.stringify({ composerId: COMPOSER_A, createdAt: BASE, lastUpdatedAt: BASE + 1000, conversation: [] }),
+			JSON.stringify({
+				composerId: COMPOSER_A,
+				createdAt: BASE,
+				lastUpdatedAt: BASE + 1000,
+				conversation: [],
+			}),
 		]);
 		// Format B: empty headers[]
 		db.run("INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)", [
 			`composerData:${COMPOSER_B}`,
-			JSON.stringify({ composerId: COMPOSER_B, createdAt: BASE, lastUpdatedAt: BASE + 1000, fullConversationHeadersOnly: [] }),
+			JSON.stringify({
+				composerId: COMPOSER_B,
+				createdAt: BASE,
+				lastUpdatedAt: BASE + 1000,
+				fullConversationHeadersOnly: [],
+			}),
 		]);
 		const { path, cleanup } = dbToFile(db);
 		try {

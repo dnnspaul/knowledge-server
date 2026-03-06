@@ -56,10 +56,11 @@ This registers the MCP server (via `claude mcp add-json`), adds the `UserPromptS
 |---|---|---|
 | **OpenCode** | `~/.local/share/opencode/opencode.db` (SQLite) | macOS, Linux |
 | **Claude Code** | `~/.claude/projects/**/*.jsonl` (JSONL conversation logs) | macOS, Linux |
+| **Codex CLI** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (JSONL rollout logs) | macOS, Linux |
 | **Cursor** | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (SQLite) | macOS |
 | **Cursor** | `~/.config/Cursor/User/globalStorage/state.vscdb` (SQLite) | Linux |
 
-All sources are enabled by default and auto-detected on startup. Disable any with `OPENCODE_ENABLED=false`, `CLAUDE_ENABLED=false`, or `CURSOR_ENABLED=false`. Override a path with `OPENCODE_DB_PATH`, `CLAUDE_DB_PATH`, or `CURSOR_DB_PATH`.
+All sources are enabled by default and auto-detected on startup. Disable any with `OPENCODE_ENABLED=false`, `CLAUDE_ENABLED=false`, `CODEX_ENABLED=false`, or `CURSOR_ENABLED=false`. Override a path with `OPENCODE_DB_PATH`, `CLAUDE_DB_PATH`, `CODEX_SESSIONS_DIR`, or `CURSOR_DB_PATH`.
 
 ## How it works
 
@@ -224,6 +225,8 @@ All config is via environment variables in `.env`. Defaults are sensible for loc
 | `OPENCODE_ENABLED` | `true` | Set to `false` to disable OpenCode session reading |
 | `CLAUDE_DB_PATH` | `~/.claude` | Root directory for Claude Code JSONL session files |
 | `CLAUDE_ENABLED` | `true` | Set to `false` to disable Claude Code session reading |
+| `CODEX_SESSIONS_DIR` | *(auto-detected)* | Root directory for Codex CLI JSONL rollout files. Auto-detected at `~/.codex/sessions` (or `$CODEX_HOME/sessions` if `CODEX_HOME` is set) |
+| `CODEX_ENABLED` | `true` | Set to `false` to disable Codex CLI session reading |
 | `CURSOR_DB_PATH` | *(auto-detected)* | Path to Cursor's `state.vscdb`. Auto-detected per platform (macOS: `~/Library/Application Support/Cursor/…`, Linux: `~/.config/Cursor/…`) |
 | `CURSOR_ENABLED` | `true` | Set to `false` to disable Cursor session reading |
 | `CONSOLIDATION_MAX_SESSIONS` | `50` | Sessions per consolidation batch |
