@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
+	copyFileSync,
 	existsSync,
 	mkdirSync,
 	readFileSync,
@@ -10,6 +11,8 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+// @ts-ignore — Bun supports JSON imports natively
+import pkg from "../package.json" with { type: "json" };
 import { config } from "./config.js";
 
 /**
@@ -249,51 +252,155 @@ function writeOpenCodeMcpEntry(opencodeConfigDir: string): void {
 
 // ── OpenCode setup ─────────────────────────────────────────────────────────────
 
+/**
+ * Resolve the installed asset directory for binary installs.
+ * Convention from install.sh: binary lives at <install-dir>/libexec/knowledge-server,
+ * so assets (knowledge.ts, *.md) live two levels up at <install-dir>/.
+ * Uses process.execPath (the real binary on disk), not Bun.main (which is a
+ * virtual bundle path like /$bunfs/root/src/index.ts in compiled binaries).
+ */
+function getBinaryInstallDir(): string {
+	// e.g. ~/.local/share/knowledge-server/libexec/knowledge-server → ~/.local/share/knowledge-server
+	return resolve(dirname(process.execPath), "..");
+}
+
+const GITHUB_RELEASES = "https://github.com/MAnders333/knowledge-server/releases/download";
+
+/**
+ * Download a text asset from the current release and write it atomically to dst.
+ * Used by binary installs to fetch plugin/command files that aren't bundled.
+ * Uses curl (always available on macOS/Linux) to stay synchronous.
+ */
+function downloadAssetSync(name: string, dst: string): void {
+	// Strict allowlist: bare filename, letters/digits/dots/hyphens/underscores only.
+	if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
+		throw new Error(`Invalid asset name: ${name}`);
+	}
+	// Validate version is a plain semver — guards against a crafted package.json
+	// producing an arbitrary URL component.
+	if (!/^\d+\.\d+\.\d+$/.test(pkg.version)) {
+		throw new Error(`Unexpected version format: ${pkg.version}`);
+	}
+	const url = `${GITHUB_RELEASES}/v${pkg.version}/${name}`;
+	const tmp = `${dst}.tmp`;
+	const result = spawnSync(
+		"curl",
+		["-fsSL", "--proto", "=https", "--tlsv1.2", "--max-time", "30", "--output", tmp, url],
+		{ encoding: "utf8", timeout: 35_000 },
+	);
+	if (result.error) {
+		try { unlinkSync(tmp); } catch { /* ignore */ }
+		throw new Error(`Failed to run curl: ${result.error.message}`);
+	}
+	if (result.status !== 0) {
+		try { unlinkSync(tmp); } catch { /* ignore */ }
+		throw new Error(`curl failed for ${name}: ${result.stderr?.trim() || "unknown error"}`);
+	}
+	try {
+		renameSync(tmp, dst);
+	} catch (err) {
+		try { unlinkSync(tmp); } catch { /* ignore */ }
+		throw err;
+	}
+}
+
 function setupOpenCode(): void {
-	const projectDir = getProjectDir();
 	const configDir = join(homedir(), ".config", "opencode");
 
 	console.log("Setting up OpenCode integration...\n");
 
-	// Plugin symlink
 	const pluginDir = join(configDir, "plugins");
 	mkdirSync(pluginDir, { recursive: true });
-	const pluginSrc = join(projectDir, "plugin", "knowledge.ts");
 	const pluginDst = join(pluginDir, "knowledge.ts");
 
-	if (!existsSync(pluginSrc)) {
-		console.error(`  ✗ Plugin source not found: ${pluginSrc}`);
-		console.error(
-			"    Make sure you are running from the knowledge-server project directory.",
-		);
-		process.exit(1);
-	}
+	const sourceInstall = isSourceInstall();
+	const projectDir = sourceInstall ? getProjectDir() : "";
 
-	forceSymlink(pluginSrc, pluginDst);
-	console.log(`  ✓ Plugin: ${pluginDst}`);
-	console.log(`       → ${pluginSrc}`);
-
-	// Command symlinks
-	const commandSrcDir = join(projectDir, "commands");
-	const commandDstDir = join(configDir, "command");
-	mkdirSync(commandDstDir, { recursive: true });
-
-	const commandFiles = ["consolidate.md", "knowledge-review.md"];
-	for (const file of commandFiles) {
-		const src = join(commandSrcDir, file);
-		const dst = join(commandDstDir, file);
-		if (!existsSync(src)) {
-			console.log(`  ⚠ Command source not found (skipping): ${src}`);
-			continue;
+	if (sourceInstall) {
+		// Source install: symlink so edits to the repo are reflected immediately.
+		const pluginSrc = join(projectDir, "plugin", "knowledge.ts");
+		if (!existsSync(pluginSrc)) {
+			console.error(`  ✗ Plugin source not found: ${pluginSrc}`);
+			console.error("    Make sure you are running from the knowledge-server project directory.");
+			process.exit(1);
 		}
-		forceSymlink(src, dst);
-		console.log(`  ✓ Command ${file}: ${dst}`);
+		forceSymlink(pluginSrc, pluginDst);
+		console.log(`  ✓ Plugin: ${pluginDst}`);
+		console.log(`       → ${pluginSrc}`);
+
+		// Command symlinks
+		const commandSrcDir = join(projectDir, "commands");
+		const commandDstDir = join(configDir, "command");
+		mkdirSync(commandDstDir, { recursive: true });
+		for (const file of ["consolidate.md", "knowledge-review.md"]) {
+			const src = join(commandSrcDir, file);
+			const dst = join(commandDstDir, file);
+			if (!existsSync(src)) {
+				console.log(`  ⚠ Command source not found (skipping): ${src}`);
+				continue;
+			}
+			forceSymlink(src, dst);
+			console.log(`  ✓ Command ${file}: ${dst}`);
+		}
+	} else {
+		// Binary install: copy from <install-dir>/ if present, otherwise download
+		// from the GitHub release. install.sh and `knowledge-server update` both
+		// place knowledge.ts / *.md in <install-dir>/ alongside the binary.
+		//
+		// Assets are processed in order: plugin first (required), then commands (optional).
+		// The command/ dir is created before the loop so .md destinations are valid.
+		const installDir = getBinaryInstallDir();
+		const requiredAssets: Array<[string, string]> = [
+			["knowledge.ts", pluginDst],
+		];
+		const optionalAssets: Array<[string, string]> = [
+			["consolidate.md", join(configDir, "command", "consolidate.md")],
+			["knowledge-review.md", join(configDir, "command", "knowledge-review.md")],
+		];
+		mkdirSync(join(configDir, "command"), { recursive: true });
+
+		const installAsset = (name: string, dst: string): boolean => {
+			const cached = join(installDir, name);
+			const label = name === "knowledge.ts" ? "Plugin" : `Command ${name}`;
+			if (existsSync(cached)) {
+				try {
+					// Copy rather than symlink — install dir is internal implementation detail.
+					copyFileSync(cached, dst);
+					console.log(`  ✓ ${label}: ${dst}`);
+					return true;
+				} catch (err) {
+					console.error(`  ✗ Failed to copy ${name}: ${err}`);
+					return false;
+				}
+			} else {
+				// Not on disk yet (e.g. fresh install before first update) — download.
+				process.stdout.write(`  Downloading ${name}... `);
+				try {
+					downloadAssetSync(name, dst);
+					console.log("done");
+					return true;
+				} catch (err) {
+					console.error(`failed: ${err instanceof Error ? err.message : err}`);
+					return false;
+				}
+			}
+		};
+
+		for (const [name, dst] of requiredAssets) {
+			if (!installAsset(name, dst)) {
+				console.error("    Plugin is required for OpenCode integration — aborting.");
+				process.exit(1);
+			}
+		}
+		for (const [name, dst] of optionalAssets) {
+			installAsset(name, dst);
+		}
 	}
 
 	// MCP server entry — written directly to opencode.jsonc
 	writeOpenCodeMcpEntry(configDir);
 
-	const startHint = isSourceInstall()
+	const startHint = sourceInstall
 		? `bun run ${join(projectDir, "src", "index.ts")}`
 		: "knowledge-server";
 
