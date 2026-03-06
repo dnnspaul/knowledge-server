@@ -77,13 +77,7 @@ export function createApp(
 		activateInputSchema,
 		async ({ cues, limit, threshold }) => {
 			try {
-				const result = await activation.activate(
-					cues,
-					{
-						limit: limit ?? undefined,
-						threshold: threshold ?? undefined,
-					},
-				);
+				const result = await activation.activate(cues, { limit, threshold });
 
 				if (result.entries.length === 0) {
 					return {

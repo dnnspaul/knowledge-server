@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import { chmod, readFile, rename, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 
@@ -156,7 +157,7 @@ async function downloadBinary(
 		});
 
 		// Convert Web ReadableStream to Node Readable for pipeline()
-		const nodeReadable = require("node:stream").Readable.fromWeb(res.body);
+		const nodeReadable = Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]);
 		await pipeline(nodeReadable, gunzip, fileStream);
 
 		const mb = (bytesWritten / 1_048_576).toFixed(1);
