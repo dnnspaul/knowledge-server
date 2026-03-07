@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { RECONSOLIDATION_THRESHOLD } from "./types.js";
 
 /**
@@ -226,16 +226,59 @@ export const config = {
 	},
 } as const;
 
+/**
+ * Resolve the .env file path a binary user should edit.
+ *
+ * Binary install: $installDir/.env, where $installDir is two levels above the
+ *   real binary (libexec/knowledge-server → installDir). Falls back to
+ *   KNOWLEDGE_SERVER_DIR or ~/.local/share/knowledge-server if not found.
+ * Source install: ".env" in the project root (loaded automatically by Bun).
+ *
+ * Used only in error messages — we don't load the file here.
+ */
+function envFilePath(): string {
+	const execPath = process.execPath;
+	// Source install: Bun runs .ts files directly; the exec path is the bun binary.
+	// Detect by checking that the bun binary's basename is exactly "bun".
+	if (basename(execPath) === "bun") {
+		return ".env in the project root";
+	}
+	// Binary install: real binary lives at $installDir/libexec/knowledge-server.
+	// dirname(execPath) → $installDir/libexec; one more dirname → $installDir.
+	const installDir = dirname(dirname(execPath));
+	const candidate = join(installDir, ".env");
+	if (existsSync(candidate)) return candidate;
+	// Fallback: explicit env var or conventional default.
+	const envDir = process.env.KNOWLEDGE_SERVER_DIR;
+	if (envDir) return join(envDir, ".env");
+	return join(homedir(), ".local", "share", "knowledge-server", ".env");
+}
+
+// Placeholder values shipped in the .env template — used to detect unconfigured installs.
+// Update these if the template values in install.sh change.
+const PLACEHOLDER_API_KEY = "your-api-key-here";
+const PLACEHOLDER_ENDPOINT = "https://your-llm-endpoint.example.com";
+
 export function validateConfig(): string[] {
 	const errors: string[] = [];
 
-	if (!config.llm.apiKey) {
-		errors.push("LLM_API_KEY is required. Set it in .env or environment.");
+	const envPath = envFilePath();
+
+	if (
+		!config.llm.apiKey ||
+		config.llm.apiKey.trim() === PLACEHOLDER_API_KEY
+	) {
+		errors.push(
+			`LLM_API_KEY is not configured. Edit ${envPath} and set LLM_API_KEY to your API key.`,
+		);
 	}
 
-	if (!config.llm.baseEndpoint) {
+	if (
+		!config.llm.baseEndpoint ||
+		config.llm.baseEndpoint.trim() === PLACEHOLDER_ENDPOINT
+	) {
 		errors.push(
-			"LLM_BASE_ENDPOINT is required. Set it in .env or environment.",
+			`LLM_BASE_ENDPOINT is not configured. Edit ${envPath} and set LLM_BASE_ENDPOINT to your endpoint URL.`,
 		);
 	}
 
