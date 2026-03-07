@@ -624,11 +624,12 @@ describe("VSCodeEpisodeReader.getNewEpisodes — minSessionMessages filter", () 
 		// config.consolidation.minSessionMessages is the value frozen at process startup
 		// (reflects CONSOLIDATION_MIN_MESSAGES env var). Fail loudly if it's ever set
 		// below 3, because then 2 messages may or may not pass and we can't assert cleanly.
+		// config.consolidation.minSessionMessages is frozen at process startup
+		// (reflects CONSOLIDATION_MIN_MESSAGES env var, default 4 in config.ts).
+		// Fail loudly if it's ever set below 3 — the 2-message session we construct
+		// wouldn't reliably be "below threshold" in that case.
 		const threshold = config.consolidation.minSessionMessages;
-		if (threshold < 3) {
-			expect(threshold).toBeGreaterThanOrEqual(3);
-			return;
-		}
+		expect(threshold).toBeGreaterThanOrEqual(3);
 		const requestCount = 1;
 		const requests = Array.from({ length: requestCount }, (_, i) => ({
 			messageText: `msg ${i}`,
