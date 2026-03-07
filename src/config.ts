@@ -227,31 +227,54 @@ export const config = {
 } as const;
 
 /**
- * Resolve the .env file path a binary user should edit.
+ * Resolve the .env file path for config — used in error messages and as the
+ * canonical location hint for binary installs.
  *
- * Binary install: $installDir/.env, where $installDir is two levels above the
- *   real binary (libexec/knowledge-server → installDir). Falls back to
- *   KNOWLEDGE_SERVER_DIR or ~/.local/share/knowledge-server if not found.
- * Source install: ".env" in the project root (loaded automatically by Bun).
+ * Search order (first existing file wins):
+ *   1. $KNOWLEDGE_CONFIG_HOME/.env          — explicit override
+ *   2. $XDG_CONFIG_HOME/knowledge-server/.env — XDG standard
+ *   3. ~/.config/knowledge-server/.env      — XDG default (when XDG_CONFIG_HOME unset)
+ *   4. ~/.local/share/knowledge-server/.env — legacy location (backwards compat)
  *
- * Used only in error messages — we don't load the file here.
+ * Source install: returns a prose description — Bun auto-loads .env from the
+ * project root, so no path resolution is needed.
+ *
+ * Used only in error messages — we don't load the file here (Bun handles
+ * source installs; the launcher wrapper handles binary installs).
  */
-function envFilePath(): string {
+export function resolveEnvFilePath(): string {
 	const execPath = process.execPath;
 	// Source install: Bun runs .ts files directly; the exec path is the bun binary.
-	// Detect by checking that the bun binary's basename is exactly "bun".
-	if (basename(execPath) === "bun") {
-		return ".env in the project root";
+	// Detect by checking that the bun binary's basename starts with "bun"
+	// (covers bun, bun-debug, bun-1.x, etc.).
+	if (basename(execPath).startsWith("bun")) {
+		return "the .env file in the project root";
 	}
-	// Binary install: real binary lives at $installDir/libexec/knowledge-server.
-	// dirname(execPath) → $installDir/libexec; one more dirname → $installDir.
-	const installDir = dirname(dirname(execPath));
-	const candidate = join(installDir, ".env");
-	if (existsSync(candidate)) return candidate;
-	// Fallback: explicit env var or conventional default.
-	const envDir = process.env.KNOWLEDGE_SERVER_DIR;
-	if (envDir) return join(envDir, ".env");
-	return join(homedir(), ".local", "share", "knowledge-server", ".env");
+
+	// Priority-ordered candidate list for binary installs.
+	const candidates: string[] = [];
+
+	// 1. Explicit override
+	if (process.env.KNOWLEDGE_CONFIG_HOME) {
+		candidates.push(join(process.env.KNOWLEDGE_CONFIG_HOME, ".env"));
+	}
+
+	// 2 & 3. XDG_CONFIG_HOME (falls back to ~/.config per XDG spec)
+	const xdgConfigHome =
+		process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+	candidates.push(join(xdgConfigHome, "knowledge-server", ".env"));
+
+	// 4. Legacy location — backwards compat for existing installs
+	candidates.push(
+		join(homedir(), ".local", "share", "knowledge-server", ".env"),
+	);
+
+	for (const candidate of candidates) {
+		if (existsSync(candidate)) return candidate;
+	}
+
+	// Nothing found — return the preferred new location as the hint
+	return join(xdgConfigHome, "knowledge-server", ".env");
 }
 
 // Placeholder values shipped in the .env template — used to detect unconfigured installs.
@@ -262,21 +285,17 @@ const PLACEHOLDER_ENDPOINT = "https://your-llm-endpoint.example.com";
 export function validateConfig(): string[] {
 	const errors: string[] = [];
 
-	const envPath = envFilePath();
+	const envPath = resolveEnvFilePath();
 
-	if (
-		!config.llm.apiKey ||
-		config.llm.apiKey.trim() === PLACEHOLDER_API_KEY
-	) {
+	const apiKey = config.llm.apiKey?.trim() ?? "";
+	if (!apiKey || apiKey === PLACEHOLDER_API_KEY) {
 		errors.push(
 			`LLM_API_KEY is not configured. Edit ${envPath} and set LLM_API_KEY to your API key.`,
 		);
 	}
 
-	if (
-		!config.llm.baseEndpoint ||
-		config.llm.baseEndpoint.trim() === PLACEHOLDER_ENDPOINT
-	) {
+	const baseEndpoint = config.llm.baseEndpoint?.trim() ?? "";
+	if (!baseEndpoint || baseEndpoint === PLACEHOLDER_ENDPOINT) {
 		errors.push(
 			`LLM_BASE_ENDPOINT is not configured. Edit ${envPath} and set LLM_BASE_ENDPOINT to your endpoint URL.`,
 		);
