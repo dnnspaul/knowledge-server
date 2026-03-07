@@ -78,8 +78,9 @@ export async function runStop(pidPath: string): Promise<void> {
 		await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
 		try {
 			process.kill(pid, 0); // still alive — keep waiting
-		} catch {
-			// Process is gone.
+		} catch (e) {
+			if ((e as NodeJS.ErrnoException).code === "EPERM") continue; // alive, no permission
+			// ESRCH or other — process is gone.
 			console.log("Knowledge server stopped.");
 			// The server cleans up its own PID file on graceful shutdown.
 			// If it crashed before doing so, clean up here.

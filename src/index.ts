@@ -76,7 +76,7 @@ async function main() {
 	logger.raw("┌─────────────────────────────────────┐");
 	logger.raw(`│  Knowledge Server v${pkg.version.padEnd(17)}│`);
 	logger.raw("│  Consolidation-aware knowledge       │");
-	logger.raw("│  system for OpenCode agents          │");
+	logger.raw("│  system for AI coding agents         │");
 	logger.raw("└─────────────────────────────────────┘");
 
 	// Validate config
@@ -132,49 +132,52 @@ async function main() {
 	const adminTokenIsStable = !!config.adminToken;
 	const adminToken = config.adminToken ?? randomBytes(24).toString("hex");
 
-	// PID file guard — must run before serve() so we never bind the port if
-	// another instance is already running. If the file exists but the PID is
-	// dead (crash without cleanup), treat it as stale and overwrite it.
-	if (config.pidPath) {
-		if (existsSync(config.pidPath)) {
-			const stalePid = Number.parseInt(
-				readFileSync(config.pidPath, "utf8").trim(),
-				10,
+	// PID file guard — check before serve() so we never bind the port if another
+	// instance is already running. If the file exists but the PID is dead (crash
+	// without cleanup), treat it as stale and continue. The actual write happens
+	// after serve() succeeds so the file only exists when a port is truly bound.
+	if (config.pidPath && existsSync(config.pidPath)) {
+		const stalePid = Number.parseInt(
+			readFileSync(config.pidPath, "utf8").trim(),
+			10,
+		);
+		const isAlive =
+			!Number.isNaN(stalePid) &&
+			(() => {
+				try {
+					process.kill(stalePid, 0);
+					return true;
+				} catch (e) {
+					// EPERM = process exists but we can't signal it (still alive).
+					// ESRCH = no such process (truly dead).
+					return (e as NodeJS.ErrnoException).code === "EPERM";
+				}
+			})();
+		if (isAlive) {
+			logger.error(
+				`Server already running at PID ${stalePid}. Run \`knowledge-server stop\` first.`,
 			);
-			const isAlive =
-				!Number.isNaN(stalePid) &&
-				(() => {
-					try {
-						process.kill(stalePid, 0);
-						return true;
-					} catch (e) {
-						// EPERM = process exists but we can't signal it (still alive).
-						// ESRCH = no such process (truly dead).
-						return (e as NodeJS.ErrnoException).code === "EPERM";
-					}
-				})();
-			if (isAlive) {
-				logger.error(
-					`Server already running at PID ${stalePid}. Run \`knowledge-server stop\` first.`,
-				);
-				process.exit(1);
-			}
-			// Stale file — remove and continue.
-			unlinkSync(config.pidPath);
+			process.exit(1);
 		}
-		writeFileSync(config.pidPath, String(process.pid), "utf8");
+		// Stale file — remove and continue.
+		unlinkSync(config.pidPath);
 	}
 
 	// Create HTTP app
 	const app = createApp(db, activation, consolidation, adminToken, adminTokenIsStable);
 
-	// Start server
+	// Start server — PID file written after this succeeds so it only exists
+	// when a port is truly bound.
 	const server = serve({
 		fetch: app.fetch,
 		port: config.port,
 		hostname: config.host,
 		idleTimeout: 255, // max allowed by Bun — consolidation can take a while
 	});
+
+	if (config.pidPath) {
+		writeFileSync(config.pidPath, String(process.pid), "utf8");
+	}
 
 	logger.raw(`\n✓ HTTP API listening on http://${config.host}:${config.port}`);
 	logger.raw("  GET  /activate?q=...                  — Activate knowledge");
