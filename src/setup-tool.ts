@@ -922,6 +922,10 @@ export function setupVSCode(): void {
 	// This is the official VSCode CLI approach and handles profile-specific
 	// mcp.json paths transparently. The --add-mcp flag accepts a JSON object
 	// with { name, command, args?, env? }.
+	//
+	// Idempotency: --add-mcp does a keyed upsert by server name in mcp.json
+	// (existingServers[name] = config). Re-running overwrites the entry rather
+	// than detecting "no change" — the end result is identical either way.
 	const mcpJson = JSON.stringify(entry);
 
 	// First check if `code` is available on PATH

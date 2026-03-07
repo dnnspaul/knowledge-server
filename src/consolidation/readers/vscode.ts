@@ -67,8 +67,10 @@ interface VSCodeResponsePart {
 interface VSCodeRequest {
 	requestId: string;
 	message?: {
+		// VSCode also stores a `parts` array for richer messages, but file references
+		// (#file:, images, etc.) are inlined into `text` as plain strings — so reading
+		// `text` is sufficient for knowledge extraction and `parts` is intentionally omitted.
 		text?: string;
-		parts?: Array<{ text?: string; kind?: string }>;
 	};
 	response?: VSCodeResponsePart[];
 	timestamp?: number;
@@ -393,6 +395,10 @@ export class VSCodeEpisodeReader implements IEpisodeReader {
 				// "prepareToolInvocation", "codeblockUri", "textEditGroup",
 				// "inlineReference", "mcpServersStarting", "undoStop" are metadata.
 				// Text parts either have no kind property or have kind omitted.
+				//
+				// This is an allowlist: only kind=undefined, "markdownContent", and
+				// "markdownVuln" are treated as extractable text. If VSCode introduces
+				// new text-bearing part kinds in future versions, add them here.
 				if (
 					part.value &&
 					typeof part.value === "string" &&
