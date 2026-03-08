@@ -165,7 +165,7 @@ export function createApp(
 	 * don't flood the log. Entry content is truncated to 60 chars.
 	 */
 	function logActivation(
-		caller: string,
+		caller: "http" | "mcp" | "claude-code-hook",
 		query: string,
 		entries: ActivationResult["entries"],
 	): void {
@@ -685,10 +685,6 @@ export function createApp(
 					"Relevant knowledge from your knowledge base:",
 					...lines,
 				].join("\n");
-
-				logger.log(
-					`[hooks/claude-code] Activated ${result.entries.length} entries for prompt: "${prompt.slice(0, 60)}..."`,
-				);
 
 				return c.json({
 					hookSpecificOutput: {
