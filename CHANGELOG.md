@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.1](https://github.com/MAnders333/knowledge-server/compare/v2.4.0...v2.4.1) (2026-03-08)
+
+
+### Bug Fixes
+
+* apply newline cue-splitting to claude-code hook ([f0eee5e](https://github.com/MAnders333/knowledge-server/commit/f0eee5e988f64d0aa6625b7d9b1c2af30685f909))
+* **logging:** log full query and entry content in activation log ([f90f5b5](https://github.com/MAnders333/knowledge-server/commit/f90f5b5ba299beb7717f2d81d7496cf5dcbf19de))
+* **stop:** raise poll timeout to 35s to outlast server's 30s shutdown drain ([0df09ff](https://github.com/MAnders333/knowledge-server/commit/0df09ffe632331d17d90d1cee80a3107db7969a5))
+
 ## [2.4.0](https://github.com/MAnders333/knowledge-server/compare/v2.3.0...v2.4.0) (2026-03-08)
 
 
