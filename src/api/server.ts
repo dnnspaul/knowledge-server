@@ -7,6 +7,7 @@ import { bodyLimit } from "hono/body-limit";
 // @ts-ignore — Bun supports JSON imports natively; tsc may warn without resolveJsonModule
 import pkg from "../../package.json" with { type: "json" };
 import type { ActivationEngine } from "../activation/activate.js";
+import { splitIntoCues } from "../activation/activate.js";
 import { contradictionTagBlock, contradictionTagInline, staleTag } from "../activation/format.js";
 import { config } from "../config.js";
 import type { ConsolidationEngine } from "../consolidation/consolidate.js";
@@ -667,7 +668,10 @@ export function createApp(
 			}
 
 			try {
-				const result = await activation.activate(prompt, { limit: 8 });
+				// Split prompt into per-line cues + full prompt holistic cue,
+				// matching the same multi-cue strategy used by the OpenCode plugin.
+				const cues = splitIntoCues(prompt);
+				const result = await activation.activate(cues, { limit: 8 });
 				logActivation("claude-code-hook", prompt, result.entries);
 
 				if (result.entries.length === 0) {

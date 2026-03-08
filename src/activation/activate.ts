@@ -13,6 +13,35 @@ import {
 } from "./embeddings.js";
 
 /**
+ * Split a prompt into activation cues for multi-topic retrieval.
+ *
+ * Strategy (mirrors the OpenCode plugin):
+ *   1. Per-line segments — each newline is a topic boundary (Shift+Enter in most UIs).
+ *      Segments shorter than MIN_CUE_CHARS are skipped (greetings, "yes", "ok", etc.)
+ *   2. The full trimmed prompt as a holistic cue — captures overall intent that no
+ *      individual line may fully express.
+ *   3. Deduplication — if the message is a single line, the segment and the full
+ *      message are the same string; the Set removes the duplicate.
+ *
+ * All resulting cues are embedded in a single batched API call downstream.
+ *
+ * Exported so server.ts (claude-code hook) can reuse the same logic without
+ * duplicating it. The plugin (plugin/knowledge.ts) runs as a standalone file
+ * and must keep its own copy — kept in sync via tests/format.test.ts parity tests.
+ */
+export const MIN_CUE_CHARS = 15;
+
+export function splitIntoCues(prompt: string): string[] {
+	const trimmed = prompt.trim();
+	const segments = trimmed
+		.split("\n")
+		.map((s) => s.trim())
+		.filter((s) => s.length >= MIN_CUE_CHARS);
+	// Union: unique segments + full message (Set deduplicates single-line messages)
+	return [...new Set([...segments, trimmed])];
+}
+
+/**
  * Activation engine — the core retrieval mechanism.
  *
  * Models associative activation from cognitive science:
