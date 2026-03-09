@@ -548,6 +548,7 @@ export class Reconsolidator {
 								if (existing) {
 									entriesMap.set(id, { ...existing, embedding: freshEmbedding });
 								}
+								synthesized++;
 								clusterReconsolidated++;
 								logger.log(
 									`[synthesis] Refined existing principle ${id} via synthesis.`,
