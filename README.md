@@ -352,7 +352,8 @@ Two options — set one or the other (or both; per-provider credentials take pre
 | `CONSOLIDATION_MIN_MESSAGES` | `4` | Minimum messages a session must have to be eligible for consolidation. |
 | `CONSOLIDATION_POLL_INTERVAL_MS` | `0` (disabled) | Auto-consolidation polling interval in ms while the server runs. `0` = disabled; e.g. `1800000` = every 30 min. |
 | `CONSOLIDATION_INCLUDE_TOOL_OUTPUTS` | *(empty)* | Comma-separated tool names whose completed outputs are included in knowledge extraction (e.g. `atlassian_confluence_get_page`). Empty by default — most tool outputs are not worth encoding. |
-| `CONTRADICTION_MIN_SIMILARITY` | `0.4` | Lower bound of the contradiction scan similarity band. Upper bound is always the reconsolidation threshold (0.82). |
+| `RECONSOLIDATION_SIMILARITY_THRESHOLD` | `0.82` | Cosine similarity above which two entries are considered near-duplicates and routed to an LLM merge decision. Also the exclusive upper bound of the contradiction scan band. **Tune this when switching embedding models** — models with broader similarity distributions need a lower value to avoid over-merging. |
+| `CONTRADICTION_MIN_SIMILARITY` | `0.4` | Lower bound of the contradiction scan similarity band. Must be strictly below `RECONSOLIDATION_SIMILARITY_THRESHOLD`. |
 
 ### Decay
 

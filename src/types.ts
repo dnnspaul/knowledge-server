@@ -17,14 +17,6 @@ const KNOWLEDGE_TYPES = [
 	"procedure",
 ] as const;
 
-/**
- * Cosine similarity threshold above which two entries are considered near-duplicates
- * and routed to decideMerge for an LLM merge decision, rather than inserted as novel.
- * Also serves as the upper bound of the contradiction scan band — entries above this
- * threshold are already handled by decideMerge and excluded from the scan.
- */
-export const RECONSOLIDATION_THRESHOLD = 0.82;
-
 export type KnowledgeType = (typeof KNOWLEDGE_TYPES)[number];
 
 /**

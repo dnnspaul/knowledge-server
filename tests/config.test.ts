@@ -20,6 +20,7 @@ import { validateConfig } from "../src/config";
 
 const FLOAT_VARS = [
 	"DECAY_ARCHIVE_THRESHOLD",
+	"RECONSOLIDATION_SIMILARITY_THRESHOLD",
 	"CONTRADICTION_MIN_SIMILARITY",
 	"ACTIVATION_SIMILARITY_THRESHOLD",
 	"EMBEDDING_DIMENSIONS",
@@ -101,10 +102,50 @@ describe("validateConfig — DECAY_ARCHIVE_THRESHOLD", () => {
 	});
 });
 
+// ── RECONSOLIDATION_SIMILARITY_THRESHOLD ─────────────────────────────────────
+
+describe("validateConfig — RECONSOLIDATION_SIMILARITY_THRESHOLD", () => {
+	it("accepts a valid value in (0, 1)", () => {
+		process.env.RECONSOLIDATION_SIMILARITY_THRESHOLD = "0.75";
+		expect(
+			envErrors().filter((e) =>
+				e.includes("RECONSOLIDATION_SIMILARITY_THRESHOLD"),
+			),
+		).toHaveLength(0);
+	});
+
+	it("rejects 0 (lower bound is exclusive)", () => {
+		process.env.RECONSOLIDATION_SIMILARITY_THRESHOLD = "0";
+		expect(
+			envErrors().some((e) =>
+				e.includes("RECONSOLIDATION_SIMILARITY_THRESHOLD"),
+			),
+		).toBe(true);
+	});
+
+	it("rejects a value above 1", () => {
+		process.env.RECONSOLIDATION_SIMILARITY_THRESHOLD = "1.5";
+		expect(
+			envErrors().some((e) =>
+				e.includes("RECONSOLIDATION_SIMILARITY_THRESHOLD"),
+			),
+		).toBe(true);
+	});
+
+	it("rejects a non-numeric string", () => {
+		process.env.RECONSOLIDATION_SIMILARITY_THRESHOLD = "high";
+		expect(
+			envErrors().some((e) =>
+				e.includes("RECONSOLIDATION_SIMILARITY_THRESHOLD"),
+			),
+		).toBe(true);
+	});
+});
+
 // ── CONTRADICTION_MIN_SIMILARITY ──────────────────────────────────────────────
 
 describe("validateConfig — CONTRADICTION_MIN_SIMILARITY", () => {
-	it("accepts a value strictly below 0.82 (RECONSOLIDATION_THRESHOLD)", () => {
+	it("accepts a value strictly below 0.82 (default reconsolidation threshold)", () => {
 		process.env.CONTRADICTION_MIN_SIMILARITY = "0.4";
 		expect(
 			envErrors().filter((e) => e.includes("CONTRADICTION_MIN_SIMILARITY")),
@@ -134,6 +175,16 @@ describe("validateConfig — CONTRADICTION_MIN_SIMILARITY", () => {
 
 	it("rejects a non-numeric string", () => {
 		process.env.CONTRADICTION_MIN_SIMILARITY = "medium";
+		expect(
+			envErrors().some((e) => e.includes("CONTRADICTION_MIN_SIMILARITY")),
+		).toBe(true);
+	});
+
+	it("rejects CONTRADICTION_MIN_SIMILARITY >= custom RECONSOLIDATION_SIMILARITY_THRESHOLD", () => {
+		// When the reconsolidation threshold is lowered (e.g. for a different embedding
+		// model), CONTRADICTION_MIN_SIMILARITY must still be strictly below it.
+		process.env.RECONSOLIDATION_SIMILARITY_THRESHOLD = "0.7";
+		process.env.CONTRADICTION_MIN_SIMILARITY = "0.7"; // equal → must be rejected
 		expect(
 			envErrors().some((e) => e.includes("CONTRADICTION_MIN_SIMILARITY")),
 		).toBe(true);

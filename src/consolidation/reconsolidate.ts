@@ -4,9 +4,10 @@ import {
 	cosineSimilarity,
 	formatEmbeddingText,
 } from "../activation/embeddings.js";
+import { config } from "../config.js";
 import type { KnowledgeDB } from "../db/database.js";
 import { logger } from "../logger.js";
-import { RECONSOLIDATION_THRESHOLD, clampKnowledgeType } from "../types.js";
+import { clampKnowledgeType } from "../types.js";
 import type { KnowledgeEntry } from "../types.js";
 import { computeStrength } from "./decay.js";
 import type { ConsolidationLLM, ExtractedKnowledge } from "./llm.js";
@@ -36,7 +37,7 @@ const CLUSTER_MIN_MEMBERS = 3;
  * Responsibilities:
  * - Embed the extracted entry
  * - Find the nearest existing entry by cosine similarity
- * - If above RECONSOLIDATION_THRESHOLD: ask the LLM to decide keep/update/replace/insert
+ * - If above reconsolidationThreshold: ask the LLM to decide keep/update/replace/insert
  * - If below threshold: insert directly as a novel entry
  */
 export class Reconsolidator {
@@ -60,7 +61,7 @@ export class Reconsolidator {
 	 * Flow:
 	 * 1. Embed the extracted entry
 	 * 2. Find nearest existing entry by cosine similarity
-	 * 3. If similarity > RECONSOLIDATION_THRESHOLD: focused LLM decision
+	 * 3. If similarity > reconsolidationThreshold: focused LLM decision
 	 *    - "keep"    → discard extracted entry
 	 *    - "update"  → merge into existing entry in place
 	 *    - "replace" → update existing entry content entirely
@@ -133,7 +134,7 @@ export class Reconsolidator {
 		}
 
 		// Below threshold → clearly novel, insert directly
-		if (!nearestEntry || nearestSimilarity < RECONSOLIDATION_THRESHOLD) {
+		if (!nearestEntry || nearestSimilarity < config.consolidation.reconsolidationThreshold) {
 			const inserted = this.insertNewEntry(
 				entry,
 				sessionIds,

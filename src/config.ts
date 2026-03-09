@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { RECONSOLIDATION_THRESHOLD } from "./types.js";
 
 /**
  * Parse an integer environment variable with a fallback default and optional
@@ -34,6 +33,10 @@ function parseFloatEnv(
 	const value = Number.isNaN(parsed) ? defaultVal : parsed;
 	return min !== undefined ? Math.max(min, value) : value;
 }
+
+/** Default reconsolidation threshold — single source of truth used by both
+ *  the config object and the live re-parse in validateConfig(). */
+const RECONSOLIDATION_THRESHOLD_DEFAULT = 0.82;
 
 export const config = {
 	// Server
@@ -217,6 +220,19 @@ export const config = {
 
 	// Consolidation
 	consolidation: {
+		// Cosine similarity threshold above which two entries are considered near-duplicates
+		// and routed to decideMerge (LLM merge decision), rather than inserted as novel.
+		// Also serves as the exclusive upper bound of the contradiction scan band — entries
+		// at or above this are already handled by decideMerge and excluded from the scan.
+		//
+		// This value is sensitive to the embedding model in use. Models with a broader
+		// similarity distribution (e.g. small local models) may need a lower value to avoid
+		// over-merging; high-quality dense models (e.g. text-embedding-3-large) work well at
+		// the default 0.82. Tune this when switching embedding models.
+		reconsolidationThreshold: parseFloatEnv(
+			process.env.RECONSOLIDATION_SIMILARITY_THRESHOLD,
+			RECONSOLIDATION_THRESHOLD_DEFAULT,
+		),
 		chunkSize: parseIntEnv(process.env.CONSOLIDATION_CHUNK_SIZE, 10, 1),
 		maxSessionsPerRun: parseIntEnv(
 			process.env.CONSOLIDATION_MAX_SESSIONS,
@@ -237,7 +253,7 @@ export const config = {
 					.filter(Boolean)
 			: [],
 		// Similarity band for post-extraction contradiction scan.
-		// Entries above RECONSOLIDATION_THRESHOLD are already handled by decideMerge.
+		// Entries above reconsolidationThreshold are already handled by decideMerge.
 		// Entries below contradictionMinSimilarity are too dissimilar to plausibly contradict.
 		// The band in between gets the contradiction LLM call.
 		contradictionMinSimilarity: parseFloatEnv(
@@ -489,15 +505,34 @@ export function validateConfig(): string[] {
 		1,
 		`Default is ${config.decay.archiveThreshold}.`,
 	);
-	// Upper bound is RECONSOLIDATION_THRESHOLD (exclusive) — a value at or above it
+	// Validate reconsolidationThreshold first — CONTRADICTION_MIN_SIMILARITY is
+	// validated against it as its exclusive upper bound, so it must be valid first.
+	validateFloatRange(
+		process.env.RECONSOLIDATION_SIMILARITY_THRESHOLD,
+		"RECONSOLIDATION_SIMILARITY_THRESHOLD",
+		0,
+		1,
+		`Cosine similarity above which entries are near-duplicates (routed to decideMerge). Default is ${config.consolidation.reconsolidationThreshold}. Tune when switching embedding models.`,
+	);
+	// Upper bound is reconsolidationThreshold (exclusive) — a value at or above it
 	// collapses the contradiction scan band to empty since decideMerge already handles
 	// entries above that ceiling.
+	// Re-parse RECONSOLIDATION_SIMILARITY_THRESHOLD directly from process.env here
+	// (rather than reading config.consolidation.reconsolidationThreshold, which is
+	// frozen at module-load time) so the cross-validation is live when both vars
+	// are set together, e.g. after switching embedding models.
+	const liveReconsolidationThreshold = (() => {
+		const parsed = Number.parseFloat(
+			process.env.RECONSOLIDATION_SIMILARITY_THRESHOLD ?? "",
+		);
+		return Number.isNaN(parsed) ? RECONSOLIDATION_THRESHOLD_DEFAULT : parsed;
+	})();
 	validateFloatRange(
 		process.env.CONTRADICTION_MIN_SIMILARITY,
 		"CONTRADICTION_MIN_SIMILARITY",
 		0,
-		RECONSOLIDATION_THRESHOLD,
-		`Must be strictly below the ${RECONSOLIDATION_THRESHOLD} reconsolidation threshold. Default is ${config.consolidation.contradictionMinSimilarity}.`,
+		liveReconsolidationThreshold,
+		`Must be strictly below the ${liveReconsolidationThreshold} reconsolidation threshold. Default is ${config.consolidation.contradictionMinSimilarity}.`,
 		true, // hiExclusive
 	);
 	validateFloatRange(

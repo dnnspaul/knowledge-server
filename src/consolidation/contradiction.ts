@@ -2,7 +2,6 @@ import { cosineSimilarity } from "../activation/embeddings.js";
 import { config } from "../config.js";
 import type { KnowledgeDB } from "../db/database.js";
 import { logger } from "../logger.js";
-import { RECONSOLIDATION_THRESHOLD } from "../types.js";
 import type { KnowledgeEntry } from "../types.js";
 import type { ConsolidationLLM } from "./llm.js";
 
@@ -19,7 +18,7 @@ const CONTRADICTION_BATCH_SIZE = 10;
  *
  * Responsibilities:
  * - For each newly inserted/updated entry (changedIds), find topic-overlapping
- *   candidates in the mid-similarity band [contradictionMinSimilarity, RECONSOLIDATION_THRESHOLD).
+ *   candidates in the mid-similarity band [contradictionMinSimilarity, reconsolidationThreshold).
  *   Entries above the upper bound were already handled by Reconsolidator.decideMerge.
  *   Entries below the lower bound are too dissimilar to plausibly contradict.
  * - Ask the LLM to detect and resolve genuine contradictions.
@@ -47,7 +46,7 @@ export class ContradictionScanner {
 	 * from the map so subsequent iterations in the caller's loop see a consistent view.
 	 *
 	 * Precondition: `candidates` must already be filtered to the mid-similarity band
-	 * [contradictionMinSimilarity, RECONSOLIDATION_THRESHOLD) by the caller.
+	 * [contradictionMinSimilarity, reconsolidationThreshold) by the caller.
 	 *
 	 * Returns { entrySuperseded, detected, resolved } so the caller can update
 	 * its outer state (loop counters, early-continue logic).
@@ -238,7 +237,7 @@ export class ContradictionScanner {
 			const midBandCandidates = candidates.filter((c) => {
 				if (supersededInThisScan.has(c.id)) return false; // skip already-resolved candidates
 				const sim = cosineSimilarity(entryEmbedding, c.embedding);
-				return sim >= minSim && sim < RECONSOLIDATION_THRESHOLD;
+				return sim >= minSim && sim < config.consolidation.reconsolidationThreshold;
 			});
 
 			if (midBandCandidates.length === 0) continue;
@@ -290,10 +289,10 @@ export class ContradictionScanner {
 				if (!hasTopicOverlap) continue;
 
 				const sim = cosineSimilarity(entryA.embedding, entryB.embedding);
-				// Only mid-band: sim ≥ 0.82 was already handled by decideMerge (the
+				// Only mid-band: sim ≥ reconsolidationThreshold was already handled by decideMerge (the
 				// "insert" decision means decideMerge considered them distinct; contradiction
 				// scan is the right follow-up for mid-band pairs that weren't compared at all).
-				if (sim >= minSim && sim < RECONSOLIDATION_THRESHOLD) {
+				if (sim >= minSim && sim < config.consolidation.reconsolidationThreshold) {
 					intraChunkCandidates.push(entryB);
 				}
 			}
