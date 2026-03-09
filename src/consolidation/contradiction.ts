@@ -42,8 +42,15 @@ export class ContradictionScanner {
 	 * Stops early if a `supersede_new` resolution is returned for `entry` — the
 	 * entry has lost and checking further candidates is pointless.
 	 *
+	 * Side effects: mutates `supersededInThisScan` and `entriesMap` — superseded
+	 * entries (both candidates and entry itself) are added to the set and removed
+	 * from the map so subsequent iterations in the caller's loop see a consistent view.
+	 *
+	 * Precondition: `candidates` must already be filtered to the mid-similarity band
+	 * [contradictionMinSimilarity, RECONSOLIDATION_THRESHOLD) by the caller.
+	 *
 	 * Returns { entrySuperseded, detected, resolved } so the caller can update
-	 * its outer state (supersededInThisScan, entriesMap, loop counters).
+	 * its outer state (loop counters, early-continue logic).
 	 */
 	private async runBatched(
 		entry: {
@@ -60,6 +67,10 @@ export class ContradictionScanner {
 		entriesMap: Map<string, KnowledgeEntry & { embedding: number[] }>,
 		logPrefix: string,
 	): Promise<{ entrySuperseded: boolean; detected: number; resolved: number }> {
+		if (candidates.length === 0) {
+			return { entrySuperseded: false, detected: 0, resolved: 0 };
+		}
+
 		// Sort by similarity descending so highest-risk pairs go first.
 		const sorted = candidates
 			.map((c) => ({ c, sim: cosineSimilarity(entry.embedding, c.embedding) }))
@@ -246,6 +257,7 @@ export class ContradictionScanner {
 			detected += d;
 			resolved += r;
 
+			// entrySuperseded: entry removed from map; loop continues to next changedId.
 			if (entrySuperseded) continue;
 		}
 
@@ -293,7 +305,7 @@ export class ContradictionScanner {
 			);
 
 			const { entrySuperseded: entryASuperseded, detected: d, resolved: r } = await this.runBatched(
-				{ ...entryA, embedding: entryA.embedding },
+				entryA,
 				intraChunkCandidates,
 				supersededInThisScan,
 				entriesMap,
