@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+
 /**
  * Parse an integer environment variable with a fallback default and optional
  * minimum clamp. Returns `defaultVal` when the variable is absent, empty, or
@@ -228,7 +229,8 @@ export const config = {
 		// This value is sensitive to the embedding model in use. Models with a broader
 		// similarity distribution (e.g. small local models) may need a lower value to avoid
 		// over-merging; high-quality dense models (e.g. text-embedding-3-large) work well at
-		// the default 0.82. Tune this when switching embedding models.
+		// the default 0.82. Run `knowledge-server calibrate` to find the right value for a
+		// different embedding model.
 		reconsolidationThreshold: parseFloatEnv(
 			process.env.RECONSOLIDATION_SIMILARITY_THRESHOLD,
 			RECONSOLIDATION_THRESHOLD_DEFAULT,
@@ -512,7 +514,7 @@ export function validateConfig(): string[] {
 		"RECONSOLIDATION_SIMILARITY_THRESHOLD",
 		0,
 		1,
-		`Cosine similarity above which entries are near-duplicates (routed to decideMerge). Default is ${config.consolidation.reconsolidationThreshold}. Tune when switching embedding models.`,
+		`Cosine similarity above which entries are near-duplicates (routed to decideMerge). Default is ${config.consolidation.reconsolidationThreshold}. Run \`knowledge-server calibrate\` to find the right value for your embedding model.`,
 	);
 	// Upper bound is reconsolidationThreshold (exclusive) — a value at or above it
 	// collapses the contradiction scan band to empty since decideMerge already handles
