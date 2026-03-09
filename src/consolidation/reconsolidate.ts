@@ -377,13 +377,19 @@ export class Reconsolidator {
 				formatEmbeddingText(result.type, result.content, result.topics),
 			);
 
-			// Filter sourceIds to only IDs that exist in entriesMap, to avoid dangling FKs.
-			const validatedSourceIds = [anchor.id, ...result.sourceIds.filter((id) => entriesMap.has(id))];
-			if (validatedSourceIds.length < 1 + result.sourceIds.length) {
+			// Filter sourceIds to only IDs that exist in entriesMap (avoids dangling FKs),
+			// and exclude anchor.id from result.sourceIds to prevent duplicate supports
+			// relations if the LLM echoes the anchor back in its sourceIds list.
+			const filteredSourceIds = result.sourceIds.filter(
+				(id) => id !== anchor.id && entriesMap.has(id),
+			);
+			const droppedCount = result.sourceIds.length - filteredSourceIds.length;
+			if (droppedCount > 0) {
 				logger.warn(
-					`[synthesis] Dropped ${result.sourceIds.length - (validatedSourceIds.length - 1)} unknown sourceId(s) from LLM result for anchor ${anchor.id}.`,
+					`[synthesis] Dropped ${droppedCount} sourceId(s) from LLM result for anchor ${anchor.id} (unknown or duplicate).`,
 				);
 			}
+			const validatedSourceIds = [anchor.id, ...filteredSourceIds];
 
 			// Route through reconsolidate() for deduplication: if an equivalent principle
 			// already exists in the KB (or was produced earlier in this same pass),

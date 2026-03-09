@@ -1318,9 +1318,12 @@ export class KnowledgeDB {
 
 	/**
 	 * NULL out all embeddings on active and conflicted entries.
-	 * Retained as an escape hatch for manual recovery (e.g. corrupted embeddings)
-	 * even though the normal model-change path uses in-place re-embed via
-	 * checkAndReEmbed() instead of clearing.
+	 *
+	 * @internal — exposed for tests and manual recovery only. Production code
+	 * should never call this: clearing embeddings without immediately regenerating
+	 * them leaves activation returning zero results until the next consolidation
+	 * run. The normal model-change path uses in-place re-embed via
+	 * checkAndReEmbed() instead.
 	 *
 	 * Returns the number of entries whose embeddings were cleared.
 	 */

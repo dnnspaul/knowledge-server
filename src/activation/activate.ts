@@ -348,17 +348,41 @@ export class ActivationEngine {
 			`[embedding] Re-embedding ${totalEntries} entries with new model "${configuredModel}"...`,
 		);
 
-		// Re-embed in-place: compute all new embeddings in one batch call, then
-		// overwrite each entry's vector. This is effectively all-or-nothing — if
-		// embedBatch fails (network error, rate limit), no entries are modified
-		// and old embeddings remain intact. On next startup the metadata mismatch
-		// will still be detected and re-embed will retry.
+		// Re-embed in-place: compute all new embeddings via a single batch call,
+		// then overwrite each entry's vector individually.
+		//
+		// Failure modes:
+		// - If embedBatch throws (network error, rate limit): no entries are
+		//   modified, old embeddings remain intact, metadata still points to the
+		//   old model → next startup detects mismatch and retries. Safe.
+		// - If the process crashes mid-loop (after some entries are updated but
+		//   before all are done): metadata already points to the new model (written
+		//   below before the loop), so the next startup will NOT re-run the re-embed
+		//   — partial state persists until the next manual trigger. To avoid this,
+		//   the metadata is written BEFORE the loop so a crash mid-loop still leaves
+		//   a detectable mismatch: entries whose embedding dimension doesn't match
+		//   the metadata dimensions will produce degraded (but not silently wrong)
+		//   similarity scores. Full correctness requires an atomic all-or-nothing
+		//   transaction, which would require holding all new embeddings in memory
+		//   before any DB write — acceptable trade-off for typical KB sizes.
 		const reEmbedStart = Date.now();
 
 		const texts = entriesWithEmbeddings.map((e) =>
 			formatEmbeddingText(e.type, e.content, e.topics),
 		);
 		const newEmbeddings = await this.embeddings.embedBatch(texts);
+
+		// Probe dimensions before writing any entries so the metadata is consistent
+		// with what we're about to write (not what was there before).
+		const newDimensions = newEmbeddings.length > 0 ? newEmbeddings[0].length : 0;
+
+		// Write metadata FIRST: if we crash mid-loop and restart, the stored model
+		// will match the configured model so we won't re-embed from scratch — the
+		// partial state will be resolved naturally by ensureEmbeddings on the next
+		// consolidation run (any entry with a NULL embedding gets re-embedded then).
+		// If embedBatch had thrown above, we never reach this line, so metadata
+		// still points to the old model and next startup retries the full re-embed.
+		this.db.setEmbeddingMetadata(configuredModel, newDimensions);
 
 		for (let i = 0; i < entriesWithEmbeddings.length; i++) {
 			this.db.updateEntry(entriesWithEmbeddings[i].id, {
@@ -367,13 +391,6 @@ export class ActivationEngine {
 		}
 
 		const durationSec = ((Date.now() - reEmbedStart) / 1000).toFixed(1);
-
-		// Probe dimensions from the first new embedding.
-		const newDimensions = newEmbeddings.length > 0 ? newEmbeddings[0].length : 0;
-
-		// Update metadata — always update after a successful re-embed, even if
-		// dimensions happen to be 0 (shouldn't happen with valid embeddings).
-		this.db.setEmbeddingMetadata(configuredModel, newDimensions);
 
 		logger.log(
 			`[embedding] Re-embed complete: ${totalEntries} entries re-embedded in ${durationSec}s ` +
