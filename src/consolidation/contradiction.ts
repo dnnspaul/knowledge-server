@@ -7,6 +7,14 @@ import type { KnowledgeEntry } from "../types.js";
 import type { ConsolidationLLM } from "./llm.js";
 
 /**
+ * Maximum number of candidates sent to the LLM in a single contradiction-check call.
+ * When there are more mid-band candidates, they are split into sequential batches
+ * sorted by similarity descending (most likely contradictions first).
+ * Keeping this small bounds prompt size and prevents LLM timeouts as the KB grows.
+ */
+const CONTRADICTION_BATCH_SIZE = 10;
+
+/**
  * Post-extraction contradiction scanner.
  *
  * Responsibilities:
@@ -25,6 +33,137 @@ export class ContradictionScanner {
 	constructor(db: KnowledgeDB, llm: ConsolidationLLM) {
 		this.db = db;
 		this.llm = llm;
+	}
+
+	/**
+	 * Run `detectAndResolveContradiction` in batches of CONTRADICTION_BATCH_SIZE,
+	 * sorted by similarity descending so the highest-risk pairs are checked first.
+	 *
+	 * Stops early if a `supersede_new` resolution is returned for `entry` — the
+	 * entry has lost and checking further candidates is pointless.
+	 *
+	 * Returns { entrySuperseded, detected, resolved } so the caller can update
+	 * its outer state (supersededInThisScan, entriesMap, loop counters).
+	 */
+	private async runBatched(
+		entry: {
+			id: string;
+			content: string;
+			type: string;
+			topics: string[];
+			confidence: number;
+			createdAt: number;
+			embedding: number[];
+		},
+		candidates: Array<KnowledgeEntry & { embedding: number[] }>,
+		supersededInThisScan: Set<string>,
+		entriesMap: Map<string, KnowledgeEntry & { embedding: number[] }>,
+		logPrefix: string,
+	): Promise<{ entrySuperseded: boolean; detected: number; resolved: number }> {
+		// Sort by similarity descending so highest-risk pairs go first.
+		const sorted = candidates
+			.map((c) => ({ c, sim: cosineSimilarity(entry.embedding, c.embedding) }))
+			.sort((a, b) => b.sim - a.sim)
+			.map(({ c }) => c);
+
+		const totalBatches = Math.ceil(sorted.length / CONTRADICTION_BATCH_SIZE);
+		if (totalBatches > 1) {
+			logger.log(
+				`[contradiction] ${logPrefix}Splitting ${sorted.length} candidates into ${totalBatches} batches of ${CONTRADICTION_BATCH_SIZE}.`,
+			);
+		}
+
+		let detected = 0;
+		let resolved = 0;
+		let entrySuperseded = false;
+
+		for (let b = 0; b < totalBatches; b++) {
+			const batch = sorted.slice(
+				b * CONTRADICTION_BATCH_SIZE,
+				(b + 1) * CONTRADICTION_BATCH_SIZE,
+			);
+			const validCandidateIds = new Set(batch.map((c) => c.id));
+
+			const llmStart = Date.now();
+			const results = await this.llm.detectAndResolveContradiction(
+				{
+					id: entry.id,
+					content: entry.content,
+					type: entry.type,
+					topics: entry.topics,
+					confidence: entry.confidence,
+					createdAt: entry.createdAt,
+				},
+				batch.map((c) => ({
+					id: c.id,
+					content: c.content,
+					type: c.type,
+					topics: c.topics,
+					confidence: c.confidence,
+					createdAt: c.createdAt,
+				})),
+			);
+			logger.log(
+				`[contradiction] ${logPrefix}LLM responded in ${((Date.now() - llmStart) / 1000).toFixed(1)}s (${batch.length} candidates${totalBatches > 1 ? `, batch ${b + 1}/${totalBatches}` : ""}).`,
+			);
+
+			for (const result of results) {
+				if (!validCandidateIds.has(result.candidateId)) {
+					logger.warn(
+						`[contradiction] ${logPrefix}LLM returned candidateId "${result.candidateId}" not in candidate list — skipping`,
+					);
+					continue;
+				}
+				detected++;
+				logger.log(
+					`[contradiction] ${logPrefix}${result.resolution}: "${entry.content.slice(0, 50)}..." vs candidate ${result.candidateId.slice(0, 8)}... — ${result.reason}`,
+				);
+
+				const mergedData =
+					result.resolution === "merge" &&
+					result.mergedContent &&
+					result.mergedType &&
+					result.mergedTopics &&
+					result.mergedConfidence !== undefined
+						? {
+								content: result.mergedContent,
+								type: result.mergedType,
+								topics: result.mergedTopics,
+								confidence: result.mergedConfidence,
+							}
+						: undefined;
+
+				this.db.applyContradictionResolution(
+					result.resolution,
+					entry.id,
+					result.candidateId,
+					mergedData,
+				);
+
+				if (result.resolution !== "irresolvable") {
+					resolved++;
+				}
+
+				if (
+					result.resolution === "supersede_old" ||
+					result.resolution === "merge"
+				) {
+					supersededInThisScan.add(result.candidateId);
+					entriesMap.delete(result.candidateId);
+				}
+
+				if (result.resolution === "supersede_new") {
+					supersededInThisScan.add(entry.id);
+					entriesMap.delete(entry.id);
+					entrySuperseded = true;
+					break; // stop processing results in this batch
+				}
+			}
+
+			if (entrySuperseded) break; // stop processing remaining batches
+		}
+
+		return { entrySuperseded, detected, resolved };
 	}
 
 	/**
@@ -97,90 +236,15 @@ export class ContradictionScanner {
 				`[contradiction] Checking ${midBandCandidates.length} candidates for "${entry.content.slice(0, 60)}..."`,
 			);
 
-			const validCandidateIds = new Set(midBandCandidates.map((c) => c.id));
-
-			const llmStart = Date.now();
-			const results = await this.llm.detectAndResolveContradiction(
-				{
-					id: entry.id,
-					content: entry.content,
-					type: entry.type,
-					topics: entry.topics,
-					confidence: entry.confidence,
-					createdAt: entry.createdAt,
-				},
-				midBandCandidates.map((c) => ({
-					id: c.id,
-					content: c.content,
-					type: c.type,
-					topics: c.topics,
-					confidence: c.confidence,
-					createdAt: c.createdAt,
-				})),
+			const { entrySuperseded, detected: d, resolved: r } = await this.runBatched(
+				entry,
+				midBandCandidates,
+				supersededInThisScan,
+				entriesMap,
+				"",
 			);
-			logger.log(
-				`[contradiction] LLM responded in ${((Date.now() - llmStart) / 1000).toFixed(1)}s (${midBandCandidates.length} candidates).`,
-			);
-
-			let entrySuperseded = false;
-			for (const result of results) {
-				// Guard: reject any candidateId the LLM returned that was not in the
-				// input candidate list. A hallucinated ID would silently no-op (UPDATE
-				// WHERE id = <non-existent>) or — worse — self-supersede the newEntry
-				// if the LLM echoed entry.id back as the candidateId.
-				if (!validCandidateIds.has(result.candidateId)) {
-					logger.warn(
-						`[contradiction] LLM returned candidateId "${result.candidateId}" not in candidate list — skipping`,
-					);
-					continue;
-				}
-				detected++;
-				logger.log(
-					`[contradiction] ${result.resolution}: "${entry.content.slice(0, 50)}..." vs candidate ${result.candidateId.slice(0, 8)}... — ${result.reason}`,
-				);
-
-				const mergedData =
-					result.resolution === "merge" &&
-					result.mergedContent &&
-					result.mergedType &&
-					result.mergedTopics &&
-					result.mergedConfidence !== undefined
-						? {
-								content: result.mergedContent,
-								type: result.mergedType,
-								topics: result.mergedTopics,
-								confidence: result.mergedConfidence,
-							}
-						: undefined;
-
-				this.db.applyContradictionResolution(
-					result.resolution,
-					entry.id,
-					result.candidateId,
-					mergedData,
-				);
-
-				// supersede_old, supersede_new, and merge are all "resolved" — irresolvable needs human
-				if (result.resolution !== "irresolvable") {
-					resolved++;
-				}
-
-				if (
-					result.resolution === "supersede_old" ||
-					result.resolution === "merge"
-				) {
-					// Candidate is now superseded — don't let later entries re-process it
-					supersededInThisScan.add(result.candidateId);
-				}
-
-				if (result.resolution === "supersede_new") {
-					// This entry lost — remove from map and stop checking its other candidates
-					supersededInThisScan.add(entry.id);
-					entriesMap.delete(entry.id);
-					entrySuperseded = true;
-					break;
-				}
-			}
+			detected += d;
+			resolved += r;
 
 			if (entrySuperseded) continue;
 		}
@@ -228,83 +292,15 @@ export class ContradictionScanner {
 				`[contradiction] Intra-chunk: checking ${intraChunkCandidates.length} same-chunk candidates for "${entryA.content.slice(0, 60)}..."`,
 			);
 
-			const validCandidateIds = new Set(intraChunkCandidates.map((c) => c.id));
-			const llmStart = Date.now();
-			const results = await this.llm.detectAndResolveContradiction(
-				{
-					id: entryA.id,
-					content: entryA.content,
-					type: entryA.type,
-					topics: entryA.topics,
-					confidence: entryA.confidence,
-					createdAt: entryA.createdAt,
-				},
-				intraChunkCandidates.map((c) => ({
-					id: c.id,
-					content: c.content,
-					type: c.type,
-					topics: c.topics,
-					confidence: c.confidence,
-					createdAt: c.createdAt,
-				})),
+			const { entrySuperseded: entryASuperseded, detected: d, resolved: r } = await this.runBatched(
+				{ ...entryA, embedding: entryA.embedding },
+				intraChunkCandidates,
+				supersededInThisScan,
+				entriesMap,
+				"Intra-chunk: ",
 			);
-			logger.log(
-				`[contradiction] Intra-chunk LLM responded in ${((Date.now() - llmStart) / 1000).toFixed(1)}s (${intraChunkCandidates.length} candidates).`,
-			);
-
-			let entryASuperseded = false;
-			for (const result of results) {
-				if (!validCandidateIds.has(result.candidateId)) {
-					logger.warn(
-						`[contradiction] Intra-chunk: LLM returned candidateId "${result.candidateId}" not in candidate list — skipping`,
-					);
-					continue;
-				}
-				detected++;
-				logger.log(
-					`[contradiction] Intra-chunk ${result.resolution}: "${entryA.content.slice(0, 50)}..." vs candidate ${result.candidateId.slice(0, 8)}... — ${result.reason}`,
-				);
-
-				const mergedData =
-					result.resolution === "merge" &&
-					result.mergedContent &&
-					result.mergedType &&
-					result.mergedTopics &&
-					result.mergedConfidence !== undefined
-						? {
-								content: result.mergedContent,
-								type: result.mergedType,
-								topics: result.mergedTopics,
-								confidence: result.mergedConfidence,
-							}
-						: undefined;
-
-				this.db.applyContradictionResolution(
-					result.resolution,
-					entryA.id,
-					result.candidateId,
-					mergedData,
-				);
-
-				if (result.resolution !== "irresolvable") {
-					resolved++;
-				}
-
-				if (
-					result.resolution === "supersede_old" ||
-					result.resolution === "merge"
-				) {
-					supersededInThisScan.add(result.candidateId);
-					entriesMap.delete(result.candidateId);
-				}
-
-				if (result.resolution === "supersede_new") {
-					supersededInThisScan.add(entryA.id);
-					entriesMap.delete(entryA.id);
-					entryASuperseded = true;
-					break;
-				}
-			}
+			detected += d;
+			resolved += r;
 
 			if (entryASuperseded) continue;
 		}
