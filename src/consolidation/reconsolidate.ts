@@ -560,7 +560,7 @@ export class Reconsolidator {
 								"[synthesis] Synthesis result matches existing principle — kept (no duplicate inserted).",
 							);
 						},
-						},
+					},
 						undefined, // no sessionTimestamp — synthesized entries stamped at now
 						synthEmbedding,
 						"synthesis", // logPrefix — keeps synthesis reconsolidation out of [consolidation] logs
