@@ -384,6 +384,27 @@ Options:
 				await new Promise((resolve) => setTimeout(resolve, delay));
 			}
 		}
+
+		// Run KB synthesis once after all batches complete (unconditional — synthesis
+		// short-circuits cheaply in runKBSynthesis when no clusters are ripe).
+		// Runs even if no new sessions were processed this drain: cluster membership
+		// can change from a previous drain, and synthesis should catch up regardless.
+		if (!shutdownRequested) {
+			logger.log(`[${label}] Running KB synthesis pass...`);
+			try {
+				if (consolidation.tryLock()) {
+					try {
+						await consolidation.runSynthesis();
+					} finally {
+						consolidation.unlock();
+					}
+				} else {
+					logger.error(`[${label}] Could not acquire lock for synthesis — skipping.`);
+				}
+			} catch (err) {
+				logger.error(`[${label}] KB synthesis failed:`, err);
+			}
+		}
 	}
 
 	// Startup drain

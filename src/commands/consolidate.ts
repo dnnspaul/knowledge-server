@@ -89,6 +89,18 @@ export async function runConsolidate(): Promise<void> {
 			batch++;
 		}
 
+		// Run KB synthesis once after all batches, same as the server-side drain.
+		if (totalSessions > 0) {
+			console.log("\nRunning KB synthesis pass...");
+			if (consolidation.tryLock()) {
+				try {
+					await consolidation.runSynthesis();
+				} finally {
+					consolidation.unlock();
+				}
+			}
+		}
+
 		console.log("");
 		console.log("Consolidation complete.");
 		console.log(`  Sessions processed: ${totalSessions}`);

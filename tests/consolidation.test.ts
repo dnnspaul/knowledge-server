@@ -745,6 +745,7 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 		const synthSpy = spyOn(ConsolidationLLM.prototype, "synthesizePrinciple").mockResolvedValue([]);
 
 		await engine.consolidate();
+		await engine.runSynthesis();
 
 		// 2 entries → 1-2 member cluster → below CLUSTER_MIN_MEMBERS=3 → no synthesis
 		expect(synthSpy).not.toHaveBeenCalled();
@@ -767,6 +768,7 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 		const synthSpy = spyOn(ConsolidationLLM.prototype, "synthesizePrinciple").mockResolvedValue([]);
 
 		await engine.consolidate();
+		await engine.runSynthesis();
 
 		// 3 identical-embedding entries → 1 cluster with 3 members → ripe (new) → synthesis fires
 		expect(synthSpy).toHaveBeenCalledTimes(1);
@@ -799,6 +801,7 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 		]);
 
 		await engine.consolidate();
+		await engine.runSynthesis();
 
 		const allEntries = db.getEntries({});
 		const synthesized = allEntries.find((e) => e.content === "Static typing produces more reliable code.");

@@ -195,13 +195,6 @@ export class ConsolidationEngine {
 			}
 		}
 
-		// KB-wide synthesis pass: cluster well-reinforced entries and attempt to
-		// synthesize higher-order principles. Runs after ensureEmbeddings so all
-		// entries (including those just inserted this run) have embeddings.
-		// Synthesis results go through reconsolidate() for deduplication — existing
-		// equivalent principles block duplicate insertion.
-		await this.reconsolidator.runKBSynthesis();
-
 		this.db.updateConsolidationState({
 			lastConsolidatedAt: Date.now(),
 			totalSessionsProcessed:
@@ -621,6 +614,21 @@ export class ConsolidationEngine {
 		}
 
 		return archived;
+	}
+
+	/**
+	 * KB-wide synthesis pass: cluster all active entries and attempt to synthesize
+	 * higher-order principles from each ripe cluster.
+	 *
+	 * Intentionally separated from consolidate() so callers can run all consolidation
+	 * batches first and then synthesize once — rather than synthesizing after every
+	 * batch, which re-clusters and re-synthesizes an ever-growing KB on each pass.
+	 *
+	 * Must be called after ensureEmbeddings() has run (i.e. after consolidate()) so
+	 * all entries have embeddings. Returns the number of principles synthesized.
+	 */
+	async runSynthesis(): Promise<number> {
+		return this.reconsolidator.runKBSynthesis();
 	}
 
 	close(): void {

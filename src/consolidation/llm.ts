@@ -271,6 +271,7 @@ DO NOT ENCODE if:
 - It's a version number, model name, or configuration value likely to change soon
 - The session was mostly back-and-forth clarification with no concrete outcome
 - It's a specific numerical result, statistical output, or data finding from a one-off analysis (e.g., "the R2 shift centerline moved from 0.57 to 0.50", "bootstrap delta was -1.3pp"). Ask: is the *conclusion* reusable, or just the number? The number itself is almost never worth encoding — the conclusion it supports might be (e.g., "App→CR conversion rate shows a structural decline unrelated to per-application behaviour" is encodable; the specific coefficients that proved it are not).
+- It's general technical or domain knowledge that any competent LLM already knows. Examples of things NOT worth encoding: how regression modelling works, what a p-value is, standard SQL syntax, general software engineering patterns (e.g. "use indexes for performance"), well-known ML concepts, widely-documented framework behaviour. Only encode knowledge that is SPECIFIC TO THIS USER, PROJECT, TEAM, OR CODEBASE — things that cannot be inferred from general training. Ask: "Would a knowledgeable colleague who had just joined this team need this, or would they already know it?" If they'd already know it, skip it.
 
 KNOWLEDGE EVOLUTION — when existing knowledge should be upgraded:
 - If a new episode reinforces an earlier observation into a recurring pattern, extract the generalized version.
