@@ -525,7 +525,12 @@ export function validateConfig(): string[] {
 		const parsed = Number.parseFloat(
 			process.env.RECONSOLIDATION_SIMILARITY_THRESHOLD ?? "",
 		);
-		return Number.isNaN(parsed) ? RECONSOLIDATION_THRESHOLD_DEFAULT : parsed;
+		// Fall back to default if NaN or out-of-range, so an invalid
+		// RECONSOLIDATION_SIMILARITY_THRESHOLD doesn't generate a spurious
+		// second error blaming CONTRADICTION_MIN_SIMILARITY.
+		return Number.isNaN(parsed) || parsed <= 0 || parsed > 1
+			? RECONSOLIDATION_THRESHOLD_DEFAULT
+			: parsed;
 	})();
 	validateFloatRange(
 		process.env.CONTRADICTION_MIN_SIMILARITY,
