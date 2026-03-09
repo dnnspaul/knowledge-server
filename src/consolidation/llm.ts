@@ -20,10 +20,12 @@ import type {
  * - Which provider SDK to use (Anthropic, Google, OpenAI-compatible)
  * - Which base URL suffix on the unified endpoint
  *
- * Three independent model slots (all configurable via env vars):
+ * Four independent model slots (all configurable via env vars):
  * - extractionModel   — episode → knowledge extraction   (LLM_EXTRACTION_MODEL)
  * - mergeModel        — near-duplicate merge decision     (LLM_MERGE_MODEL)
  * - contradictionModel — contradiction detect + resolve   (LLM_CONTRADICTION_MODEL)
+ * - synthesisModel    — cross-session principle synthesis (LLM_SYNTHESIS_MODEL,
+ *                       defaults to LLM_EXTRACTION_MODEL or claude-sonnet-4-6)
  */
 
 /**
@@ -511,7 +513,7 @@ If a higher-order principle or pattern emerges across these entries that none of
 If no meaningful synthesis is possible, return: {}`;
 
 		const response = await complete(
-			config.llm.extractionModel,
+			config.llm.synthesisModel,
 			systemPrompt,
 			userPrompt,
 			2048,

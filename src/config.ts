@@ -126,10 +126,11 @@ export const config = {
 	// Per-provider credentials take precedence over the unified endpoint.
 	// At least one credential source must be configured; validateConfig() checks this.
 	//
-	// Three model slots with independent defaults — tune cost vs quality per task:
+	// Four model slots with independent defaults — tune cost vs quality per task:
 	//   extractionModel    — full episode → knowledge extraction (complex reasoning)
 	//   mergeModel         — decideMerge near-duplicate comparison (structured, cheap)
 	//   contradictionModel — detect + resolve contradictions (nuanced, fires rarely)
+	//   synthesisModel     — cross-session principle synthesis (rare, high-quality)
 	llm: {
 		// Unified proxy fallback (backwards compatible)
 		baseEndpoint: process.env.LLM_BASE_ENDPOINT || "",
@@ -152,6 +153,13 @@ export const config = {
 		mergeModel: process.env.LLM_MERGE_MODEL || "anthropic/claude-haiku-4-5",
 		contradictionModel:
 			process.env.LLM_CONTRADICTION_MODEL || "anthropic/claude-sonnet-4-6",
+		// Synthesis fires rarely (at obs=10, 20, 30, ...) and produces abstract
+		// principles — worth using a capable model. Defaults to extractionModel
+		// so existing deployments are unaffected without LLM_SYNTHESIS_MODEL set.
+		synthesisModel:
+			process.env.LLM_SYNTHESIS_MODEL ||
+			process.env.LLM_EXTRACTION_MODEL ||
+			"anthropic/claude-sonnet-4-6",
 		// Per-call timeout in milliseconds. Applied per attempt (not across all retries).
 		// Default: 5 minutes. Large contradiction batches (50+ candidates) can take
 		// 2–3 minutes for a complex Sonnet response; 5 minutes gives headroom while
