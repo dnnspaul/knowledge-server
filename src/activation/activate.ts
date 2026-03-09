@@ -116,7 +116,20 @@ export class ActivationEngine {
 
 		// Score each entry against ALL query vectors; keep its best similarity.
 		// This ensures a multi-topic message activates relevant entries for each topic.
-		const scored = entries
+		// Typed as KnowledgeEntry (not the narrower & { embedding: number[] }) so that
+		// source entries fetched via getSupportSourcesForIds() can be pushed later without
+		// a type error (those entries may have embedding undefined).
+		const scored: Array<{
+			entry: KnowledgeEntry;
+			rawSimilarity: number;
+			similarity: number;
+			staleness: {
+				ageDays: number;
+				strength: number;
+				lastAccessedDaysAgo: number;
+				mayBeStale: boolean;
+			};
+		}> = entries
 			.map((entry) => {
 				const rawSimilarity = Math.max(
 					...queryEmbeddings.map((qEmb) =>

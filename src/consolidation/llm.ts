@@ -698,7 +698,7 @@ export interface SynthesisResult {
 	content: string;
 	topics: string[];
 	confidence: number;
-	/** IDs of neighbor entries that contributed to this synthesis (validated against input list). */
+	/** IDs of peer entries from the cluster that contributed to this synthesis (validated against the input list). */
 	sourceIds: string[];
 }
 

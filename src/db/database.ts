@@ -11,7 +11,6 @@ import type {
 	KnowledgeEntry,
 	KnowledgeRelation,
 	KnowledgeStatus,
-	KnowledgeType,
 	ProcessedRange,
 	SourceCursor,
 } from "../types.js";

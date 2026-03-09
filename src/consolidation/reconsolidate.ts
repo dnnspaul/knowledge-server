@@ -240,7 +240,7 @@ export class Reconsolidator {
 	 *
 	 * Algorithm:
 	 * 1. CLUSTER FORMATION (in-memory, O(n×k)):
-	 *    - Sort all active entries by observationCount desc (most-evidenced anchor first).
+	 *    - Sort all active entries by observationCount desc (most-evidenced entries seed clusters first).
 	 *    - Greedy assign each entry to nearest existing cluster if centroid similarity
 	 *      ≥ CLUSTER_ASSIGNMENT_THRESHOLD (0.5), else start a new cluster.
 	 *    - Update centroid as running average after each assignment.
