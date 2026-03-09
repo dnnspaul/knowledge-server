@@ -240,10 +240,13 @@ export const config = {
 		// When an entry's observation_count reaches this value (or the next multiple of it),
 		// the system looks at its KB neighbors and attempts to synthesize a higher-order
 		// principle. Set to 0 to disable synthesis entirely.
-		// Default: 3 (fires after 3 independent session confirmations, then at 6, 9, ...).
+		// Default: 10 (fires at obs=10, 20, 30, ... — 9 reinforcements for the first trigger).
+		// observationCount starts at 1 (insertion), so threshold=10 means 9 reinforcements.
+		// Lower values fire more aggressively but with weaker evidence — 3 fires after only
+		// 2 confirmations, which is too weak a signal for reliable principle extraction.
 		synthesisObservationThreshold: parseIntEnv(
 			process.env.CONSOLIDATION_SYNTHESIS_THRESHOLD,
-			3,
+			10,
 			0,
 		),
 		// Polling interval for background auto-consolidation while the server is running.

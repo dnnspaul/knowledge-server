@@ -176,25 +176,29 @@ export class Reconsolidator {
 						const obs = freshEntry.observationCount;
 						const lastSynth = freshEntry.lastSynthesizedObservationCount ?? 0;
 						// Fire when obs has crossed a new threshold multiple since last synthesis
-						const nextThreshold = lastSynth + threshold;
-					if (obs >= nextThreshold) {
-						// Don't await — synthesis is best-effort and should not block
-						// the consolidation loop. Errors are logged and swallowed.
-						// Note: attemptSynthesis calls markSynthesized before the LLM call.
-						// A transient LLM failure will therefore suppress a retry for the
-						// current threshold cycle. This is an intentional trade-off — the
-						// alternative (marking after) risks duplicate synthesis under concurrent
-						// keep events. The next threshold multiple (obs + threshold) will trigger
-						// a fresh attempt.
-						this.attemptSynthesis(freshEntry, entriesMap).catch((err) => {
-							// markSynthesized was called before the LLM attempt, so the stamp
-							// is persisted even on failure. The next retry fires at
-							// obs = freshEntry.observationCount + threshold.
-							logger.warn(
-								`[consolidation] Synthesis failed for entry ${freshEntry.id} (stamp persisted at obs=${freshEntry.observationCount}; next attempt at obs=${freshEntry.observationCount + threshold}): ${err instanceof Error ? err.message : String(err)}`,
-							);
-						});
-					}
+					const nextThreshold = lastSynth + threshold;
+						if (obs >= nextThreshold) {
+							// Don't await — synthesis is best-effort and should not block
+							// the consolidation loop. Errors are logged and swallowed.
+							// Note: attemptSynthesis calls markSynthesized before the LLM call.
+							// A transient LLM failure will therefore suppress a retry for the
+							// current threshold cycle. This is an intentional trade-off — the
+							// alternative (marking after) risks duplicate synthesis under concurrent
+							// keep events. The next threshold multiple (obs + threshold) will trigger
+							// a fresh attempt.
+							//
+							// Pass the in-memory anchor embedding as a hint so attemptSynthesis
+							// avoids a DB round-trip for the embedding lookup.
+							const anchorEmbeddingHint = entriesMap.get(nearestEntry.id)?.embedding;
+							this.attemptSynthesis(freshEntry, entriesMap, anchorEmbeddingHint).catch((err) => {
+								// markSynthesized was called before the LLM attempt, so the stamp
+								// is persisted even on failure. The next retry fires at
+								// obs = freshEntry.observationCount + threshold.
+								logger.warn(
+									`[consolidation] Synthesis failed for entry ${freshEntry.id} (stamp persisted at obs=${freshEntry.observationCount}; next attempt at obs=${freshEntry.observationCount + threshold}): ${err instanceof Error ? err.message : String(err)}`,
+								);
+							});
+						}
 					}
 				}
 				break;
@@ -227,6 +231,24 @@ export class Reconsolidator {
 					`[consolidation] ${decision.action === "update" ? "Updated" : "Replaced"}: "${nearestEntry.content.slice(0, 60)}..." → "${decision.content.slice(0, 60)}..."`,
 				);
 				callbacks.onUpdate(nearestEntry.id, mergeUpdates, freshEmbedding);
+
+				// mergeEntry increments observation_count — check synthesis threshold.
+				// Same logic as the keep branch: read the fresh post-merge value from DB.
+				const mergeThreshold = config.consolidation.synthesisObservationThreshold;
+				if (mergeThreshold > 0) {
+					const mergedEntry = this.db.getEntry(nearestEntry.id);
+					if (mergedEntry) {
+						const mergeObs = mergedEntry.observationCount;
+						const mergeLastSynth = mergedEntry.lastSynthesizedObservationCount ?? 0;
+						if (mergeObs >= mergeLastSynth + mergeThreshold) {
+							this.attemptSynthesis(mergedEntry, entriesMap, freshEmbedding).catch((err) => {
+								logger.warn(
+									`[consolidation] Synthesis failed for entry ${mergedEntry.id} (stamp persisted at obs=${mergedEntry.observationCount}; next attempt at obs=${mergedEntry.observationCount + mergeThreshold}): ${err instanceof Error ? err.message : String(err)}`,
+								);
+							});
+						}
+					}
+				}
 				break;
 			}
 
@@ -244,10 +266,12 @@ export class Reconsolidator {
 	/**
 	 * Attempt cross-session synthesis for a well-reinforced entry.
 	 *
-	 * Finds the entry's nearest KB neighbors (by embedding similarity),
-	 * asks the LLM whether a higher-order principle emerges across them,
-	 * and if so inserts it as a new entry with `supports` relations back
-	 * to the anchor and contributing neighbors.
+	 * Builds the neighborhood from the FULL active KB plus the caller's in-memory
+	 * entriesMap. The two sources are merged with entriesMap taking precedence:
+	 * entries inserted/updated in the current run may have embedding=NULL in DB
+	 * (ensureEmbeddings runs after the consolidation loop) but are available with
+	 * fresh embeddings in the map — merging ensures they are not silently excluded
+	 * from the neighborhood pool.
 	 *
 	 * This is intentionally fire-and-forget (called without await) so it
 	 * never blocks the consolidation loop. Errors are caught by the caller.
@@ -255,12 +279,16 @@ export class Reconsolidator {
 	private async attemptSynthesis(
 		anchor: KnowledgeEntry & { embedding?: number[] },
 		entriesMap: Map<string, KnowledgeEntry & { embedding: number[] }>,
+		anchorEmbeddingHint?: number[],
 	): Promise<void> {
-		// Need anchor embedding to find neighbors. Prefer the in-memory cache
-		// (entriesMap) to avoid a DB round-trip; fall back to a single-row DB
-		// query only if the anchor is absent from the map (e.g. first insertion
-		// within this consolidation run before the map was populated).
+		// Need anchor embedding to find neighbors.
+		// - For keep: use the cached embedding from entriesMap (content unchanged).
+		// - For update/replace: the caller passes freshEmbedding as hint (the just-
+		//   computed embedding for the merged content, same value mergeEntry wrote
+		//   to DB). This avoids an immediate DB re-read of the row we just updated.
+		// Fall back to a single-row DB query only when neither is available.
 		const anchorEmbedding =
+			anchorEmbeddingHint ??
 			entriesMap.get(anchor.id)?.embedding ??
 			anchor.embedding ??
 			this.db.getEntryEmbedding(anchor.id);
@@ -271,9 +299,21 @@ export class Reconsolidator {
 			return;
 		}
 
-		// Find top-N neighbors by cosine similarity (excluding anchor itself)
+		// Build candidate pool: start with the full DB (entries with committed embeddings)
+		// then overlay the in-memory map so that entries inserted/updated in the current
+		// run (embedding=NULL in DB until ensureEmbeddings runs) are not excluded.
+		// entriesMap entries take precedence — they carry the most current embeddings.
+		const dbEntries = this.db.getActiveEntriesWithEmbeddings();
+		const candidateMap = new Map<string, KnowledgeEntry & { embedding: number[] }>();
+		for (const e of dbEntries) {
+			candidateMap.set(e.id, e);
+		}
+		for (const e of entriesMap.values()) {
+			candidateMap.set(e.id, e); // in-memory overrides stale DB row
+		}
+
 		const scored: Array<{ entry: KnowledgeEntry & { embedding: number[] }; sim: number }> = [];
-		for (const candidate of entriesMap.values()) {
+		for (const candidate of candidateMap.values()) {
 			if (candidate.id === anchor.id) continue;
 			scored.push({
 				entry: candidate,
@@ -285,9 +325,9 @@ export class Reconsolidator {
 
 		if (neighbors.length === 0) {
 			logger.log(
-				`[synthesis] Skipping synthesis for ${anchor.id} — no neighbors in current chunk.`,
+				`[synthesis] Skipping synthesis for ${anchor.id} — KB has no other entries with embeddings yet.`,
 			);
-			// Don't mark synthesized here — the KB may gain neighbors on future runs.
+			// Don't mark synthesized here — the KB may gain entries on future runs.
 			// Unlike the null-result path (bar not met), this is a data-availability
 			// gap, not a signal that synthesis was attempted and failed. We want to
 			// retry when context is richer.

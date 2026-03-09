@@ -712,6 +712,18 @@ describe("ConsolidationEngine.reconsolidate() — 'keep' decision (above thresho
 });
 
 describe("ConsolidationEngine.reconsolidate() — synthesis trigger on 'keep'", () => {
+	// Override synthesis threshold to 3 for all tests in this block so they run
+	// quickly without needing obs=9 → 10 setups. Restored in afterEach.
+	const SYNTH_THRESHOLD = 3;
+	let originalThreshold: number;
+	beforeEach(() => {
+		originalThreshold = config.consolidation.synthesisObservationThreshold;
+		config.consolidation.synthesisObservationThreshold = SYNTH_THRESHOLD;
+	});
+	afterEach(() => {
+		config.consolidation.synthesisObservationThreshold = originalThreshold;
+	});
+
 	function makeEpisode() {
 		const now = Date.now();
 		return {
@@ -837,7 +849,7 @@ describe("ConsolidationEngine.reconsolidate() — synthesis trigger on 'keep'", 
 		await engine.consolidate();
 		await new Promise((r) => setTimeout(r, 10));
 
-		// Next threshold would be 3+3=6, obs=3 < 6 → no re-synthesis
+		// Next threshold would be 3+3=6, obs=4 < 6 → no re-synthesis
 		expect(synthSpy).not.toHaveBeenCalled();
 	});
 
@@ -892,7 +904,7 @@ describe("ConsolidationEngine.reconsolidate() — synthesis trigger on 'keep'", 
 		const synthesized = allEntries.find((e) => e.content === "Static typing produces more reliable code.");
 		expect(synthesized).toBeDefined();
 		expect(synthesized?.type).toBe("principle");
-		// anchor should be marked as synthesized
+		// anchor should be marked as synthesized at obs=3
 		const anchor = db.getEntry("ts-entry");
 		expect(anchor?.lastSynthesizedObservationCount).toBe(3);
 	});
@@ -952,6 +964,126 @@ describe("ConsolidationEngine.reconsolidate() — 'update' decision (above thres
 		);
 		expect(entry?.confidence).toBeCloseTo(0.92);
 		expect(entry?.status).toBe("active");
+	});
+});
+
+describe("ConsolidationEngine.reconsolidate() — synthesis trigger on 'update'", () => {
+	// Override synthesis threshold to 3 for all tests in this block.
+	const SYNTH_THRESHOLD = 3;
+	let originalThreshold: number;
+	beforeEach(() => {
+		originalThreshold = config.consolidation.synthesisObservationThreshold;
+		config.consolidation.synthesisObservationThreshold = SYNTH_THRESHOLD;
+	});
+	afterEach(() => {
+		config.consolidation.synthesisObservationThreshold = originalThreshold;
+	});
+
+	function makeEpisode() {
+		const now = Date.now();
+		return {
+			sessionId: "s1",
+			startMessageId: "m1",
+			endMessageId: "m2",
+			sessionTitle: "Test",
+			projectName: "test",
+			directory: "/tmp",
+			timeCreated: now,
+			maxMessageTime: now,
+			content: "user: hello\nassistant: world",
+			contentType: "messages" as const,
+			approxTokens: 10,
+		};
+	}
+
+	it("calls synthesizePrinciple when update pushes observation_count to threshold", async () => {
+		// Entry at obs=2; mergeEntry increments to 3 = threshold → synthesis fires
+		const emb = fakeEmbedding("TypeScript static");
+		db.insertEntry(
+			makeEntry({
+				id: "ts-entry",
+				content: "TypeScript is statically typed.",
+				topics: ["typescript"],
+				embedding: emb,
+				observationCount: 2,
+				lastSynthesizedObservationCount: null,
+			}),
+		);
+		db.insertEntry(
+			makeEntry({
+				id: "neighbor-entry",
+				content: "neighbor content about static analysis",
+				topics: ["analysis"],
+				embedding: fakeEmbedding("neighbor content"),
+				observationCount: 1,
+				lastSynthesizedObservationCount: null,
+			}),
+		);
+
+		spyOn(OpenCodeEpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+			{ id: "session-1", maxMessageTime: Date.now() },
+		]);
+		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
+		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+		spyOn(activation.embeddings, "embed").mockResolvedValue(emb);
+		spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([
+			{ type: "fact", content: "TypeScript uses static types.", topics: ["typescript"], confidence: 0.88, scope: "personal", source: "test" },
+		]);
+		spyOn(ConsolidationLLM.prototype, "decideMerge").mockResolvedValue({
+			action: "update",
+			content: "TypeScript is statically typed (confirmed).",
+			type: "fact",
+			topics: ["typescript"],
+			confidence: 0.9,
+		});
+		const synthSpy = spyOn(ConsolidationLLM.prototype, "synthesizePrinciple").mockResolvedValue(null);
+
+		await engine.consolidate();
+		await new Promise((r) => setTimeout(r, 50));
+
+		// obs=2 → update increments to 3 = threshold → synthesis fires
+		expect(synthSpy).toHaveBeenCalledTimes(1);
+		// anchor should be stamped as synthesized at obs=3
+		const anchor = db.getEntry("ts-entry");
+		expect(anchor?.lastSynthesizedObservationCount).toBe(3);
+	});
+
+	it("does not call synthesizePrinciple when update does not reach threshold", async () => {
+		// Entry at obs=1; after update it becomes 2 < threshold(3) → no synthesis
+		const emb = fakeEmbedding("TypeScript static");
+		db.insertEntry(
+			makeEntry({
+				id: "ts-entry",
+				content: "TypeScript is statically typed.",
+				topics: ["typescript"],
+				embedding: emb,
+				observationCount: 1,
+				lastSynthesizedObservationCount: null,
+			}),
+		);
+
+		spyOn(OpenCodeEpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
+			{ id: "session-1", maxMessageTime: Date.now() },
+		]);
+		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
+		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
+		spyOn(activation.embeddings, "embed").mockResolvedValue(emb);
+		spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([
+			{ type: "fact", content: "TypeScript uses static types.", topics: ["typescript"], confidence: 0.88, scope: "personal", source: "test" },
+		]);
+		spyOn(ConsolidationLLM.prototype, "decideMerge").mockResolvedValue({
+			action: "update",
+			content: "TypeScript is statically typed (confirmed).",
+			type: "fact",
+			topics: ["typescript"],
+			confidence: 0.9,
+		});
+		const synthSpy = spyOn(ConsolidationLLM.prototype, "synthesizePrinciple").mockResolvedValue(null);
+
+		await engine.consolidate();
+		await new Promise((r) => setTimeout(r, 10));
+
+		expect(synthSpy).not.toHaveBeenCalled();
 	});
 });
 

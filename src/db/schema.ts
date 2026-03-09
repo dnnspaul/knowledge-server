@@ -15,8 +15,12 @@
  * - knowledge_entry gains `last_synthesized_observation_count` (INTEGER, NULL).
  *   NULL = never synthesized. When synthesis fires, this is set to the entry's
  *   current observation_count. Re-synthesis triggers when observation_count
- *   crosses the next threshold multiple (e.g. 3, 6, 9, ...) beyond the stored value.
+ *   crosses the next threshold multiple (e.g. 10, 20, 30, ... with default threshold=10)
+ *   beyond the stored value.
  *   Tracked per-entry so synthesis never fires twice for the same evidence level.
+ * - MIGRATION: v6 → v7 is incremental (ALTER TABLE, no data loss). Existing
+ *   entries receive NULL for last_synthesized_observation_count, which is the
+ *   correct initial state. All earlier version upgrades still wipe and recreate.
  *
  * v6: Multi-source support.
  * - consolidated_episode gains a `source` column (e.g. "opencode", "claude-code")

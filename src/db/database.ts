@@ -76,23 +76,92 @@ export class KnowledgeDB {
 		// column to the DDL automatically gets caught here without touching this method.
 		const missingColumns = this.getSchemaDrift();
 
+		// ── Incremental migrations ────────────────────────────────────────────────
+		// For additive-only changes (new nullable columns, new indices) we can
+		// ALTER TABLE instead of wiping the DB, preserving existing knowledge data.
+		// Each migration is idempotent: if the column already exists the ALTER is
+		// skipped (detected via getSchemaDrift before reaching this block).
+		//
+		// v6 → v7: adds last_synthesized_observation_count (nullable INTEGER).
+		//   No data loss: existing entries get NULL (= never synthesized), which is
+		//   the correct initial state. Synthesis works correctly from day one.
+		//   ALTER TABLE and version bump are wrapped in a single transaction so a
+		//   crash between them cannot leave the DB in a half-migrated state (column
+		//   added but version still 6, which would re-trigger the wipe path on next
+		//   startup instead of re-running the safe ALTER).
+		let incrementalMigrationApplied = false;
+		if (
+			existingVersion === 6 &&
+			missingColumns.some(
+				(d) =>
+					d.table === "knowledge_entry" &&
+					d.column === "last_synthesized_observation_count",
+			) &&
+			// Only attempt if this is the sole missing column — if other columns are
+			// also absent we fall through to the full reset so all gaps are resolved.
+			missingColumns.length === 1
+		) {
+			logger.log(
+				"[db] Applying incremental migration v6 → v7: adding last_synthesized_observation_count column.",
+			);
+			// Atomic: if the process crashes mid-transaction, SQLite rolls back both
+			// the ALTER and the version insert, leaving the DB at v6 (re-migratable).
+			this.db.transaction(() => {
+				this.db.exec(
+					"ALTER TABLE knowledge_entry ADD COLUMN last_synthesized_observation_count INTEGER",
+				);
+				this.db
+					.prepare(
+						"INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+					)
+					.run(SCHEMA_VERSION, Date.now());
+			})();
+			// Re-check drift after migration — should now be clean.
+			const remainingDrift = this.getSchemaDrift();
+			if (remainingDrift.length === 0) {
+				incrementalMigrationApplied = true;
+				logger.log("[db] Incremental migration v6 → v7 complete.");
+			} else {
+				// Unexpected: migration ran but drift persists — fall through to reset.
+				logger.warn(
+					`[db] Incremental migration v6 → v7 left unexpected drift: ${remainingDrift.map((d) => `${d.table}.${d.column}`).join(", ")}. Falling through to full reset.`,
+				);
+			}
+		}
+		// ─────────────────────────────────────────────────────────────────────────
+
+		// Re-read the current state after any incremental migrations above.
+		// Skipped when an incremental migration succeeded — we know the state is clean.
+		const currentVersion = incrementalMigrationApplied
+			? SCHEMA_VERSION
+			: ((
+					this.db
+						.prepare(
+							"SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+						)
+						.get() as { version: number } | null
+				)?.version ?? 0);
+		const remainingMissingColumns = incrementalMigrationApplied
+			? []
+			: this.getSchemaDrift();
+
 		const needsReset =
+			!incrementalMigrationApplied &&
 			// Explicit version lag: recorded version is older than current code
-			(existingVersion > 0 && existingVersion < SCHEMA_VERSION) ||
-			// Schema drift: a table exists but is missing one or more required columns
-			missingColumns.length > 0;
+			((currentVersion > 0 && currentVersion < SCHEMA_VERSION) ||
+				// Schema drift: a table exists but is missing one or more required columns
+				remainingMissingColumns.length > 0);
 
 		if (needsReset) {
-			// Existing DB is from an older schema. Since we have no incremental migrations
-			// (single clean schema, solo-use project), drop all tables and start fresh.
-			// This is a hard reset — the caller is expected to run POST /consolidate
-			// after the server starts to rebuild the knowledge graph.
+			// Existing DB is from an older schema with no incremental migration path.
+			// Drop all tables and start fresh — the caller is expected to run
+			// POST /consolidate after the server starts to rebuild the knowledge graph.
 			const driftDetail =
-				missingColumns.length > 0
-					? ` (missing columns: ${missingColumns.map((d) => `${d.table}.${d.column}`).join(", ")})`
+				remainingMissingColumns.length > 0
+					? ` (missing columns: ${remainingMissingColumns.map((d) => `${d.table}.${d.column}`).join(", ")})`
 					: "";
 			logger.warn(
-				`[db] Schema mismatch: DB is v${existingVersion}, code expects v${SCHEMA_VERSION}${driftDetail}. Dropping and recreating all tables. All existing knowledge data has been cleared.`,
+				`[db] Schema mismatch: DB is v${currentVersion}, code expects v${SCHEMA_VERSION}${driftDetail}. Dropping and recreating all tables. All existing knowledge data has been cleared.`,
 			);
 			// Wrap in a transaction so a crash mid-drop leaves the DB in its original
 			// state (all tables intact) rather than a half-torn-down state.
