@@ -448,29 +448,30 @@ export async function runCalibrate(): Promise<void> {
 	const currentContradictionMin = config.consolidation.contradictionMinSimilarity;
 	const currentActivation = config.activation.similarityThreshold;
 
+	const reconsolidationChanged = currentReconsolidation.toFixed(2) !== reconsolidation.toFixed(2);
+	const contradictionMinChanged = currentContradictionMin.toFixed(2) !== contradictionMin.toFixed(2);
+	const activationChanged = currentActivation.toFixed(2) !== activation.toFixed(2);
+
 	console.log("  Current vs Recommended");
 	console.log("  ─────────────────────────────────────────────────────────────");
-	console.log(`  Reconsolidation:       ${currentReconsolidation.toFixed(2)} \u2192 ${reconsolidation.toFixed(2)}${currentReconsolidation === reconsolidation ? "  (no change)" : ""}`);
-	console.log(`  Contradiction min:     ${currentContradictionMin.toFixed(2)} \u2192 ${contradictionMin.toFixed(2)}${currentContradictionMin === contradictionMin ? "  (no change)" : ""}`);
-	console.log(`  Activation threshold:  ${currentActivation.toFixed(2)} \u2192 ${activation.toFixed(2)}${currentActivation === activation ? "  (no change)" : ""}`);
+	console.log(`  Reconsolidation:       ${currentReconsolidation.toFixed(2)} \u2192 ${reconsolidation.toFixed(2)}${reconsolidationChanged ? "" : "  (no change)"}`);
+	console.log(`  Contradiction min:     ${currentContradictionMin.toFixed(2)} \u2192 ${contradictionMin.toFixed(2)}${contradictionMinChanged ? "" : "  (no change)"}`);
+	console.log(`  Activation threshold:  ${currentActivation.toFixed(2)} \u2192 ${activation.toFixed(2)}${activationChanged ? "" : "  (no change)"}`);
 	console.log("");
 
 	// Output ready-to-paste env vars if any value changed.
-	const anyChanged =
-		reconsolidation !== currentReconsolidation ||
-		contradictionMin !== currentContradictionMin ||
-		activation !== currentActivation;
+	const anyChanged = reconsolidationChanged || contradictionMinChanged || activationChanged;
 
 	if (anyChanged) {
 		console.log("  To apply, add these to your .env file:");
 		console.log("");
-		if (reconsolidation !== currentReconsolidation) {
+		if (reconsolidationChanged) {
 			console.log(`    RECONSOLIDATION_SIMILARITY_THRESHOLD=${reconsolidation.toFixed(2)}`);
 		}
-		if (contradictionMin !== currentContradictionMin) {
+		if (contradictionMinChanged) {
 			console.log(`    CONTRADICTION_MIN_SIMILARITY=${contradictionMin.toFixed(2)}`);
 		}
-		if (activation !== currentActivation) {
+		if (activationChanged) {
 			console.log(`    ACTIVATION_SIMILARITY_THRESHOLD=${activation.toFixed(2)}`);
 		}
 		console.log("");

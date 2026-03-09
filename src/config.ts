@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { DEFAULT_RECONSOLIDATION_THRESHOLD } from "./types.js";
+
 /**
  * Parse an integer environment variable with a fallback default and optional
  * minimum clamp. Returns `defaultVal` when the variable is absent, empty, or
