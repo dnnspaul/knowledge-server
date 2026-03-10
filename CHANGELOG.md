@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.3](https://github.com/MAnders333/knowledge-server/compare/v2.6.2...v2.6.3) (2026-03-10)
+
+
+### Bug Fixes
+
+* **api:** re-embed patched entries and refresh docs ([ccdac7e](https://github.com/MAnders333/knowledge-server/commit/ccdac7e42cf7d3fc8f24304d152cc66c179d8674))
+
 ## [2.6.2](https://github.com/MAnders333/knowledge-server/compare/v2.6.1...v2.6.2) (2026-03-09)
 
 
