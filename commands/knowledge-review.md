@@ -15,7 +15,11 @@ allowing the curl commands below to reference it:
 
 ```bash
 # Load token from .env (preferred — token never appears in history)
-TOKEN="$(grep '^KNOWLEDGE_ADMIN_TOKEN=' ~/.local/share/knowledge-server/.env 2>/dev/null | cut -d= -f2-)"
+TOKEN="$(grep '^KNOWLEDGE_ADMIN_TOKEN=' ~/.config/knowledge-server/.env 2>/dev/null | cut -d= -f2-)"
+# Legacy location fallback for older installs
+if [ -z "$TOKEN" ]; then
+  TOKEN="$(grep '^KNOWLEDGE_ADMIN_TOKEN=' ~/.local/share/knowledge-server/.env 2>/dev/null | cut -d= -f2-)"
+fi
 # If not set in .env, the token was printed at server startup — paste it here:
 # TOKEN="paste-token-here"
 echo "Token loaded: ${#TOKEN} chars"
@@ -68,13 +72,13 @@ curl -s -X DELETE -H "Authorization: Bearer $TOKEN" \
 Entries with low strength haven't been accessed recently. For each:
 
 - Show the content, type, and current strength
-- Ask: **keep** (no action), **archive** (set status to superseded), or **delete**
+- Ask: **keep** (no action), **archive** (set status to archived), or **delete**
 
 To archive (soft removal):
 ```bash
 curl -s -X PATCH -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"status":"superseded"}' \
+  -d '{"status":"archived"}' \
   http://127.0.0.1:3179/entries/:id
 ```
 
@@ -91,7 +95,7 @@ High-confidence entries scoped to `team`. These may be worth copying into shared
 - Is this accurate and still current?
 - Does it belong in external docs?
 
-If the content needs correction, use PATCH:
+If the content needs correction, use PATCH (content/topic edits automatically re-compute the embedding):
 ```bash
 curl -s -X PATCH -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \

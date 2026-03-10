@@ -8,6 +8,7 @@ import { bodyLimit } from "hono/body-limit";
 import pkg from "../../package.json" with { type: "json" };
 import type { ActivationEngine } from "../activation/activate.js";
 import { splitIntoCues } from "../activation/activate.js";
+import { formatEmbeddingText } from "../activation/embeddings.js";
 import {
 	contradictionTagBlock,
 	contradictionTagInline,
@@ -434,8 +435,8 @@ export function createApp(
 	// PATCH /entries/:id — update mutable fields on any entry.
 	// Useful for human review: correcting content, changing scope/type, marking stale entries active, etc.
 	// Accepts any subset of: content, topics, confidence, status, scope.
-	// Embedding is NOT re-computed — callers that change content should be aware similarity
-	// searches will use the old embedding until the next reconsolidation pass touches the entry.
+	// If content or topics change, re-compute the embedding immediately so activation
+	// and reconsolidation continue using a semantically correct vector.
 	app.patch("/entries/:id", async (c) => {
 		if (!requireAdminToken(c)) {
 			return c.json({ error: "Unauthorized" }, 401);
@@ -527,6 +528,19 @@ export function createApp(
 					{ error: "confidence must be a number between 0 and 1" },
 					400,
 				);
+			}
+		}
+
+		if (updates.content !== undefined || updates.topics !== undefined) {
+			try {
+				const nextContent = updates.content ?? entry.content;
+				const nextTopics = updates.topics ?? entry.topics;
+				updates.embedding = await activation.embeddings.embed(
+					formatEmbeddingText(entry.type, nextContent, nextTopics),
+				);
+			} catch (e) {
+				logger.error("[entries/patch] Failed to re-embed updated entry:", e);
+				return c.json({ error: "Failed to re-embed updated entry" }, 500);
 			}
 		}
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,8 @@ describe("HTTP API", () => {
 	let db: KnowledgeDB;
 	let tempDir: string;
 	let app: ReturnType<typeof createApp>;
+	let activation: ActivationEngine;
+	let embedSpy: ReturnType<typeof spyOn>;
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "knowledge-api-test-"));
@@ -24,7 +26,12 @@ describe("HTTP API", () => {
 			join(tempDir, "test.db"),
 			join(tempDir, "opencode-fake.db"),
 		);
-		const activation = new ActivationEngine(db);
+		activation = new ActivationEngine(db);
+		embedSpy = spyOn(activation.embeddings, "embed").mockResolvedValue([
+			0.11,
+			0.22,
+			0.33,
+		]);
 		// We pass a mock consolidation engine — not testing consolidation via API here
 		const consolidation = {
 			consolidate: async () => ({
@@ -106,6 +113,7 @@ describe("HTTP API", () => {
 			observationCount: 1,
 			supersededBy: null,
 			derivedFrom: [],
+			embedding: [0.1, 0.2, 0.3],
 		});
 
 		const res = await app.request("/entries");
@@ -349,6 +357,49 @@ describe("HTTP API", () => {
 		const data = await res.json();
 		expect(data.entry.content).toBe("Updated content");
 		expect(data.entry.confidence).toBe(0.95);
+		expect(db.getEntry("patch-test")?.embedding?.[0]).toBeCloseTo(0.11);
+		expect(db.getEntry("patch-test")?.embedding?.[1]).toBeCloseTo(0.22);
+		expect(db.getEntry("patch-test")?.embedding?.[2]).toBeCloseTo(0.33);
+	});
+
+	it("PATCH /entries/:id should re-embed when only topics change", async () => {
+		db.insertEntry({
+			id: "patch-topics",
+			type: "fact",
+			content: "Original content",
+			topics: ["old-topic"],
+			confidence: 0.8,
+			source: "test",
+			scope: "personal",
+			status: "active",
+			strength: 1.0,
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			lastAccessedAt: Date.now(),
+			accessCount: 0,
+			observationCount: 1,
+			supersededBy: null,
+			derivedFrom: [],
+			embedding: [0.9, 0.8, 0.7],
+		});
+
+		embedSpy.mockResolvedValue([
+			0.44,
+			0.55,
+			0.66,
+		]);
+
+		const res = await app.request("/entries/patch-topics", {
+			method: "PATCH",
+			headers: {
+				Authorization: `Bearer ${TEST_ADMIN_TOKEN}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ topics: ["new-topic"] }),
+		});
+		expect(res.status).toBe(200);
+		expect(embedSpy).toHaveBeenCalled();
+		expect(db.getEntry("patch-topics")?.embedding?.[0]).toBeCloseTo(0.44);
 	});
 
 	it("PATCH /entries/:id should return 400 with no valid fields", async () => {

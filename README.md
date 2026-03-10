@@ -126,7 +126,7 @@ OpenCode    Claude Code    Cursor    Codex CLI    VSCode
                         │
                         ▼
               Synthesis pass         KB-wide cluster synthesis → higher-order principles
-              [synthesisModel]       (fires at obs=10, 20, 30, ... per entry)
+              [synthesisModel]       (fires when cluster membership changed since last synthesis)
                         │
                         ▼
               ActivationEngine       cosine similarity search; auto-re-embeds all entries
@@ -157,7 +157,7 @@ Hono-based HTTP server. Starts on `127.0.0.1:3179` by default.
 | `/status` | GET | — (config block requires admin) | Health check and stats. Always returns entry counts, uptime, and embedding metadata (`model`, `dimensions`, `recordedAt`). Admin token additionally exposes the `config` block (model names, port). |
 | `/entries` | GET | — | List entries (filter by `status`, `type`, `scope`) |
 | `/entries/:id` | GET | — | Get a specific entry with relations |
-| `/entries/:id` | PATCH | admin | Update content, topics, confidence, status, scope |
+| `/entries/:id` | PATCH | admin | Update content, topics, confidence, status, scope. Content/topic edits re-compute the embedding immediately. |
 | `/entries/:id/resolve` | POST | admin | Resolve a conflicted entry pair |
 | `/entries/:id` | DELETE | admin | Hard-delete an entry |
 | `/review` | GET | — | Surface conflicted, stale, and team-relevant entries |
@@ -206,7 +206,7 @@ Registered automatically by `setup-tool claude-code`.
 - `readers/codex.ts` — reads Codex CLI JSONL rollout files, two-pass parse for stable session IDs, skips injected context blocks
 - `readers/vscode.ts` — reads VSCode / GitHub Copilot Chat session JSON files from per-workspace `chatSessions/` directories, extracts user messages and assistant text responses
 - `consolidate.ts` — orchestrates the full cycle: read → extract → reconsolidate → contradiction scan → decay (once after all sources) → embed → seed embedding metadata (if absent) → KB-wide synthesis pass → advance cursor
-- `llm.ts` — four LLM calls across four model slots: `extractKnowledge` (extraction model), `decideMerge` (merge model — cheaper), `detectAndResolveContradiction` (contradiction model), `synthesizePrinciple` (synthesis model — fires rarely on high-observation entries)
+- `llm.ts` — four LLM calls across four model slots: `extractKnowledge` (extraction model), `decideMerge` (merge model — cheaper), `detectAndResolveContradiction` (contradiction model), `synthesizePrinciple` (synthesis model — fires rarely on ripe clusters whose membership changed)
 - `decay.ts` — forgetting curve with type-specific half-lives (facts decay faster than procedures)
 
 ## Setup
