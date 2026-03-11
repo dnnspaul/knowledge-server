@@ -42,9 +42,15 @@
  * - knowledge_entry loses `last_synthesized_observation_count` (no longer needed).
  * - MIGRATION: v8 → v9 is incremental: DROP COLUMN on knowledge_entry, CREATE TABLE
  *   for both cluster tables. No knowledge data is lost.
+ *
+ * v10: is_synthesized column.
+ * - knowledge_entry gains `is_synthesized INTEGER NOT NULL DEFAULT 0`.
+ *   Replaces the fragile source.startsWith('synthesis:') convention with an
+ *   authoritative persistent flag. Existing synthesis entries are backfilled.
+ * - MIGRATION: v9 → v10 is incremental: ALTER TABLE + UPDATE backfill. No data loss.
  */
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /**
  * Expected columns for each table, derived from the DDL below.
@@ -75,6 +81,7 @@ export const EXPECTED_TABLE_COLUMNS: Readonly<
 		"observation_count",
 		"superseded_by",
 		"derived_from",
+		"is_synthesized",
 		"embedding",
 	],
 	knowledge_relation: ["id", "source_id", "target_id", "type", "created_at"],
@@ -140,6 +147,7 @@ export const CREATE_TABLES = `
     -- Provenance
     superseded_by TEXT,
     derived_from TEXT NOT NULL DEFAULT '[]',  -- JSON array of session/entry IDs
+    is_synthesized INTEGER NOT NULL DEFAULT 0, -- 1 when produced by the synthesis pass
 
     -- Embedding (float32 array stored as blob)
     embedding BLOB

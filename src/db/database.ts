@@ -132,6 +132,24 @@ export class KnowledgeDB {
 					}
 				},
 			},
+			{
+				version: 10,
+				label: "add is_synthesized column to knowledge_entry",
+				up: (db) => {
+					const hasCol = (
+						db.prepare("PRAGMA table_info(knowledge_entry)").all() as Array<{ name: string }>
+					).some((c) => c.name === "is_synthesized");
+					if (!hasCol) {
+						db.exec(
+							"ALTER TABLE knowledge_entry ADD COLUMN is_synthesized INTEGER NOT NULL DEFAULT 0",
+						);
+						// Backfill: flag all existing entries whose source marks them as synthesis outputs
+						db.exec(
+							"UPDATE knowledge_entry SET is_synthesized = 1 WHERE source LIKE 'synthesis:%'",
+						);
+					}
+				},
+			},
 		];
 
 		let migratedTo = currentVersion;
@@ -223,8 +241,8 @@ export class KnowledgeDB {
 				`INSERT INTO knowledge_entry 
          (id, type, content, topics, confidence, source, scope, status, strength,
           created_at, updated_at, last_accessed_at, access_count, observation_count,
-          superseded_by, derived_from, embedding)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          superseded_by, derived_from, is_synthesized, embedding)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				entry.id,
@@ -243,6 +261,7 @@ export class KnowledgeDB {
 				entry.observationCount,
 				entry.supersededBy,
 				JSON.stringify(entry.derivedFrom),
+				entry.isSynthesized ? 1 : 0,
 				embeddingBlob,
 			);
 	}
@@ -1168,6 +1187,7 @@ export class KnowledgeDB {
 			observationCount: row.observation_count,
 			supersededBy: row.superseded_by,
 			derivedFrom: JSON.parse(row.derived_from),
+			isSynthesized: row.is_synthesized === 1,
 			embedding,
 		};
 	}
@@ -1554,5 +1574,6 @@ interface RawEntryRow {
 	observation_count: number;
 	superseded_by: string | null;
 	derived_from: string;
+	is_synthesized: number;
 	embedding: Uint8Array | null;
 }

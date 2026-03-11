@@ -463,7 +463,7 @@ export class Reconsolidator {
             content: p.content,
             type: p.type,
             topics: p.topics,
-            isSynthesized: p.source.startsWith("synthesis:"),
+            isSynthesized: p.isSynthesized,
           })),
         );
       } catch (err) {
@@ -662,6 +662,7 @@ export class Reconsolidator {
         `consolidation ${new Date(entryTime).toISOString().split("T")[0]}`,
       scope: entry.scope || "personal",
       status: "active",
+      isSynthesized: (entry.source ?? "").startsWith("synthesis:"),
       // Compute real initial strength using the session timestamp so decay is
       // pre-applied for old sessions. A new entry (obs=1, access=0) from a
       // session N days ago already has N days of decay factored into its strength.

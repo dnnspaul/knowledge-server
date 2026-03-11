@@ -90,6 +90,7 @@ export interface KnowledgeEntry {
 	// Provenance
 	supersededBy: string | null;
 	derivedFrom: string[]; // session IDs or entry IDs this was distilled from
+	isSynthesized: boolean; // true when produced by the synthesis pass (source starts with "synthesis:")
 
 	// Embedding (stored as binary blob in DB, represented as float array in memory)
 	embedding?: number[];
