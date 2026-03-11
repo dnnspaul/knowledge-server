@@ -41,14 +41,29 @@ function parseFloatEnv(
 //
 // Override at runtime via the corresponding env vars:
 //   RECONSOLIDATION_SIMILARITY_THRESHOLD, CONTRADICTION_MIN_SIMILARITY,
-//   ACTIVATION_SIMILARITY_THRESHOLD.
+//   ACTIVATION_SIMILARITY_THRESHOLD, CLUSTER_ASSIGNMENT_THRESHOLD,
+//   CLUSTER_MIN_MEMBERS.
 
 /** Near-duplicate merge cutoff (upper bound of contradiction scan band). */
-export const DEFAULT_RECONSOLIDATION_THRESHOLD = 0.82;
+export const DEFAULT_RECONSOLIDATION_THRESHOLD = 0.78;
 /** Lower bound of the contradiction scan band. */
 export const DEFAULT_CONTRADICTION_MIN_SIMILARITY = 0.4;
 /** Minimum raw cosine similarity to activate an entry. */
 export const DEFAULT_ACTIVATION_SIMILARITY_THRESHOLD = 0.3;
+/**
+ * Cosine similarity threshold for assigning an entry to an existing cluster
+ * during greedy clustering. Below this threshold a new cluster is started.
+ * Kept broad (0.5) — heterogeneous cluster members give the LLM more
+ * cross-domain material to generalize from. Synthesis quality is instead
+ * governed by CLUSTER_MIN_MEMBERS (minimum size before synthesis fires).
+ */
+export const DEFAULT_CLUSTER_ASSIGNMENT_THRESHOLD = 0.5;
+/**
+ * Minimum cluster size required before synthesis is attempted.
+ * Requires enough distinct observations that a structural invariant is likely
+ * to have genuinely emerged, rather than being a coincidence of a few entries.
+ */
+export const DEFAULT_CLUSTER_MIN_MEMBERS = 5;
 
 export const config = {
 	// Server
@@ -272,6 +287,22 @@ export const config = {
 		contradictionMinSimilarity: parseFloatEnv(
 			process.env.CONTRADICTION_MIN_SIMILARITY,
 			DEFAULT_CONTRADICTION_MIN_SIMILARITY,
+		),
+		// Cosine similarity threshold for assigning an entry to an existing cluster
+		// during greedy clustering. Kept broad by default — heterogeneous members give
+		// the LLM more cross-domain material to generalize from.
+		// Override via CLUSTER_ASSIGNMENT_THRESHOLD env var.
+		clusterAssignmentThreshold: parseFloatEnv(
+			process.env.CLUSTER_ASSIGNMENT_THRESHOLD,
+			DEFAULT_CLUSTER_ASSIGNMENT_THRESHOLD,
+		),
+		// Minimum cluster size required before synthesis is attempted.
+		// Higher values require more evidence that a structural invariant has emerged.
+		// Override via CLUSTER_MIN_MEMBERS env var.
+		clusterMinMembers: parseIntEnv(
+			process.env.CLUSTER_MIN_MEMBERS,
+			DEFAULT_CLUSTER_MIN_MEMBERS,
+			2,
 		),
 		// Polling interval for background auto-consolidation while the server is running.
 		// 0 (default) disables polling — consolidation only runs on startup and via API.
@@ -510,6 +541,21 @@ export function validateConfig(): string[] {
 		}
 	}
 
+	function validateIntMin(
+		envVar: string | undefined,
+		envName: string,
+		min: number,
+		hint: string,
+	): void {
+		if (envVar === undefined) return; // not set — default is always valid
+		const raw = Number.parseInt(envVar, 10);
+		if (Number.isNaN(raw) || raw < min) {
+			errors.push(
+				`${envName} must be an integer ≥ ${min} (got "${envVar}"). ${hint}`,
+			);
+		}
+	}
+
 	validateFloatRange(
 		process.env.DECAY_ARCHIVE_THRESHOLD,
 		"DECAY_ARCHIVE_THRESHOLD",
@@ -558,6 +604,20 @@ export function validateConfig(): string[] {
 		0,
 		1,
 		`Default is ${config.activation.similarityThreshold}.`,
+	);
+
+	validateFloatRange(
+		process.env.CLUSTER_ASSIGNMENT_THRESHOLD,
+		"CLUSTER_ASSIGNMENT_THRESHOLD",
+		0,
+		1,
+		`Cosine similarity for cluster assignment during greedy clustering. Default is ${config.consolidation.clusterAssignmentThreshold}.`,
+	);
+	validateIntMin(
+		process.env.CLUSTER_MIN_MEMBERS,
+		"CLUSTER_MIN_MEMBERS",
+		2,
+		`Minimum cluster size before synthesis is attempted. Default is ${config.consolidation.clusterMinMembers}.`,
 	);
 
 	// Validate EMBEDDING_DIMENSIONS early — a non-positive or non-integer value would

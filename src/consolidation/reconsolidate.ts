@@ -22,13 +22,21 @@ const CLUSTER_IDENTITY_THRESHOLD = 0.9;
 /**
  * Cosine similarity threshold for assigning an entry to an existing cluster
  * during greedy clustering. Below this threshold a new cluster is started.
+ * Kept broad by default — heterogeneous cluster members give the LLM more
+ * cross-domain material to generalize from. Synthesis quality is instead
+ * governed by CLUSTER_MIN_MEMBERS (minimum size before synthesis fires).
+ * Configurable via CLUSTER_ASSIGNMENT_THRESHOLD env var (see config.ts).
  */
-const CLUSTER_ASSIGNMENT_THRESHOLD = 0.5;
+const CLUSTER_ASSIGNMENT_THRESHOLD =
+	config.consolidation.clusterAssignmentThreshold;
 
 /**
  * Minimum number of members a cluster must have to be eligible for synthesis.
+ * Requires enough distinct observations that a structural invariant has likely
+ * genuinely emerged, rather than being a coincidence of a few related entries.
+ * Configurable via CLUSTER_MIN_MEMBERS env var (see config.ts).
  */
-const CLUSTER_MIN_MEMBERS = 3;
+const CLUSTER_MIN_MEMBERS = config.consolidation.clusterMinMembers;
 
 /**
  * Handles the reconsolidation of a single extracted knowledge entry
@@ -252,7 +260,7 @@ export class Reconsolidator {
    * 1. CLUSTER FORMATION (in-memory, O(n×k)):
    *    - Sort all active entries by observationCount desc (most-evidenced entries seed clusters first).
    *    - Greedy assign each entry to nearest existing cluster if centroid similarity
-   *      ≥ CLUSTER_ASSIGNMENT_THRESHOLD (0.5), else start a new cluster.
+   *      ≥ CLUSTER_ASSIGNMENT_THRESHOLD (env: CLUSTER_ASSIGNMENT_THRESHOLD), else start a new cluster.
    *    - Update centroid as running average after each assignment.
    *
    * 2. CLUSTER IDENTITY RECONCILIATION (against DB):
@@ -263,7 +271,7 @@ export class Reconsolidator {
    *
    * 3. RIPENESS CHECK:
    *    - last_membership_changed_at > last_synthesized_at OR last_synthesized_at IS NULL.
-   *    - Minimum CLUSTER_MIN_MEMBERS (3) members.
+   *    - Minimum CLUSTER_MIN_MEMBERS (env: CLUSTER_MIN_MEMBERS) members.
    *
    * 4. SYNTHESIS (per ripe cluster):
    *    - All members are peers (no anchor/neighbor distinction).
