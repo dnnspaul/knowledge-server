@@ -728,12 +728,14 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 		};
 	}
 
-	it("does not call synthesizePrinciple when cluster has fewer than 3 members", async () => {
-		// Insert 2 entries — not enough to form a ripe cluster (min=3)
+	it("does not call synthesizePrinciple when cluster has fewer than 5 members", async () => {
+		// Insert 4 entries — not enough to form a ripe cluster (min=5)
 		const emb1 = fakeEmbedding("TypeScript static");
 		const emb2 = fakeEmbedding("TypeScript types");
 		db.insertEntry(makeEntry({ id: "e1", content: "TypeScript is statically typed.", topics: ["typescript"], embedding: emb1 }));
 		db.insertEntry(makeEntry({ id: "e2", content: "TypeScript has structural types.", topics: ["typescript"], embedding: emb2 }));
+		db.insertEntry(makeEntry({ id: "e3", content: "TypeScript checks types at compile time.", topics: ["typescript"], embedding: emb1 }));
+		db.insertEntry(makeEntry({ id: "e4", content: "TypeScript interfaces define contracts.", topics: ["typescript"], embedding: emb2 }));
 
 		spyOn(OpenCodeEpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
 			{ id: "session-1", maxMessageTime: Date.now() },
@@ -747,16 +749,18 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 		await engine.consolidate();
 		await engine.runSynthesis();
 
-		// 2 entries → 1-2 member cluster → below CLUSTER_MIN_MEMBERS=3 → no synthesis
+		// 4 entries → below CLUSTER_MIN_MEMBERS=5 → no synthesis
 		expect(synthSpy).not.toHaveBeenCalled();
 	});
 
-	it("calls synthesizePrinciple when a new cluster with ≥ 3 members forms", async () => {
-		// Insert 3 semantically similar entries — they should cluster together
+	it("calls synthesizePrinciple when a new cluster with ≥ 5 members forms", async () => {
+		// Insert 5 semantically similar entries — they should cluster together
 		const emb = fakeEmbedding("TypeScript static");
 		db.insertEntry(makeEntry({ id: "e1", content: "TypeScript is statically typed.", topics: ["typescript"], embedding: emb }));
 		db.insertEntry(makeEntry({ id: "e2", content: "TypeScript has structural types.", topics: ["typescript"], embedding: emb }));
 		db.insertEntry(makeEntry({ id: "e3", content: "TypeScript checks types at compile time.", topics: ["typescript"], embedding: emb }));
+		db.insertEntry(makeEntry({ id: "e4", content: "TypeScript interfaces define contracts.", topics: ["typescript"], embedding: emb }));
+		db.insertEntry(makeEntry({ id: "e5", content: "TypeScript generics enable type-safe reuse.", topics: ["typescript"], embedding: emb }));
 
 		spyOn(OpenCodeEpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
 			{ id: "session-1", maxMessageTime: Date.now() },
@@ -770,7 +774,7 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 		await engine.consolidate();
 		await engine.runSynthesis();
 
-		// 3 identical-embedding entries → 1 cluster with 3 members → ripe (new) → synthesis fires
+		// 5 identical-embedding entries → 1 cluster with 5 members → ripe (new) → synthesis fires
 		expect(synthSpy).toHaveBeenCalledTimes(1);
 	});
 
@@ -781,6 +785,8 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 		db.insertEntry(makeEntry({ id: "e1", content: "TypeScript is statically typed.", topics: ["typescript"], embedding: emb }));
 		db.insertEntry(makeEntry({ id: "e2", content: "TypeScript has structural types.", topics: ["typescript"], embedding: emb }));
 		db.insertEntry(makeEntry({ id: "e3", content: "TypeScript checks types at compile time.", topics: ["typescript"], embedding: emb }));
+		db.insertEntry(makeEntry({ id: "e4", content: "TypeScript interfaces define contracts.", topics: ["typescript"], embedding: emb }));
+		db.insertEntry(makeEntry({ id: "e5", content: "TypeScript generics enable type-safe reuse.", topics: ["typescript"], embedding: emb }));
 
 		spyOn(OpenCodeEpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
 			{ id: "session-1", maxMessageTime: Date.now() },

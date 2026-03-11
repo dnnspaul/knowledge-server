@@ -136,9 +136,11 @@ export class KnowledgeDB {
 				version: 10,
 				label: "add is_synthesized column to knowledge_entry",
 				up: (db) => {
-					const hasCol = (
-						db.prepare("PRAGMA table_info(knowledge_entry)").all() as Array<{ name: string }>
-					).some((c) => c.name === "is_synthesized");
+					const cols = db.prepare("PRAGMA table_info(knowledge_entry)").all() as Array<{ name: string }>;
+					// cols is empty when the table doesn't exist yet (fresh DB) — CREATE_TABLES
+					// already includes the column, so nothing to do in that case.
+					if (cols.length === 0) return;
+					const hasCol = cols.some((c) => c.name === "is_synthesized");
 					if (!hasCol) {
 						db.exec(
 							"ALTER TABLE knowledge_entry ADD COLUMN is_synthesized INTEGER NOT NULL DEFAULT 0",
