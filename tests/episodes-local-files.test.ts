@@ -51,11 +51,14 @@ function isCaseSensitiveFS(): boolean {
 		} finally {
 			rmSync(probe, { recursive: true, force: true });
 		}
-	} catch {
-		// Probe failed (e.g. tmpdir unwritable in a sandboxed CI environment).
+	} catch (e: unknown) {
+		// Only swallow permission/read-only errors (e.g. tmpdir unwritable in sandboxed CI).
 		// Fall back to false (treat as case-insensitive) — skips extended assertions
 		// rather than crashing the module.
-		return false;
+		// Re-throw anything unexpected so real bugs surface.
+		const code = (e as NodeJS.ErrnoException).code;
+		if (code === "EACCES" || code === "EROFS" || code === "EPERM") return false;
+		throw e;
 	}
 }
 
