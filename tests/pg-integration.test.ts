@@ -65,8 +65,10 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 	beforeEach(async () => {
 		// Wipe data between tests for isolation. knowledge_cluster must be listed
 		// explicitly — it has no FK back to knowledge_entry so it is not reached
-		// by CASCADE. knowledge_cluster_member and knowledge_relation are covered
-		// by CASCADE from knowledge_entry and knowledge_cluster respectively.
+		// by CASCADE. knowledge_relation and knowledge_cluster_member are covered
+		// by CASCADE: knowledge_relation via source_id/target_id → knowledge_entry,
+		// knowledge_cluster_member via entry_id → knowledge_entry and
+		// cluster_id → knowledge_cluster.
 		await truncSql`TRUNCATE knowledge_entry, knowledge_cluster, consolidated_episode, source_cursor, consolidation_state, embedding_metadata, schema_version CASCADE`;
 		// Re-initialize to re-stamp schema_version (truncated above).
 		// Clear initPromise (private field) so initialize() re-runs on next call.
