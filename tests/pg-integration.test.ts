@@ -63,8 +63,11 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 	});
 
 	beforeEach(async () => {
-		// Wipe data between tests for isolation.
-		await truncSql`TRUNCATE knowledge_cluster_member, knowledge_cluster, knowledge_relation, knowledge_entry, consolidated_episode, source_cursor, consolidation_state, embedding_metadata, schema_version CASCADE`;
+		// Wipe data between tests for isolation. knowledge_cluster must be listed
+		// explicitly — it has no FK back to knowledge_entry so it is not reached
+		// by CASCADE. knowledge_cluster_member and knowledge_relation are covered
+		// by CASCADE from knowledge_entry and knowledge_cluster respectively.
+		await truncSql`TRUNCATE knowledge_entry, knowledge_cluster, consolidated_episode, source_cursor, consolidation_state, embedding_metadata, schema_version CASCADE`;
 		// Re-initialize to re-stamp schema_version (truncated above).
 		// Clear initPromise (private field) so initialize() re-runs on next call.
 		(db as unknown as { initPromise: null }).initPromise = null;
@@ -72,8 +75,8 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 	});
 
 	afterAll(async () => {
-		await db.close();
-		await truncSql.end();
+		// Run in parallel — independent connections, no ordering dependency.
+		await Promise.all([db.close(), truncSql.end()]);
 	});
 
 	// ── Schema & Init ──

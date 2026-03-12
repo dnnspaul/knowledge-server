@@ -173,7 +173,7 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 			);
 			// Wrap in a transaction so a crash between CREATE and INSERT leaves the
 			// DB fully empty (schema_version still 0) rather than half-created.
-			await this.sql.begin(async (sql) => {
+			await this.sql.begin(async (sql: TxSql) => {
 				await sql.unsafe(PG_CREATE_TABLES);
 				await sql`
 					INSERT INTO schema_version (version, applied_at)
@@ -312,7 +312,7 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 				// Wrap the entire drop+recreate in a transaction so a crash mid-way
 				// leaves the DB at the last committed migration version (re-runnable
 				// on restart) rather than with a partially-dropped schema.
-				await this.sql.begin(async (sql) => {
+				await this.sql.begin(async (sql: TxSql) => {
 					await sql`DROP TABLE IF EXISTS knowledge_cluster_member CASCADE`;
 					await sql`DROP TABLE IF EXISTS knowledge_cluster CASCADE`;
 					await sql`DROP TABLE IF EXISTS knowledge_relation CASCADE`;
