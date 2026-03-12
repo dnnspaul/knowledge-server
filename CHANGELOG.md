@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.9.0](https://github.com/MAnders333/knowledge-server/compare/v2.8.0...v2.9.0) (2026-03-12)
+
+
+### Features
+
+* **extraction:** encode historical data quality events explicitly ([d668aea](https://github.com/MAnders333/knowledge-server/commit/d668aea21cb8ac05ec87f6044d71293c1cbe41fe))
+* **extraction:** source density assessment before extraction ([b784014](https://github.com/MAnders333/knowledge-server/commit/b78401440635aaaaf6fe33111dc9a359f758a9b7))
+
+
+### Bug Fixes
+
+* **extraction:** anchor mixed-content rule to authorial-intent test ([2c05b65](https://github.com/MAnders333/knowledge-server/commit/2c05b65ba3bbe94e33657d16e5c49b78285a6bee))
+* **extraction:** generic examples and type hint for data quality events ([328bd98](https://github.com/MAnders333/knowledge-server/commit/328bd98a3b60c6f265352c654c459e51fd48fcca))
+* **extraction:** handle mixed-content episodes in density assessment ([67634b2](https://github.com/MAnders333/knowledge-server/commit/67634b286b7adde386bd9e52d51dcc223bad6116))
+* **extraction:** restore authorial-intent tie-breaker in mixed-content clause ([4e3741d](https://github.com/MAnders333/knowledge-server/commit/4e3741dd5532fee359a6e6c05275ab3d425f127c))
+* **logging:** full content in insert/update logs, Untitled fallback in cursor+vscode readers ([d2a77a4](https://github.com/MAnders333/knowledge-server/commit/d2a77a4489d429fa1cce77706668b88ff98c2afc))
+* **logging:** revert JSON.stringify on type field, add clarifying comment ([6ad6c36](https://github.com/MAnders333/knowledge-server/commit/6ad6c3634f849fd4192676a18e7686a070177059))
+
 ## [2.8.0](https://github.com/MAnders333/knowledge-server/compare/v2.7.0...v2.8.0) (2026-03-12)
 
 
