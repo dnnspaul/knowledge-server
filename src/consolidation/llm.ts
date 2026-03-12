@@ -263,11 +263,12 @@ ENCODE if:
 - It's a decision with rationale that would be hard to reconstruct later
 - It's a non-obvious procedure or workflow that took effort to figure out
 - It's a principle or pattern confirmed across multiple observations
+- It's a historical data quality event: a period when tracking was broken, goals were misconfigured, forms failed, traffic was misattributed, or data was otherwise unreliable. These are always worth encoding even though they are past and resolved — they explain anomalies in historical data that analysts will encounter months or years later. Encode each distinct period as its own entry with the property/system affected, the date range, and what was wrong. Examples: "DS lead forms were broken 12–20 Apr 2022 — no leads received during this period", "EM UTM parameters not passed to Salesforce from ~15 Jun 2022 due to middleware bug".
 
 DO NOT ENCODE if:
 - The episode is just Q&A, debugging, exploration, or trial-and-error with no lasting conclusion
 - The information is obvious, easily googleable, or derivable from first principles
-- It's only relevant to that specific moment (e.g., "fixed a typo in X")
+- It's only relevant to that specific moment (e.g., "fixed a typo in X") — NOTE: historical data quality events are a specific exception to this rule (see ENCODE above)
 - It's a version number, model name, or configuration value likely to change soon
 - The session was mostly back-and-forth clarification with no concrete outcome
 - It's a specific numerical result, statistical output, or data finding from a one-off analysis (e.g., "the R2 shift centerline moved from 0.57 to 0.50", "bootstrap delta was -1.3pp"). Ask: is the *conclusion* reusable, or just the number? The number itself is almost never worth encoding — the conclusion it supports might be (e.g., "App→CR conversion rate shows a structural decline unrelated to per-application behaviour" is encodable; the specific coefficients that proved it are not).
