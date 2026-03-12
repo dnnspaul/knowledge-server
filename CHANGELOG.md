@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.8.0](https://github.com/MAnders333/knowledge-server/compare/v2.7.0...v2.8.0) (2026-03-12)
+
+
+### Features
+
+* **sources:** add local-files source for Markdown knowledge ingestion ([2fb698d](https://github.com/MAnders333/knowledge-server/commit/2fb698dabd95eec124ba5aaef9b4e271537d6440))
+
+
+### Bug Fixes
+
+* **llm:** remove redundant (document) label in document episode header ([61a781e](https://github.com/MAnders333/knowledge-server/commit/61a781ed7bf63a1a759ff1be6e5e2d05778d6565))
+* **local-files:** address post-review warnings ([27b7b5c](https://github.com/MAnders333/knowledge-server/commit/27b7b5ccbd4f7c3745155eb69d050ee884825634))
+* **local-files:** explicit Dirent&lt;string&gt; type to satisfy strict tsc ([9e82976](https://github.com/MAnders333/knowledge-server/commit/9e829768d91e94ac47d536fea58ec1016a511278))
+
 ## [2.7.0](https://github.com/MAnders333/knowledge-server/compare/v2.6.3...v2.7.0) (2026-03-11)
 
 
