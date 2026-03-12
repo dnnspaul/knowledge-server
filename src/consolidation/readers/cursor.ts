@@ -354,7 +354,7 @@ export class CursorEpisodeReader implements IEpisodeReader {
 				sessionId: session.sessionId,
 				startMessageId: startId,
 				endMessageId: endId,
-				sessionTitle: session.title,
+				sessionTitle: session.title || "Untitled",
 				// Cursor doesn't expose a per-session working directory
 				projectName: "",
 				directory: "",

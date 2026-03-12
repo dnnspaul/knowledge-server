@@ -336,7 +336,7 @@ export class VSCodeEpisodeReader implements IEpisodeReader {
 				sessionId: session.sessionId,
 				startMessageId: startId,
 				endMessageId: endId,
-				sessionTitle: session.title,
+				sessionTitle: session.title || "Untitled",
 				projectName,
 				directory: session.workspaceDir,
 				timeCreated: session.creationDate,

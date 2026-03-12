@@ -500,7 +500,7 @@ export class ConsolidationEngine {
 							chunkCreated++;
 							changedIds.add(inserted.id);
 							logger.log(
-								`[consolidation/${source}] + insert [${inserted.type}] ${inserted.content.replace(/\r?\n/g, " ")}`,
+								`[consolidation/${source}] + insert [${inserted.type}] ${JSON.stringify(inserted.content)}`,
 							);
 							// Add to cache so subsequent entries in this chunk can deduplicate against it.
 							// Embedding is available immediately since insertNewEntry stores it.
@@ -518,7 +518,7 @@ export class ConsolidationEngine {
 							const contentForLog = updated.content ?? existing?.content ?? "";
 							const typeForLog = updated.type ?? existing?.type ?? "?";
 							logger.log(
-								`[consolidation/${source}] ~ update [${typeForLog}] ${contentForLog.replace(/\r?\n/g, " ")}`,
+								`[consolidation/${source}] ~ update [${typeForLog}] ${JSON.stringify(contentForLog)}`,
 							);
 							// Update the cache with the new content and fresh embedding.
 							if (existing) {
