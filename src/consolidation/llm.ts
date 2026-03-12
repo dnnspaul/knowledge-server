@@ -735,14 +735,10 @@ export function formatEpisodes(episodes: Episode[]): string {
 	return episodes
 		.map((ep) => {
 			const typeLabel =
-				ep.contentType === "compaction_summary"
-					? " (compaction summary)"
-					: ep.contentType === "document"
-						? " (document)"
-						: "";
+				ep.contentType === "compaction_summary" ? " (compaction summary)" : "";
 			const header =
 				ep.contentType === "document"
-					? `### Document: "${ep.sessionTitle}"${typeLabel} (${new Date(ep.timeCreated).toISOString().split("T")[0]})`
+					? `### Document: "${ep.sessionTitle}" (${new Date(ep.timeCreated).toISOString().split("T")[0]})` // no project for documents
 					: `### Session: "${ep.sessionTitle}"${typeLabel} (${new Date(ep.timeCreated).toISOString().split("T")[0]}, project: ${ep.projectName})`;
 			return `${header}\n${ep.content}`;
 		})
