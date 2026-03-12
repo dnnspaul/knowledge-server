@@ -734,12 +734,12 @@ export interface ContradictionResult {
 export function formatEpisodes(episodes: Episode[]): string {
 	return episodes
 		.map((ep) => {
-			const typeLabel =
+			const sessionTypeLabel =
 				ep.contentType === "compaction_summary" ? " (compaction summary)" : "";
 			const header =
 				ep.contentType === "document"
 					? `### Document: "${ep.sessionTitle}" (${new Date(ep.timeCreated).toISOString().split("T")[0]})` // no project for documents
-					: `### Session: "${ep.sessionTitle}"${typeLabel} (${new Date(ep.timeCreated).toISOString().split("T")[0]}, project: ${ep.projectName})`;
+					: `### Session: "${ep.sessionTitle}"${sessionTypeLabel} (${new Date(ep.timeCreated).toISOString().split("T")[0]}, project: ${ep.projectName})`;
 			return `${header}\n${ep.content}`;
 		})
 		.join("\n\n---\n\n");

@@ -88,6 +88,28 @@ describe("formatEpisodes", () => {
 	it("returns empty string for empty input", () => {
 		expect(formatEpisodes([])).toBe("");
 	});
+
+	it("formats documents with Document header and no project label", () => {
+		const ep = makeEpisode({
+			sessionTitle: "My Knowledge Doc",
+			projectName: "should-not-appear",
+			contentType: "document",
+			content: "# My Knowledge Doc\n\nSome content here.",
+		});
+		const out = formatEpisodes([ep]);
+		expect(out).toContain('### Document: "My Knowledge Doc"');
+		expect(out).not.toContain("project:");
+		expect(out).not.toContain("(document)");
+		expect(out).toContain("Some content here.");
+	});
+
+	it("does not label plain message episodes", () => {
+		const ep = makeEpisode({ contentType: "messages" });
+		const out = formatEpisodes([ep]);
+		expect(out).toContain("### Session:");
+		expect(out).not.toContain("compaction summary");
+		expect(out).not.toContain("(document)");
+	});
 });
 
 // ── ConsolidationLLM.extractKnowledge ────────────────────────────────────────
