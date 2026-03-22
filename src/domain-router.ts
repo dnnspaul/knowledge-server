@@ -12,8 +12,8 @@ import { logger } from "./logger.js";
  * The result of resolving a domain for a set of episodes.
  */
 export interface DomainResolution {
-	/** The resolved domain id, or null if no domains are configured. */
-	domainId: string | null;
+	/** The resolved domain id, or undefined if no domains are configured. */
+	domainId: string | undefined;
 	/** The store that should receive writes for this domain. */
 	store: IKnowledgeDB;
 	/**
@@ -85,7 +85,7 @@ export class DomainRouter {
 		// No domains configured — single-store mode, no routing needed.
 		if (this.domains.length === 0) {
 			return {
-				domainId: null,
+				domainId: undefined,
 				store: this.fallbackStore,
 				domainContext: null,
 			};

@@ -533,7 +533,7 @@ export class ConsolidationEngine {
 				const entryTargetStore =
 					domainResolution && domainRouter
 						? (domainRouter.resolveStore(
-								entry.domain ?? domainResolution.domainId ?? undefined,
+								entry.domain ?? domainResolution.domainId,
 							) ?? domainResolution.store)
 						: undefined;
 

@@ -70,7 +70,7 @@ describe("DomainRouter.resolve", () => {
 
 		const result = router.resolve(`${homedir()}/work/project-a`);
 
-		expect(result.domainId).toBeNull();
+		expect(result.domainId).toBeUndefined();
 		expect(result.store).toBe(personalDb);
 		expect(result.domainContext).toBeNull();
 	});
