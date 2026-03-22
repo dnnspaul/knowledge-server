@@ -828,6 +828,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		await db.setEmbeddingMetadata("test-model", 128);
 		await db.recordEpisode(
 			"opencode",
+			"default",
 			"session-1",
 			"msg-a",
 			"msg-b",
@@ -839,7 +840,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 
 		expect((await db.getStats()).total).toBe(0);
 		expect(await db.getEmbeddingMetadata()).toBeNull();
-		const ranges = await db.getProcessedEpisodeRanges("opencode", [
+		const ranges = await db.getProcessedEpisodeRanges("opencode", "default", [
 			"session-1",
 		]);
 		expect(ranges.size).toBe(0);
