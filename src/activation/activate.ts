@@ -391,7 +391,8 @@ export class ActivationEngine {
 	 *
 	 * Multi-store note: this method operates on the writable store only (`this.db`).
 	 * Entries in read-only stores are not re-embedded when the model changes — their
-	 * embeddings may be stale/incompatible until those stores are updated independently.
+	 * embeddings may be stale/incompatible until those stores re-embed their own entries
+	 * (e.g. by toggling the embedding model config and restarting the server).
 	 * Returns true if a re-embed was performed, false otherwise.
 	 */
 	async checkAndReEmbed(): Promise<boolean> {

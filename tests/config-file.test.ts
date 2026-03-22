@@ -163,7 +163,7 @@ describe("loadConfigFile", () => {
 				],
 			}),
 		);
-		expect(() => loadConfigFile(configPath)).toThrow(/duplicate ids/);
+		expect(() => loadConfigFile(configPath)).toThrow(/duplicate ids:.*main/);
 	});
 
 	it("throws when no writable store", () => {
