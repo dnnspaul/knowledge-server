@@ -51,9 +51,9 @@ export function runMigrateConfig(): void {
   // See: https://github.com/MAnders333/knowledge-server#configuration
   //
   // stores: list of knowledge databases
-  //   - exactly one store must have "writable": true (receives consolidation writes)
+  //   - at least one store must have "writable": true (receives consolidation writes)
+  //   - multiple writable stores are allowed when domains[] are configured for routing
   //   - all stores are used for activation reads (fan-out)
-  //   - add more stores to read from multiple knowledge bases simultaneously
   "stores": [
 ${storeBlock}
   ]

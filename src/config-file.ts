@@ -12,7 +12,9 @@ export interface StoreConfig {
 	kind: "sqlite" | "postgres";
 	/**
 	 * Whether this store accepts consolidation writes.
-	 * Exactly one store must be writable. All others are read-only for activation.
+	 * At least one store must be writable. Multiple writable stores are allowed
+	 * when domains are configured — each domain must target a writable store.
+	 * Read-only stores are used for activation reads only.
 	 */
 	writable: boolean;
 	/**
