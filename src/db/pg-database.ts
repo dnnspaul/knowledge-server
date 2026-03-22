@@ -1566,13 +1566,20 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 	}
 
 	async close(): Promise<void> {
-		// Release any held advisory lock connection before ending the pool.
-		// If close() is called while a lock is held (e.g. shutdown mid-consolidation),
-		// this prevents postgres.js from warning about connections closed before release.
-		// The advisory lock itself is dropped by Postgres when the session ends.
+		// If a lock is held at close time (e.g. shutdown mid-consolidation), run the
+		// full releaseConsolidationLock() to issue pg_advisory_unlock before releasing
+		// the reserved connection. This avoids a window where the connection is returned
+		// to the pool (still holding the session-scoped lock) before sql.end() drains it.
 		if (this._lockConnection) {
-			this._lockConnection.release();
-			this._lockConnection = null;
+			// Best-effort unlock — catch so a transient PG error doesn't prevent
+			// sql.end() from closing the pool. The lock is session-scoped and will
+			// be dropped by Postgres when the connection closes anyway.
+			await this.releaseConsolidationLock().catch((err) => {
+				logger.warn(
+					"[pg-db] releaseConsolidationLock failed during close:",
+					err,
+				);
+			});
 		}
 		await this.sql.end();
 	}
