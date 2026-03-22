@@ -253,6 +253,13 @@ export class ConsolidationEngine {
 	}> {
 		const cursor = await this.db.getSourceCursor(reader.source, this.userId);
 
+		// 0. Optional async preparation step (e.g. PendingEpisodesReader pre-loads
+		//    its candidate list from the pending_episodes table before the sync
+		//    getCandidateSessions / countNewSessions calls).
+		if (reader.prepare) {
+			await reader.prepare(cursor.lastMessageTimeCreated);
+		}
+
 		// 1. Fetch candidate sessions: those with messages newer than this source's cursor.
 		//    Returns session IDs plus the max message timestamp per session,
 		//    ordered by max message time ASC for deterministic batching.
@@ -408,6 +415,15 @@ export class ConsolidationEngine {
 			lastMessageTimeCreated: newCursor,
 			lastConsolidatedAt: Date.now(),
 		});
+
+		// Optional post-consolidation hook — PendingEpisodesReader uses this to
+		// delete consolidated rows from pending_episodes, keeping the table lean.
+		// Use candidateIds (all processed candidates) rather than episodes.map(sessionId)
+		// so sessions where all episodes were already processed (and thus absent from
+		// `episodes`) also get their pending rows cleaned up.
+		if (reader.afterConsolidated) {
+			await reader.afterConsolidated(candidateIds);
+		}
 
 		return {
 			sessionsProcessed: candidateSessions.length,

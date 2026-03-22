@@ -4,9 +4,12 @@ import { logger } from "../logger.js";
 import { clampKnowledgeType } from "../types.js";
 import type {
 	ConsolidationState,
+	DaemonCursor,
+	Episode,
 	KnowledgeEntry,
 	KnowledgeRelation,
 	KnowledgeStatus,
+	PendingEpisode,
 	ProcessedRange,
 	SourceCursor,
 } from "../types.js";
@@ -364,6 +367,44 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 							await sql`
 								CREATE INDEX IF NOT EXISTS idx_episode_source_user_session
 								ON consolidated_episode(source, user_id, session_id)
+							`;
+						}
+					},
+				},
+				{
+					version: 12,
+					label: "add pending_episodes table for episode uploader daemon",
+					up: async (sql: TxSql) => {
+						// pending_episodes: staging table for daemon-uploaded episodes.
+						// daemon_cursor lives in local SQLite only — not created in Postgres.
+						const tableExists = await sql`
+							SELECT 1 FROM information_schema.tables
+							WHERE table_schema = current_schema()
+							  AND table_name = 'pending_episodes'
+						`;
+						if (tableExists.length === 0) {
+							await sql`
+								CREATE TABLE pending_episodes (
+									id               TEXT    PRIMARY KEY,
+									user_id          TEXT    NOT NULL DEFAULT 'default',
+									source           TEXT    NOT NULL,
+									session_id       TEXT    NOT NULL,
+									start_message_id TEXT    NOT NULL,
+									end_message_id   TEXT    NOT NULL,
+									session_title    TEXT    NOT NULL DEFAULT '',
+									project_name     TEXT    NOT NULL DEFAULT '',
+									directory        TEXT    NOT NULL DEFAULT '',
+									content          TEXT    NOT NULL,
+									content_type     TEXT    NOT NULL CHECK(content_type IN ('messages', 'compaction_summary', 'document')),
+									session_timestamp BIGINT  NOT NULL DEFAULT 0,
+									max_message_time  BIGINT  NOT NULL DEFAULT 0,
+									approx_tokens    INTEGER NOT NULL DEFAULT 0,
+									uploaded_at      BIGINT  NOT NULL
+								)
+							`;
+							await sql`
+								CREATE INDEX IF NOT EXISTS idx_pending_source_user_time
+								ON pending_episodes(source, user_id, max_message_time)
 							`;
 						}
 					},
@@ -1375,6 +1416,81 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 			WHERE status IN ('active', 'conflicted') AND embedding IS NOT NULL
 		`;
 		return result.count;
+	}
+
+	// ── Pending Episodes ─────────────────────────────────────────────────────
+
+	async insertPendingEpisode(episode: PendingEpisode): Promise<void> {
+		await this.sql`
+			INSERT INTO pending_episodes
+			(id, user_id, source, session_id, start_message_id, end_message_id,
+			 session_title, project_name, directory, content, content_type,
+			 session_timestamp, max_message_time, approx_tokens, uploaded_at)
+			VALUES (
+				${episode.id}, ${episode.userId}, ${episode.source},
+				${episode.sessionId}, ${episode.startMessageId}, ${episode.endMessageId},
+				${episode.sessionTitle}, ${episode.projectName}, ${episode.directory},
+				${episode.content}, ${episode.contentType},
+				${episode.timeCreated}, ${episode.maxMessageTime},
+				${episode.approxTokens}, ${episode.uploadedAt}
+			)
+			ON CONFLICT (id) DO NOTHING
+		`;
+	}
+
+	async getPendingEpisodes(
+		source: string,
+		userId: string,
+		afterMaxMessageTime: number,
+		limit = 500,
+	): Promise<PendingEpisode[]> {
+		const rows = await this.sql`
+			SELECT * FROM pending_episodes
+			WHERE source = ${source} AND user_id = ${userId}
+			  AND max_message_time > ${afterMaxMessageTime}
+			ORDER BY max_message_time ASC
+			LIMIT ${limit}
+		`;
+		return rows.map((r) => ({
+			id: r.id as string,
+			userId: r.user_id as string,
+			source: r.source as string,
+			sessionId: r.session_id as string,
+			startMessageId: r.start_message_id as string,
+			endMessageId: r.end_message_id as string,
+			sessionTitle: r.session_title as string,
+			projectName: r.project_name as string,
+			directory: r.directory as string,
+			content: r.content as string,
+			contentType: r.content_type as Episode["contentType"],
+			timeCreated: Number(r.session_timestamp),
+			maxMessageTime: Number(r.max_message_time),
+			approxTokens: Number(r.approx_tokens),
+			uploadedAt: Number(r.uploaded_at),
+		}));
+	}
+
+	async deletePendingEpisodes(ids: string[]): Promise<void> {
+		if (ids.length === 0) return;
+		await this.sql`
+			DELETE FROM pending_episodes WHERE id = ANY(${ids}::text[])
+		`;
+	}
+
+	// ── Daemon Cursor (no-op in Postgres — always local SQLite only) ──────────
+
+	async getDaemonCursor(source: string): Promise<DaemonCursor> {
+		// daemon_cursor is local-only — always return zero cursor in Postgres.
+		// The daemon writes to its local SQLite; this path should never be called
+		// from the server side, but returns safely rather than throwing.
+		return { source, lastMessageTimeCreated: 0, lastUploadedAt: 0 };
+	}
+
+	async updateDaemonCursor(
+		_source: string,
+		_cursor: Partial<Omit<DaemonCursor, "source">>,
+	): Promise<void> {
+		// No-op in Postgres — daemon_cursor lives in local SQLite only.
 	}
 
 	async close(): Promise<void> {

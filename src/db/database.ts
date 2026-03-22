@@ -8,9 +8,12 @@ import { logger } from "../logger.js";
 import { clampKnowledgeType } from "../types.js";
 import type {
 	ConsolidationState,
+	DaemonCursor,
+	Episode,
 	KnowledgeEntry,
 	KnowledgeRelation,
 	KnowledgeStatus,
+	PendingEpisode,
 	ProcessedRange,
 	SourceCursor,
 } from "../types.js";
@@ -234,6 +237,57 @@ export class KnowledgeDB implements IKnowledgeDB {
 						db.exec(
 							"CREATE INDEX IF NOT EXISTS idx_episode_processed ON consolidated_episode(processed_at)",
 						);
+					}
+				},
+			},
+			{
+				version: 12,
+				label:
+					"add pending_episodes and daemon_cursor tables for episode uploader daemon",
+				up: (db) => {
+					// Both tables are additive — CREATE TABLE IF NOT EXISTS is safe on any DB.
+					// pending_episodes: only needed on the shared Postgres (server side), but
+					// creating it on SQLite is harmless and simplifies the single-machine setup.
+					// daemon_cursor: only needed on local SQLite (daemon side), same logic.
+					const existingTables = (
+						db
+							.prepare("SELECT name FROM sqlite_master WHERE type='table'")
+							.all() as Array<{ name: string }>
+					).map((r) => r.name);
+
+					if (!existingTables.includes("pending_episodes")) {
+						db.exec(`
+							CREATE TABLE pending_episodes (
+								id               TEXT    PRIMARY KEY,
+								user_id          TEXT    NOT NULL DEFAULT 'default',
+								source           TEXT    NOT NULL,
+								session_id       TEXT    NOT NULL,
+								start_message_id TEXT    NOT NULL,
+								end_message_id   TEXT    NOT NULL,
+								session_title    TEXT    NOT NULL DEFAULT '',
+								project_name     TEXT    NOT NULL DEFAULT '',
+								directory        TEXT    NOT NULL DEFAULT '',
+								content          TEXT    NOT NULL,
+								content_type     TEXT    NOT NULL CHECK(content_type IN ('messages', 'compaction_summary', 'document')),
+								session_timestamp INTEGER NOT NULL DEFAULT 0,
+								max_message_time  INTEGER NOT NULL DEFAULT 0,
+								approx_tokens    INTEGER NOT NULL DEFAULT 0,
+								uploaded_at      INTEGER NOT NULL
+							)
+						`);
+						db.exec(
+							"CREATE INDEX IF NOT EXISTS idx_pending_source_user_time ON pending_episodes(source, user_id, max_message_time)",
+						);
+					}
+
+					if (!existingTables.includes("daemon_cursor")) {
+						db.exec(`
+							CREATE TABLE daemon_cursor (
+								source                    TEXT    PRIMARY KEY,
+								last_message_time_created INTEGER NOT NULL DEFAULT 0,
+								last_uploaded_at          INTEGER NOT NULL DEFAULT 0
+							)
+						`);
 					}
 				},
 			},
@@ -1605,6 +1659,133 @@ export class KnowledgeDB implements IKnowledgeDB {
 			)
 			.run();
 		return result.changes;
+	}
+
+	// ── Pending Episodes ─────────────────────────────────────────────────────
+
+	async insertPendingEpisode(episode: PendingEpisode): Promise<void> {
+		this.db
+			.prepare(
+				`INSERT OR IGNORE INTO pending_episodes
+         (id, user_id, source, session_id, start_message_id, end_message_id,
+          session_title, project_name, directory, content, content_type,
+          session_timestamp, max_message_time, approx_tokens, uploaded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			)
+			.run(
+				episode.id,
+				episode.userId,
+				episode.source,
+				episode.sessionId,
+				episode.startMessageId,
+				episode.endMessageId,
+				episode.sessionTitle,
+				episode.projectName,
+				episode.directory,
+				episode.content,
+				episode.contentType,
+				episode.timeCreated,
+				episode.maxMessageTime,
+				episode.approxTokens,
+				episode.uploadedAt,
+			);
+	}
+
+	async getPendingEpisodes(
+		source: string,
+		userId: string,
+		afterMaxMessageTime: number,
+		limit = 500,
+	): Promise<PendingEpisode[]> {
+		const rows = this.db
+			.prepare(
+				`SELECT * FROM pending_episodes
+         WHERE source = ? AND user_id = ? AND max_message_time > ?
+         ORDER BY max_message_time ASC
+         LIMIT ?`,
+			)
+			.all(source, userId, afterMaxMessageTime, limit) as Array<{
+			id: string;
+			user_id: string;
+			source: string;
+			session_id: string;
+			start_message_id: string;
+			end_message_id: string;
+			session_title: string;
+			project_name: string;
+			directory: string;
+			content: string;
+			content_type: string;
+			session_timestamp: number;
+			max_message_time: number;
+			approx_tokens: number;
+			uploaded_at: number;
+		}>;
+
+		return rows.map((r) => ({
+			id: r.id,
+			userId: r.user_id,
+			source: r.source,
+			sessionId: r.session_id,
+			startMessageId: r.start_message_id,
+			endMessageId: r.end_message_id,
+			sessionTitle: r.session_title,
+			projectName: r.project_name,
+			directory: r.directory,
+			content: r.content,
+			contentType: r.content_type as Episode["contentType"],
+			timeCreated: r.session_timestamp,
+			maxMessageTime: r.max_message_time,
+			approxTokens: r.approx_tokens,
+			uploadedAt: r.uploaded_at,
+		}));
+	}
+
+	async deletePendingEpisodes(ids: string[]): Promise<void> {
+		if (ids.length === 0) return;
+		this.db
+			.prepare(
+				"DELETE FROM pending_episodes WHERE id IN (SELECT value FROM json_each(?))",
+			)
+			.run(JSON.stringify(ids));
+	}
+
+	// ── Daemon Cursor ─────────────────────────────────────────────────────────
+
+	async getDaemonCursor(source: string): Promise<DaemonCursor> {
+		const row = this.db
+			.prepare(
+				"SELECT last_message_time_created, last_uploaded_at FROM daemon_cursor WHERE source = ?",
+			)
+			.get(source) as {
+			last_message_time_created: number;
+			last_uploaded_at: number;
+		} | null;
+
+		if (!row) {
+			return { source, lastMessageTimeCreated: 0, lastUploadedAt: 0 };
+		}
+		return {
+			source,
+			lastMessageTimeCreated: row.last_message_time_created,
+			lastUploadedAt: row.last_uploaded_at,
+		};
+	}
+
+	async updateDaemonCursor(
+		source: string,
+		cursor: Partial<Omit<DaemonCursor, "source">>,
+	): Promise<void> {
+		const current = await this.getDaemonCursor(source);
+		const newLastMessageTime =
+			cursor.lastMessageTimeCreated ?? current.lastMessageTimeCreated;
+		const newLastUploaded = cursor.lastUploadedAt ?? current.lastUploadedAt;
+		this.db
+			.prepare(
+				`INSERT OR REPLACE INTO daemon_cursor (source, last_message_time_created, last_uploaded_at)
+         VALUES (?, ?, ?)`,
+			)
+			.run(source, newLastMessageTime, newLastUploaded);
 	}
 
 	async close(): Promise<void> {

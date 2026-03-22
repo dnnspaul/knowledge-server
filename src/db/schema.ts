@@ -57,9 +57,19 @@
  * - user_id defaults to 'default' for backwards-compatible single-user mode.
  *   In multi-user setups, set user_id via the KNOWLEDGE_USER_ID env var or config.jsonc.
  * - MIGRATION: v10 → v11 is incremental: ALTER TABLE + PK rebuild via drop+recreate.
+ *
+ * v12: Episode uploader daemon support.
+ * - pending_episodes: staging table where the daemon writes raw episodes before
+ *   the server consolidates them. Decouples episode reading (done on the user's
+ *   machine by the daemon) from consolidation (done on the server). Enables
+ *   cross-device and multi-user setups where the server can't read local files.
+ * - daemon_cursor: per-source per-user high-water mark for the daemon, independent
+ *   from source_cursor (which is owned by the consolidation engine). Allows the
+ *   daemon and server to advance their cursors independently.
+ * - MIGRATION: v11 → v12 is additive: CREATE TABLE IF NOT EXISTS — no data loss.
  */
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 /**
  * Expected columns for each table, derived from the DDL below.
@@ -127,6 +137,24 @@ export const EXPECTED_TABLE_COLUMNS: Readonly<
 		"entries_created",
 	],
 	embedding_metadata: ["id", "model", "dimensions", "recorded_at"],
+	pending_episodes: [
+		"id",
+		"user_id",
+		"source",
+		"session_id",
+		"start_message_id",
+		"end_message_id",
+		"session_title",
+		"project_name",
+		"directory",
+		"content",
+		"content_type",
+		"session_timestamp",
+		"max_message_time",
+		"approx_tokens",
+		"uploaded_at",
+	],
+	daemon_cursor: ["source", "last_message_time_created", "last_uploaded_at"],
 };
 
 export const CREATE_TABLES = `
@@ -263,5 +291,42 @@ export const CREATE_TABLES = `
     model TEXT NOT NULL,
     dimensions INTEGER NOT NULL,
     recorded_at INTEGER NOT NULL
+  );
+
+  -- Pending episodes — staging table written by the daemon, drained by the server.
+  -- Decouples episode reading (done locally by the daemon on the user's machine)
+  -- from consolidation (done by the server, which may run on a different machine).
+  -- user_id is set by the daemon from KNOWLEDGE_USER_ID / hostname.
+  -- Rows are deleted after successful consolidation.
+  CREATE TABLE IF NOT EXISTS pending_episodes (
+    id               TEXT    PRIMARY KEY,  -- UUID assigned by daemon
+    user_id          TEXT    NOT NULL DEFAULT 'default',
+    source           TEXT    NOT NULL,     -- 'opencode', 'claude-code', etc.
+    session_id       TEXT    NOT NULL,
+    start_message_id TEXT    NOT NULL,
+    end_message_id   TEXT    NOT NULL,
+    session_title    TEXT    NOT NULL DEFAULT '',
+    project_name     TEXT    NOT NULL DEFAULT '',
+    directory        TEXT    NOT NULL DEFAULT '',
+    content          TEXT    NOT NULL,
+    content_type     TEXT    NOT NULL CHECK(content_type IN ('messages', 'compaction_summary', 'document')),
+    session_timestamp INTEGER NOT NULL DEFAULT 0,
+    max_message_time  INTEGER NOT NULL DEFAULT 0,
+    approx_tokens    INTEGER NOT NULL DEFAULT 0,
+    uploaded_at      INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pending_source_user_time
+    ON pending_episodes(source, user_id, max_message_time);
+
+  -- Daemon cursor — local high-water mark per source, tracking what has been uploaded.
+  -- Always stored in the local SQLite DB on the user's machine, never in shared Postgres.
+  -- Separate from source_cursor (owned by the server) so daemon and server advance
+  -- independently. user_id is not needed here — the table is always machine-local,
+  -- so it is inherently scoped to one user.
+  CREATE TABLE IF NOT EXISTS daemon_cursor (
+    source                   TEXT    PRIMARY KEY,
+    last_message_time_created INTEGER NOT NULL DEFAULT 0,
+    last_uploaded_at          INTEGER NOT NULL DEFAULT 0
   );
 `;

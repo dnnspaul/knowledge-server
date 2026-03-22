@@ -997,6 +997,147 @@ function forceSymlink(src: string, dst: string): void {
 
 // ── Entry point ────────────────────────────────────────────────────────────────
 
+// ── Daemon service registration ───────────────────────────────────────────────
+
+/**
+ * Register the knowledge-daemon as a background system service.
+ *
+ * macOS:  writes ~/Library/LaunchAgents/com.knowledge-server.daemon.plist
+ *         and loads it via `launchctl load`
+ *
+ * Linux:  writes ~/.config/systemd/user/knowledge-daemon.service
+ *         and enables + starts it via `systemctl --user`
+ *
+ * Idempotent: safe to re-run after updating the binary path.
+ */
+function setupDaemon(): void {
+	const platform = process.platform;
+	const home = homedir();
+
+	// Resolve daemon binary path
+	let daemonBin: string;
+	if (isSourceInstall()) {
+		const bunBin = typeof Bun !== "undefined" ? process.argv[0] : "bun";
+		const projectDir = getProjectDir();
+		daemonBin = `${bunBin} run ${join(projectDir, "src", "daemon.ts")}`;
+	} else {
+		// Binary install — daemon is a sibling binary in the same directory
+		const mainBin = typeof Bun !== "undefined" ? Bun.main : process.argv[1];
+		const binDir = dirname(mainBin);
+		daemonBin = join(binDir, "knowledge-daemon");
+		if (!existsSync(daemonBin)) {
+			// Fallback: knowledge-daemon may be on PATH
+			daemonBin = "knowledge-daemon";
+		}
+	}
+
+	if (platform === "darwin") {
+		// macOS launchd
+		const plistDir = join(home, "Library", "LaunchAgents");
+		const plistPath = join(plistDir, "com.knowledge-server.daemon.plist");
+
+		mkdirSync(plistDir, { recursive: true });
+
+		const parts = daemonBin.split(" ");
+		const programArgs = parts
+			.map((p) => `    <string>${p}</string>`)
+			.join("\n");
+
+		const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.knowledge-server.daemon</string>
+
+  <key>ProgramArguments</key>
+  <array>
+${programArgs}
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>${home}/.local/share/knowledge-server/daemon.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>${home}/.local/share/knowledge-server/daemon.log</string>
+</dict>
+</plist>
+`;
+		writeFileSync(plistPath, plist);
+
+		// Unload first in case it was already loaded (idempotency)
+		spawnSync("launchctl", ["unload", plistPath], { stdio: "ignore" });
+		const load = spawnSync("launchctl", ["load", plistPath], {
+			stdio: "pipe",
+		});
+		if (load.status !== 0) {
+			console.warn(
+				`  ⚠ launchctl load returned ${load.status}. The daemon plist was written but may not be running. Try: launchctl load ${plistPath}`,
+			);
+		} else {
+			console.log("  ✓ Daemon registered as macOS launchd service");
+			console.log(`    Plist: ${plistPath}`);
+			console.log(
+				`    Log:   ${join(home, ".local", "share", "knowledge-server", "daemon.log")}`,
+			);
+		}
+	} else if (platform === "linux") {
+		// Linux systemd user service
+		const serviceDir = join(home, ".config", "systemd", "user");
+		const servicePath = join(serviceDir, "knowledge-daemon.service");
+
+		mkdirSync(serviceDir, { recursive: true });
+
+		const service = `[Unit]
+Description=knowledge-daemon — episode uploader for knowledge-server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${daemonBin}
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:${home}/.local/share/knowledge-server/daemon.log
+StandardError=append:${home}/.local/share/knowledge-server/daemon.log
+
+[Install]
+WantedBy=default.target
+`;
+		writeFileSync(servicePath, service);
+
+		spawnSync("systemctl", ["--user", "daemon-reload"], { stdio: "ignore" });
+		const enable = spawnSync(
+			"systemctl",
+			["--user", "enable", "--now", "knowledge-daemon"],
+			{ stdio: "pipe" },
+		);
+		if (enable.status !== 0) {
+			console.warn(
+				`  ⚠ systemctl enable returned ${enable.status}. The service file was written but may not be running. Try: systemctl --user enable --now knowledge-daemon`,
+			);
+		} else {
+			console.log("  ✓ Daemon registered as systemd user service");
+			console.log(`    Service: ${servicePath}`);
+			console.log(
+				`    Log:     ${join(home, ".local", "share", "knowledge-server", "daemon.log")}`,
+			);
+		}
+	} else {
+		console.error(
+			`  ✗ Unsupported platform: ${platform}. Automatic service registration is only supported on macOS and Linux.`,
+		);
+		console.log(`  Run the daemon manually: ${daemonBin}`);
+		process.exit(1);
+	}
+}
+
 export function runSetupTool(args: string[]): void {
 	const tool = args[0];
 
@@ -1009,6 +1150,7 @@ Available tools:
   cursor        Register MCP server in ~/.cursor/mcp.json
   codex         Register MCP server in ~/.codex/config.toml
   vscode        Register MCP server via \`code --add-mcp\`
+  daemon        Register knowledge-daemon as a background service (launchd/systemd)
 `);
 		process.exit(0);
 	}
@@ -1029,10 +1171,13 @@ Available tools:
 		case "vscode":
 			setupVSCode();
 			break;
+		case "daemon":
+			setupDaemon();
+			break;
 		default:
 			console.error(`Unknown tool: ${tool}`);
 			console.error(
-				"Valid options: opencode, claude-code, cursor, codex, vscode",
+				"Valid options: opencode, claude-code, cursor, codex, vscode, daemon",
 			);
 			process.exit(1);
 	}

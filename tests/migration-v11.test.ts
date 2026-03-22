@@ -162,7 +162,7 @@ describe("v11 SQLite migration (v10 → v11)", () => {
 			.get() as { v: number };
 		raw.close();
 
-		expect(row.v).toBe(11);
+		expect(row.v).toBe(12); // v10→v11 then v11→v12 both run
 	});
 
 	it("new cursor writes and reads work after migration", async () => {

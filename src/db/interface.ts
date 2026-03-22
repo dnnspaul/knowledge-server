@@ -1,8 +1,10 @@
 import type {
 	ConsolidationState,
+	DaemonCursor,
 	KnowledgeEntry,
 	KnowledgeRelation,
 	KnowledgeStatus,
+	PendingEpisode,
 	ProcessedRange,
 	SourceCursor,
 } from "../types.js";
@@ -264,6 +266,48 @@ export interface IKnowledgeDB {
 	 * @internal — exposed for tests and manual recovery only.
 	 */
 	clearAllEmbeddings(): Promise<number>;
+
+	// ── Pending Episodes (daemon ↔ server staging table) ──────────────────────
+
+	/**
+	 * Insert a pending episode uploaded by the daemon.
+	 * Idempotent — silently ignores duplicate IDs (ON CONFLICT DO NOTHING).
+	 */
+	insertPendingEpisode(episode: PendingEpisode): Promise<void>;
+
+	/**
+	 * Fetch pending episodes for a given source and user, ordered by max_message_time ASC.
+	 * Used by PendingEpisodesReader to get new episodes for consolidation.
+	 */
+	getPendingEpisodes(
+		source: string,
+		userId: string,
+		afterMaxMessageTime: number,
+		limit?: number,
+	): Promise<PendingEpisode[]>;
+
+	/**
+	 * Delete pending episodes by their IDs after successful consolidation.
+	 */
+	deletePendingEpisodes(ids: string[]): Promise<void>;
+
+	// ── Daemon Cursor (local SQLite only, not in shared Postgres) ─────────────
+
+	/**
+	 * Get the daemon's upload cursor for a source.
+	 * Returns a zero-state cursor if none exists yet.
+	 * Only meaningful on local SQLite — shared Postgres instances return zero.
+	 */
+	getDaemonCursor(source: string): Promise<DaemonCursor>;
+
+	/**
+	 * Advance the daemon's upload cursor for a source.
+	 * Only meaningful on local SQLite — no-op on shared Postgres.
+	 */
+	updateDaemonCursor(
+		source: string,
+		cursor: Partial<Omit<DaemonCursor, "source">>,
+	): Promise<void>;
 
 	close(): Promise<void>;
 }

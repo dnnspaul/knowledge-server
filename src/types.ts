@@ -167,6 +167,31 @@ export interface Episode {
 }
 
 /**
+ * A pending episode row written by the daemon and read by the server's
+ * PendingEpisodesReader. Structurally identical to Episode plus daemon metadata.
+ */
+export interface PendingEpisode extends Episode {
+	/** Row UUID assigned by the daemon. */
+	id: string;
+	/** User identifier from the daemon's machine (KNOWLEDGE_USER_ID / hostname). */
+	userId: string;
+	/** Source name, e.g. "opencode", "claude-code". */
+	source: string;
+	/** Unix ms timestamp when the daemon uploaded this row. */
+	uploadedAt: number;
+}
+
+/**
+ * Daemon cursor — local high-water mark per source, tracking what has been uploaded.
+ * Always stored in local SQLite on the user's machine, never in shared Postgres.
+ */
+export interface DaemonCursor {
+	source: string;
+	lastMessageTimeCreated: number;
+	lastUploadedAt: number;
+}
+
+/**
  * An already-processed episode range, keyed by stable message IDs.
  * Loaded from consolidated_episode to skip re-processing on subsequent runs.
  */
@@ -212,6 +237,20 @@ export interface IEpisodeReader {
 		candidateSessionIds: string[],
 		processedRanges: Map<string, ProcessedRange[]>,
 	): Episode[];
+
+	/**
+	 * Optional async preparation step called before getCandidateSessions.
+	 * Used by readers that need async DB access to pre-load their candidate list
+	 * (e.g. PendingEpisodesReader fetches from the pending_episodes table).
+	 * Not called for readers that don't implement it (backwards-compatible).
+	 */
+	prepare?(afterMessageTimeCreated: number): Promise<void>;
+
+	/**
+	 * Optional post-consolidation hook called after episodes are recorded.
+	 * Used by PendingEpisodesReader to delete consolidated rows from pending_episodes.
+	 */
+	afterConsolidated?(sessionIds: string[]): Promise<void>;
 
 	/** Release any held resources (DB connections, file handles, etc.). */
 	close(): void;

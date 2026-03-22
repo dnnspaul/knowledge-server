@@ -141,4 +141,27 @@ export const PG_CREATE_TABLES = `
     dimensions INTEGER NOT NULL,
     recorded_at BIGINT NOT NULL
   );
+
+  -- Pending episodes — staging table written by the daemon, drained by the server.
+  -- daemon_cursor is local-SQLite-only and is NOT created in Postgres.
+  CREATE TABLE IF NOT EXISTS pending_episodes (
+    id               TEXT    PRIMARY KEY,
+    user_id          TEXT    NOT NULL DEFAULT 'default',
+    source           TEXT    NOT NULL,
+    session_id       TEXT    NOT NULL,
+    start_message_id TEXT    NOT NULL,
+    end_message_id   TEXT    NOT NULL,
+    session_title    TEXT    NOT NULL DEFAULT '',
+    project_name     TEXT    NOT NULL DEFAULT '',
+    directory        TEXT    NOT NULL DEFAULT '',
+    content          TEXT    NOT NULL,
+    content_type     TEXT    NOT NULL CHECK(content_type IN ('messages', 'compaction_summary', 'document')),
+    session_timestamp BIGINT  NOT NULL DEFAULT 0,
+    max_message_time  BIGINT  NOT NULL DEFAULT 0,
+    approx_tokens    INTEGER NOT NULL DEFAULT 0,
+    uploaded_at      BIGINT  NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pending_source_user_time
+    ON pending_episodes(source, user_id, max_message_time);
 `;
