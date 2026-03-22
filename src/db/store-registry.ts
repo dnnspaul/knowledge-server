@@ -51,9 +51,10 @@ export class StoreRegistry {
 	/**
 	 * All stores used for activation reads.
 	 * Includes the writable store — activation draws from the full corpus.
+	 * Returns a shallow copy — callers cannot mutate the registry's internal list.
 	 */
 	readStores(): IKnowledgeDB[] {
-		return this.readable;
+		return [...this.readable];
 	}
 
 	/** Close all store connections. */

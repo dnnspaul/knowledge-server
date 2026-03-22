@@ -388,6 +388,10 @@ export class ActivationEngine {
 	 *    c. Overwrite each entry's embedding vector with the new-model vector
 	 *
 	 * Called at startup before consolidation so all vectors are consistent.
+	 *
+	 * Multi-store note: this method operates on the writable store only (`this.db`).
+	 * Entries in read-only stores are not re-embedded when the model changes — their
+	 * embeddings may be stale/incompatible until those stores are updated independently.
 	 * Returns true if a re-embed was performed, false otherwise.
 	 */
 	async checkAndReEmbed(): Promise<boolean> {

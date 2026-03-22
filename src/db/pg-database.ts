@@ -83,7 +83,7 @@ function toNum(val: number | string): number {
  * Implements the same IKnowledgeDB interface as the SQLite KnowledgeDB class,
  * adapting all queries for PostgreSQL syntax (JSONB, BYTEA, ON CONFLICT, etc.).
  *
- * Activated when POSTGRES_CONNECTION_URI is set.
+ * Used by StoreRegistry for postgres-kind stores.
  */
 export class PostgresKnowledgeDB implements IKnowledgeDB {
 	private sql: postgres.Sql;

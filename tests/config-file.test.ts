@@ -153,6 +153,19 @@ describe("loadConfigFile", () => {
 		expect(() => loadConfigFile(configPath)).toThrow(/at least one store/);
 	});
 
+	it("throws on duplicate store ids", () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				stores: [
+					{ id: "main", kind: "sqlite", writable: true },
+					{ id: "main", kind: "sqlite", writable: false },
+				],
+			}),
+		);
+		expect(() => loadConfigFile(configPath)).toThrow(/duplicate ids/);
+	});
+
 	it("throws when no writable store", () => {
 		writeFileSync(
 			configPath,

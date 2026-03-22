@@ -182,6 +182,15 @@ function validateConfigFile(
 		validateStore(s, i, configPath),
 	);
 
+	// Duplicate store IDs would silently clobber each other in StoreRegistry's Map.
+	const ids = stores.map((s) => s.id);
+	const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+	if (dupes.length > 0) {
+		throw new Error(
+			`config.jsonc "stores" contains duplicate ids: ${[...new Set(dupes)].join(", ")}`,
+		);
+	}
+
 	// Exactly one writable store required
 	const writableStores = stores.filter((s) => s.writable);
 	if (writableStores.length === 0) {

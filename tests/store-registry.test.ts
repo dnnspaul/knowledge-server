@@ -127,14 +127,8 @@ describe("ActivationEngine multi-store fan-out", () => {
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "ks-activation-multi-test-"));
-		db1 = new KnowledgeDB(
-			join(tempDir, "db1.db"),
-			join(tempDir, "opencode-fake.db"),
-		);
-		db2 = new KnowledgeDB(
-			join(tempDir, "db2.db"),
-			join(tempDir, "opencode-fake2.db"),
-		);
+		db1 = new KnowledgeDB(join(tempDir, "db1.db"));
+		db2 = new KnowledgeDB(join(tempDir, "db2.db"));
 	});
 
 	afterEach(async () => {
