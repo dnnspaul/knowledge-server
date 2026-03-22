@@ -392,8 +392,15 @@ If there is nothing new worth extracting, return an empty array: []`;
 						`extraction ${new Date().toISOString().split("T")[0]}`,
 					// Clamp domain to valid ids — hallucinated ids fall back to undefined
 					// and the caller defaults to the session's resolved domain.
-					...(validDomainIds && entry.domain && validDomainIds.has(entry.domain)
-						? { domain: entry.domain as string }
+					...(validDomainIds && entry.domain
+						? validDomainIds.has(entry.domain)
+							? { domain: entry.domain as string }
+							: (() => {
+									logger.warn(
+										`[llm] extractKnowledge: LLM returned unknown domain "${entry.domain}" — ignoring. Valid: ${[...validDomainIds].join(", ")}`,
+									);
+									return {};
+								})()
 						: {}),
 				}))
 		);

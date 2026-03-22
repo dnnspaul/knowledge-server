@@ -303,6 +303,14 @@ function validateDomain(
 	if (typeof d.description !== "string" || !d.description.trim()) {
 		throw new Error(`${loc} must have a non-empty string "description"`);
 	}
+	if (d.description.length > 300) {
+		throw new Error(
+			`${loc} "description" must be ≤ 300 characters (got ${d.description.length})`,
+		);
+	}
+	if (/[\r\n]/.test(d.description)) {
+		throw new Error(`${loc} "description" must not contain newlines`);
+	}
 	if (typeof d.store !== "string" || !d.store.trim()) {
 		throw new Error(`${loc} must have a non-empty string "store"`);
 	}

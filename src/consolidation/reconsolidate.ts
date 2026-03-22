@@ -146,9 +146,11 @@ export class Reconsolidator {
 	): Promise<void> {
 		// insertDb: where NEW entries land (domain-routed or default writable store).
 		const insertDb = targetDb ?? this.db;
-		// existingDb: where UPDATES and REINFORCEMENTS go — always the store that
-		// owns entries in entriesMap (loaded from this.db exclusively).
-		const existingDb = this.db;
+		// Cross-store reconsolidation is not supported — updates and reinforcements
+		// always target this.db because entriesMap is loaded exclusively from this.db.
+		// Using this.db directly (not an alias) makes it explicit that this is always
+		// the primary store, not a parameter that could diverge in a future refactor.
+
 		// Embed the extracted entry content (skip if pre-computed by caller)
 		const entryEmbedding =
 			precomputedEmbedding ??
@@ -218,9 +220,8 @@ export class Reconsolidator {
 				// and resets last_accessed_at so decay restarts from now.
 				// We use reinforceObservation rather than recordAccess — this is not a retrieval
 				// event; it's confirmation that the knowledge is still true.
-				// Use existingDb (this.db) — nearestEntry lives in this.db since entriesMap
-				// is loaded exclusively from this.db.getActiveEntriesWithEmbeddings().
-				await existingDb.reinforceObservation(nearestEntry.id);
+				// this.db — nearestEntry lives here, entriesMap loaded from this.db exclusively.
+				await this.db.reinforceObservation(nearestEntry.id);
 				logger.log(
 					`[${logPrefix}] Keep existing (reinforced): ${JSON.stringify(nearestEntry.content)}`,
 				);
@@ -250,12 +251,8 @@ export class Reconsolidator {
 						decision.topics ?? [],
 					),
 				);
-				// Use existingDb (this.db) — nearestEntry lives in this.db, not insertDb.
-				await existingDb.mergeEntry(
-					nearestEntry.id,
-					mergeUpdates,
-					freshEmbedding,
-				);
+				// this.db — nearestEntry lives here, not in insertDb (the domain-routed store).
+				await this.db.mergeEntry(nearestEntry.id, mergeUpdates, freshEmbedding);
 				logger.log(
 					`[${logPrefix}] ${decision.action === "update" ? "Updated" : "Replaced"}: ${JSON.stringify(nearestEntry.content)} → ${JSON.stringify(decision.content)}`,
 				);

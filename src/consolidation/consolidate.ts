@@ -452,13 +452,10 @@ export class ConsolidationEngine {
 		}
 
 		// Fits within budget (or is a single episode that can't be split further).
-		// Load entries for reconsolidation across ALL read stores — deduplication is
-		// cross-store so we don't re-insert knowledge that already exists in any domain.
 		// Load entries from the primary writable store for reconsolidation/dedup.
-		// Cross-store deduplication (against read-only domain stores) is not implemented
-		// in this release — entries in secondary stores may produce near-duplicates if
-		// the same knowledge surface appears in a different domain session. This is an
-		// accepted limitation of the initial domain routing design.
+		// Cross-store deduplication (against read-only domain stores) is not implemented —
+		// entries in secondary stores may produce near-duplicates if the same knowledge
+		// surfaces in a different domain session. Accepted limitation of v1 domain routing.
 		const allEntriesForChunk = await this.db.getActiveEntriesWithEmbeddings();
 
 		// Domain routing: resolve the domain for this chunk based on the episodes' directory.
@@ -522,10 +519,13 @@ export class ConsolidationEngine {
 				// resolve() only returns non-null when domains are configured, and domains
 				// being configured is the precondition for domainRouter being non-null.
 				const domainRouter = this.domainRouter;
+				// domainResolution.domainId is always a non-null string here:
+				// domainRouter is non-null only when config.domains.length > 0, which
+				// means resolve() cannot hit its early-exit null path.
 				const entryTargetStore =
 					domainResolution && domainRouter
 						? (domainRouter.resolveStore(
-								entry.domain ?? domainResolution.domainId ?? undefined,
+								entry.domain ?? domainResolution.domainId,
 							) ?? domainResolution.store)
 						: undefined;
 
