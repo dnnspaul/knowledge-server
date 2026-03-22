@@ -8,14 +8,14 @@ import { createApp } from "./api/server.js";
 import { runActivate } from "./commands/activate.js";
 import { runCalibrate } from "./commands/calibrate.js";
 import { runConsolidate } from "./commands/consolidate.js";
+import { runMigrateConfig } from "./commands/migrate-config.js";
 import { runReinitialize } from "./commands/reinitialize.js";
 import { runReview } from "./commands/review.js";
 import { runStatus } from "./commands/status.js";
 import { config, validateConfig } from "./config.js";
 import { ConsolidationEngine } from "./consolidation/consolidate.js";
 import { createEpisodeReaders } from "./consolidation/readers/index.js";
-import { createKnowledgeDB } from "./db/index.js";
-import type { IKnowledgeDB } from "./db/index.js";
+import { StoreRegistry } from "./db/store-registry.js";
 import { logger } from "./logger.js";
 import { main as mcpMain } from "./mcp/index.js";
 import { runSetupTool } from "./setup-tool.js";
@@ -127,6 +127,12 @@ async function main() {
 		process.exit(0);
 	}
 
+	// `knowledge-server migrate-config`
+	if (subcommand === "migrate-config") {
+		runMigrateConfig();
+		process.exit(0);
+	}
+
 	// `knowledge-server reinitialize [--confirm|--dry-run]`
 	if (subcommand === "reinitialize") {
 		await runReinitialize(subcommandArgs);
@@ -148,6 +154,7 @@ Commands:
   review [--filter <f>]     Interactively review entries (filter: conflicted|stale|all)
   calibrate                 Recommend similarity thresholds for the active embedding model
   reinitialize              Wipe all knowledge and reset consolidation cursor
+  migrate-config            Generate config.jsonc from legacy environment variables
   setup-tool <tool>         Set up integration (opencode|claude-code|cursor|codex|vscode)
   update [--version v1.2.3] Update to the latest (or specified) release
   mcp                       Start the MCP stdio proxy (used by tool integrations)
@@ -160,7 +167,9 @@ Options:
 
 	// Unknown subcommand guard
 	if (subcommand !== undefined) {
-		console.error(`Unknown command: "${subcommand}". Run \`knowledge-server --help\` for usage.`);
+		console.error(
+			`Unknown command: "${subcommand}". Run \`knowledge-server --help\` for usage.`,
+		);
 		process.exit(1);
 	}
 
@@ -183,9 +192,10 @@ Options:
 		process.exit(1);
 	}
 
-	// Initialize components
-	const db = await createKnowledgeDB();
-	const activation = new ActivationEngine(db);
+	// Initialize store registry and components
+	const registry = await StoreRegistry.create();
+	const db = registry.writableStore();
+	const activation = new ActivationEngine(db, registry.readStores());
 	const readers = createEpisodeReaders();
 	const consolidation = new ConsolidationEngine(db, activation, readers);
 
@@ -215,7 +225,9 @@ Options:
 	try {
 		const didReEmbed = await activation.checkAndReEmbed();
 		if (didReEmbed) {
-			logger.log("All embeddings are now consistent with the configured model.");
+			logger.log(
+				"All embeddings are now consistent with the configured model.",
+			);
 		}
 	} catch (e) {
 		logger.error(
@@ -279,7 +291,13 @@ Options:
 	}
 
 	// Create HTTP app
-	const app = createApp(db, activation, consolidation, adminToken, adminTokenIsStable);
+	const app = createApp(
+		db,
+		activation,
+		consolidation,
+		adminToken,
+		adminTokenIsStable,
+	);
 
 	// Start server — PID file written after this succeeds so it only exists
 	// when a port is truly bound.
@@ -413,7 +431,9 @@ Options:
 						consolidation.unlock();
 					}
 				} else {
-					logger.error(`[${label}] Could not acquire lock for synthesis — skipping.`);
+					logger.error(
+						`[${label}] Could not acquire lock for synthesis — skipping.`,
+					);
 				}
 			} catch (err) {
 				logger.error(`[${label}] KB synthesis failed:`, err);
@@ -478,7 +498,7 @@ Options:
 			);
 		}
 		consolidation.close();
-		await db.close();
+		await registry.close();
 		// Clean up PID file on graceful shutdown — only if it still points to us.
 		// Guards against a race where a second instance already overwrote the file.
 		if (config.pidPath && existsSync(config.pidPath)) {

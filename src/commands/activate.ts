@@ -1,5 +1,5 @@
 import { ActivationEngine } from "../activation/activate.js";
-import { createKnowledgeDB } from "../db/index.js";
+import { StoreRegistry } from "../db/store-registry.js";
 
 /**
  * `knowledge-server activate <query>`
@@ -13,8 +13,11 @@ export async function runActivate(query: string): Promise<void> {
 		process.exit(1);
 	}
 
-	const db = await createKnowledgeDB();
-	const activation = new ActivationEngine(db);
+	const registry = await StoreRegistry.create();
+	const activation = new ActivationEngine(
+		registry.writableStore(),
+		registry.readStores(),
+	);
 
 	try {
 		const result = await activation.activate(query);
@@ -40,6 +43,6 @@ export async function runActivate(query: string): Promise<void> {
 			console.log("");
 		}
 	} finally {
-		await db.close();
+		await registry.close();
 	}
 }

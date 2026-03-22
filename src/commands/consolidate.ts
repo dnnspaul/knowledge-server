@@ -1,7 +1,7 @@
 import { ActivationEngine } from "../activation/activate.js";
 import { ConsolidationEngine } from "../consolidation/consolidate.js";
 import { createEpisodeReaders } from "../consolidation/readers/index.js";
-import { createKnowledgeDB } from "../db/index.js";
+import { StoreRegistry } from "../db/store-registry.js";
 import { logger } from "../logger.js";
 
 /**
@@ -13,8 +13,9 @@ import { logger } from "../logger.js";
 export async function runConsolidate(): Promise<void> {
 	logger.init(""); // disable file logging — output goes to stdout only
 
-	const db = await createKnowledgeDB();
-	const activation = new ActivationEngine(db);
+	const registry = await StoreRegistry.create();
+	const db = registry.writableStore();
+	const activation = new ActivationEngine(db, registry.readStores());
 	const readers = createEpisodeReaders();
 	const consolidation = new ConsolidationEngine(db, activation, readers);
 
@@ -38,7 +39,9 @@ export async function runConsolidate(): Promise<void> {
 			);
 			console.log("");
 		} else {
-			console.log("No new sessions to consolidate. Running KB synthesis pass...");
+			console.log(
+				"No new sessions to consolidate. Running KB synthesis pass...",
+			);
 		}
 
 		let batch = 1;
@@ -103,7 +106,9 @@ export async function runConsolidate(): Promise<void> {
 					consolidation.unlock();
 				}
 			} else {
-				console.warn("Warning: could not acquire lock for synthesis — skipping.");
+				console.warn(
+					"Warning: could not acquire lock for synthesis — skipping.",
+				);
 			}
 		} catch (e) {
 			console.error(
@@ -118,6 +123,6 @@ export async function runConsolidate(): Promise<void> {
 		console.log(`  Entries updated:    ${totalUpdated}`);
 	} finally {
 		consolidation.close();
-		await db.close();
+		await registry.close();
 	}
 }

@@ -1,7 +1,7 @@
 import * as readline from "node:readline";
 import { EmbeddingClient } from "../activation/embeddings.js";
 import { REVIEW_STALE_STRENGTH_THRESHOLD } from "../config.js";
-import { createKnowledgeDB } from "../db/index.js";
+import { StoreRegistry } from "../db/store-registry.js";
 import { KnowledgeService } from "../knowledge-service.js";
 import type { KnowledgeEntry } from "../types.js";
 
@@ -42,11 +42,16 @@ export async function runReview(args: string[]): Promise<void> {
 		process.exit(1);
 	}
 
-	const db = await createKnowledgeDB();
+	const registry = await StoreRegistry.create();
+	const db = registry.writableStore();
 	// Share one EmbeddingClient instance for the lifetime of the command so
 	// re-embeds on edit reuse the same config/connection as the rest of the run.
 	const embedder = new EmbeddingClient();
 	const service = new KnowledgeService(db, embedder);
+
+	// Hoisted outside try so finally can always call rl?.close() — even on the
+	// early-return path (toReview.length === 0) where rl is never assigned.
+	let rl: ReturnType<typeof readline.createInterface> | undefined;
 
 	try {
 		// Gather entries to review
@@ -84,7 +89,7 @@ export async function runReview(args: string[]): Promise<void> {
 			"  k  keep     d  delete     a  archive     e  edit     q  quit\n",
 		);
 
-		const rl = readline.createInterface({
+		rl = readline.createInterface({
 			input: process.stdin,
 			output: process.stdout,
 		});
@@ -163,7 +168,7 @@ export async function runReview(args: string[]): Promise<void> {
 
 					case "q":
 					case "quit":
-						rl.close();
+						// rl is closed in the finally block — no need to close here.
 						// i is zero-based index of the entry being reviewed when quit was
 						// pressed — add 1 so "reviewed" reflects entries seen, not loop index.
 						printSummary(
@@ -184,7 +189,6 @@ export async function runReview(args: string[]): Promise<void> {
 			}
 		}
 
-		rl.close();
 		printSummary(
 			toReview.length,
 			toReview.length,
@@ -194,7 +198,8 @@ export async function runReview(args: string[]): Promise<void> {
 			edited,
 		);
 	} finally {
-		await db.close();
+		rl?.close();
+		await registry.close();
 	}
 }
 

@@ -82,14 +82,6 @@ export const config = {
 	// Leave unset in production for better security (random token per process lifetime).
 	adminToken: process.env.KNOWLEDGE_ADMIN_TOKEN || null,
 
-	// Database
-	// When POSTGRES_CONNECTION_URI is set, PostgreSQL is used instead of SQLite.
-	// Example: postgres://user:pass@host:5432/knowledge
-	postgresConnectionUri: process.env.POSTGRES_CONNECTION_URI || "",
-	dbPath:
-		process.env.KNOWLEDGE_DB_PATH ||
-		join(homedir(), ".local", "share", "knowledge-server", "knowledge.db"),
-
 	// Log file — all operational output is tee'd here in addition to stdout.
 	// Set KNOWLEDGE_LOG_PATH to override; set to "" to disable file logging.
 	// Uses ?? (not ||) so that KNOWLEDGE_LOG_PATH="" is respected as an explicit

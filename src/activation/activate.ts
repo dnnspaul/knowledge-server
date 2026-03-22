@@ -52,11 +52,27 @@ export function splitIntoCues(prompt: string): string[] {
  * - The same mechanism serves both passive (plugin-triggered) and active (agent-triggered) retrieval
  */
 export class ActivationEngine {
+	/**
+	 * The writable (primary) store — used for write operations:
+	 * recordAccess, ensureEmbeddings, checkAndReEmbed, embedding metadata.
+	 */
 	private db: IKnowledgeDB;
+	/**
+	 * All stores to read from during activation (includes the writable store).
+	 * Fan-out: each activation query runs against all read stores and results
+	 * are merged and re-ranked by similarity score.
+	 */
+	private readDbs: IKnowledgeDB[];
 	readonly embeddings: EmbeddingClient;
 
-	constructor(db: IKnowledgeDB) {
-		this.db = db;
+	/**
+	 * @param writableDb  The writable store — receives access records and embedding writes.
+	 * @param readDbs     All stores to fan out activation reads across.
+	 *                    If omitted, defaults to [writableDb] (single-store mode).
+	 */
+	constructor(writableDb: IKnowledgeDB, readDbs?: IKnowledgeDB[]) {
+		this.db = writableDb;
+		this.readDbs = readDbs ?? [writableDb];
 		this.embeddings = new EmbeddingClient();
 	}
 
@@ -102,7 +118,18 @@ export class ActivationEngine {
 		const similarityThreshold =
 			options?.threshold ?? config.activation.similarityThreshold;
 
-		const entries = await this.db.getActiveEntriesWithEmbeddings();
+		// Fan out across all read stores and merge results.
+		// Entries from different stores may have overlapping IDs if the same entry
+		// was synced to multiple stores — deduplicate by ID keeping the first occurrence.
+		const allEntriesPerStore = await Promise.all(
+			this.readDbs.map((db) => db.getActiveEntriesWithEmbeddings()),
+		);
+		const seenIds = new Set<string>();
+		const entries = allEntriesPerStore.flat().filter((e) => {
+			if (seenIds.has(e.id)) return false;
+			seenIds.add(e.id);
+			return true;
+		});
 
 		if (entries.length === 0) {
 			return { entries: [], query: primaryQuery, totalActive: 0 };
@@ -190,19 +217,29 @@ export class ActivationEngine {
 		//   below the principle itself, but still nearby)
 		// - Add sources to the result (but do NOT exceed maxResults)
 		const synthesizedIds = scored
-			.filter(({ entry }) => entry.type === "principle" || entry.type === "pattern")
+			.filter(
+				({ entry }) => entry.type === "principle" || entry.type === "pattern",
+			)
 			.map(({ entry }) => entry.id);
 
 		const scoredIdSet = new Set(scored.map(({ entry }) => entry.id));
 
 		if (synthesizedIds.length > 0) {
-			const sourcesMap = await this.db.getSupportSourcesForIds(synthesizedIds);
+			// Fan out support sources lookup across all read stores and merge maps.
+			const sourceMaps = await Promise.all(
+				this.readDbs.map((db) => db.getSupportSourcesForIds(synthesizedIds)),
+			);
+			const sourcesMap = mergeMaps(sourceMaps);
 
 			// Snapshot the array before iterating — we push source entries into `scored`
 			// during the loop and don't want to visit newly-added entries (which could
 			// cascade if a source is itself a principle with its own supports relations).
 			const snapshot = [...scored];
-			for (const { entry, rawSimilarity, similarity: synthSimilarity } of snapshot) {
+			for (const {
+				entry,
+				rawSimilarity,
+				similarity: synthSimilarity,
+			} of snapshot) {
 				if (entry.type !== "principle" && entry.type !== "pattern") continue;
 				const sources = sourcesMap.get(entry.id);
 				if (!sources) continue;
@@ -253,7 +290,11 @@ export class ActivationEngine {
 			.filter(({ entry }) => entry.status === "conflicted")
 			.map(({ entry }) => entry.id);
 
-		const contradictPairs = await this.db.getContradictPairsForIds(conflictedIds);
+		// Fan out contradiction pairs lookup across all read stores and merge.
+		const contradictMaps = await Promise.all(
+			this.readDbs.map((db) => db.getContradictPairsForIds(conflictedIds)),
+		);
+		const contradictPairs = mergeMaps(contradictMaps);
 
 		// Build contradiction annotations for conflicted entries whose counterpart
 		// also activated in this query (both sides relevant — only then is the caveat useful).
@@ -392,7 +433,8 @@ export class ActivationEngine {
 
 		// ── Model has changed — re-embed all entries in-place ──
 
-		const entriesWithEmbeddings = await this.db.getActiveEntriesWithEmbeddings();
+		const entriesWithEmbeddings =
+			await this.db.getActiveEntriesWithEmbeddings();
 		const totalEntries = entriesWithEmbeddings.length;
 
 		logger.log(
@@ -445,7 +487,8 @@ export class ActivationEngine {
 
 		// Probe dimensions before writing any entries so the metadata is consistent
 		// with what we're about to write (not what was there before).
-		const newDimensions = newEmbeddings.length > 0 ? newEmbeddings[0].length : 0;
+		const newDimensions =
+			newEmbeddings.length > 0 ? newEmbeddings[0].length : 0;
 
 		// Write metadata BEFORE the loop. See failure-modes comment above for
 		// the crash-recovery trade-offs. embedBatch throwing above means we never
@@ -467,4 +510,20 @@ export class ActivationEngine {
 
 		return true;
 	}
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Merge an array of Maps into a single Map.
+ * Earlier maps take precedence on key collisions (first-store-wins).
+ */
+function mergeMaps<K, V>(maps: Map<K, V>[]): Map<K, V> {
+	const result = new Map<K, V>();
+	for (const map of maps) {
+		for (const [k, v] of map) {
+			if (!result.has(k)) result.set(k, v);
+		}
+	}
+	return result;
 }

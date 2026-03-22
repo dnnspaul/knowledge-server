@@ -3,7 +3,7 @@ import type { SQLQueryBindings } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { config } from "../config.js";
+import { DEFAULT_SQLITE_PATH } from "../config-file.js";
 import { logger } from "../logger.js";
 import { clampKnowledgeType } from "../types.js";
 import type {
@@ -28,17 +28,20 @@ import {
  * CRUD for entries/relations, embedding storage/retrieval,
  * and consolidation state management.
  *
- * Implements IKnowledgeDB so it can be swapped with PostgresKnowledgeDB
- * when POSTGRES_CONNECTION_URI is set.
+ * Implements IKnowledgeDB — used by StoreRegistry for sqlite-kind stores.
  */
 export class KnowledgeDB implements IKnowledgeDB {
 	private db: Database;
 
 	/**
-	 * @param dbPath Path to the knowledge SQLite DB (defaults to config.dbPath).
+	 * @param dbPath Path to the SQLite DB file. Defaults to DEFAULT_SQLITE_PATH
+	 *               (~/.local/share/knowledge-server/knowledge.db).
+	 *               Always pass an explicit path — the default exists only as a
+	 *               safety net; production paths are resolved by StoreRegistry
+	 *               via resolveSqlitePath().
 	 */
 	constructor(dbPath?: string) {
-		const path = dbPath || config.dbPath;
+		const path = dbPath ?? DEFAULT_SQLITE_PATH;
 		const dir = dirname(path);
 		if (!existsSync(dir)) {
 			mkdirSync(dir, { recursive: true });
@@ -87,7 +90,7 @@ export class KnowledgeDB implements IKnowledgeDB {
 			label: string;
 			up: (db: Database) => void;
 		}> = [
-		{
+			{
 				version: 8,
 				label: "add embedding_metadata table",
 				up: (db) => {
@@ -127,7 +130,9 @@ export class KnowledgeDB implements IKnowledgeDB {
 					`);
 					// DROP COLUMN requires SQLite ≥ 3.35; Bun ships 3.46+.
 					const hasSynthCol = (
-						db.prepare("PRAGMA table_info(knowledge_entry)").all() as Array<{ name: string }>
+						db.prepare("PRAGMA table_info(knowledge_entry)").all() as Array<{
+							name: string;
+						}>
 					).some((c) => c.name === "last_synthesized_observation_count");
 					if (hasSynthCol) {
 						db.exec(
@@ -140,7 +145,9 @@ export class KnowledgeDB implements IKnowledgeDB {
 				version: 10,
 				label: "add is_synthesized column to knowledge_entry",
 				up: (db) => {
-					const cols = db.prepare("PRAGMA table_info(knowledge_entry)").all() as Array<{ name: string }>;
+					const cols = db
+						.prepare("PRAGMA table_info(knowledge_entry)")
+						.all() as Array<{ name: string }>;
 					// cols is empty when the table doesn't exist yet (fresh DB) — CREATE_TABLES
 					// already includes the column, so nothing to do in that case.
 					if (cols.length === 0) return;
@@ -272,7 +279,10 @@ export class KnowledgeDB implements IKnowledgeDB {
 			);
 	}
 
-	async updateEntry(id: string, updates: Partial<KnowledgeEntry>): Promise<void> {
+	async updateEntry(
+		id: string,
+		updates: Partial<KnowledgeEntry>,
+	): Promise<void> {
 		const fields: string[] = [];
 		const values: SQLQueryBindings[] = [];
 
@@ -347,9 +357,9 @@ export class KnowledgeDB implements IKnowledgeDB {
 	 * Conflicted entries are included so they can be surfaced to the agent with a caveat
 	 * annotation, and so the contradiction scan can attempt to re-resolve them.
 	 */
-	async getActiveEntriesWithEmbeddings(): Promise<Array<
-		KnowledgeEntry & { embedding: number[] }
-	>> {
+	async getActiveEntriesWithEmbeddings(): Promise<
+		Array<KnowledgeEntry & { embedding: number[] }>
+	> {
 		const rows = this.db
 			.prepare(
 				"SELECT * FROM knowledge_entry WHERE status IN ('active', 'conflicted') AND embedding IS NOT NULL ORDER BY strength DESC",
@@ -367,7 +377,9 @@ export class KnowledgeDB implements IKnowledgeDB {
 	 * Get a single active or conflicted entry that has an embedding.
 	 * Used to probe embedding dimensions without loading all entries into memory.
 	 */
-	async getOneEntryWithEmbedding(): Promise<(KnowledgeEntry & { embedding: number[] }) | null> {
+	async getOneEntryWithEmbedding(): Promise<
+		(KnowledgeEntry & { embedding: number[] }) | null
+	> {
 		const row = this.db
 			.prepare(
 				"SELECT * FROM knowledge_entry WHERE status IN ('active', 'conflicted') AND embedding IS NOT NULL LIMIT 1",
@@ -938,7 +950,9 @@ export class KnowledgeDB implements IKnowledgeDB {
 	 * Used by the activation engine to annotate conflicted entries without N+1 queries.
 	 * Entries with no contradicts relation are absent from the returned map.
 	 */
-	async getContradictPairsForIds(entryIds: string[]): Promise<Map<string, string>> {
+	async getContradictPairsForIds(
+		entryIds: string[],
+	): Promise<Map<string, string>> {
 		if (entryIds.length === 0) return new Map();
 
 		const rows = this.db
@@ -1136,7 +1150,9 @@ export class KnowledgeDB implements IKnowledgeDB {
 		};
 	}
 
-	async updateConsolidationState(state: Partial<ConsolidationState>): Promise<void> {
+	async updateConsolidationState(
+		state: Partial<ConsolidationState>,
+	): Promise<void> {
 		const fields: string[] = [];
 		const values: SQLQueryBindings[] = [];
 
@@ -1332,15 +1348,17 @@ export class KnowledgeDB implements IKnowledgeDB {
 	/**
 	 * Load all persisted clusters with their current member entry IDs.
 	 */
-	async getClustersWithMembers(): Promise<Array<{
-		id: string;
-		centroid: number[];
-		memberCount: number;
-		lastSynthesizedAt: number | null;
-		lastMembershipChangedAt: number;
-		createdAt: number;
-		memberIds: string[];
-	}>> {
+	async getClustersWithMembers(): Promise<
+		Array<{
+			id: string;
+			centroid: number[];
+			memberCount: number;
+			lastSynthesizedAt: number | null;
+			lastMembershipChangedAt: number;
+			createdAt: number;
+			memberIds: string[];
+		}>
+	> {
 		const clusterRows = this.db
 			.prepare("SELECT * FROM knowledge_cluster ORDER BY created_at ASC")
 			.all() as Array<{
@@ -1407,9 +1425,9 @@ export class KnowledgeDB implements IKnowledgeDB {
 		this.db.transaction(() => {
 			// Remove stale clusters (their entries have dispersed into other clusters).
 			const existingIds = (
-				this.db
-					.prepare("SELECT id FROM knowledge_cluster")
-					.all() as Array<{ id: string }>
+				this.db.prepare("SELECT id FROM knowledge_cluster").all() as Array<{
+					id: string;
+				}>
 			).map((r) => r.id);
 
 			for (const existingId of existingIds) {
@@ -1432,13 +1450,7 @@ export class KnowledgeDB implements IKnowledgeDB {
                (id, centroid, member_count, last_synthesized_at, last_membership_changed_at, created_at)
                VALUES (?, ?, ?, NULL, ?, ?)`,
 						)
-						.run(
-							cluster.id,
-							centroidBlob,
-							cluster.memberIds.length,
-							now,
-							now,
-						);
+						.run(cluster.id, centroidBlob, cluster.memberIds.length, now, now);
 				} else {
 					// Update centroid and member count; bump last_membership_changed_at only
 					// if membership actually changed.
@@ -1463,9 +1475,7 @@ export class KnowledgeDB implements IKnowledgeDB {
 
 				// Replace membership: delete existing rows, insert new set.
 				this.db
-					.prepare(
-						"DELETE FROM knowledge_cluster_member WHERE cluster_id = ?",
-					)
+					.prepare("DELETE FROM knowledge_cluster_member WHERE cluster_id = ?")
 					.run(cluster.id);
 
 				for (const entryId of cluster.memberIds) {
@@ -1560,7 +1570,11 @@ export class KnowledgeDB implements IKnowledgeDB {
  * Used when reading centroid columns from knowledge_cluster rows.
  */
 function blobToFloats(blob: Uint8Array): number[] {
-	const float32 = new Float32Array(blob.buffer, blob.byteOffset, blob.byteLength / 4);
+	const float32 = new Float32Array(
+		blob.buffer,
+		blob.byteOffset,
+		blob.byteLength / 4,
+	);
 	return Array.from(float32);
 }
 

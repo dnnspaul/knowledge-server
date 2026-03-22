@@ -1,4 +1,4 @@
-import { createKnowledgeDB } from "../db/index.js";
+import { StoreRegistry } from "../db/store-registry.js";
 
 /**
  * `knowledge-server reinitialize [--confirm]`
@@ -10,7 +10,8 @@ import { createKnowledgeDB } from "../db/index.js";
  */
 export async function runReinitialize(args: string[]): Promise<void> {
 	const flag = args[0];
-	const db = await createKnowledgeDB();
+	const registry = await StoreRegistry.create();
+	const db = registry.writableStore();
 
 	try {
 		const stats = await db.getStats();
@@ -30,9 +31,7 @@ export async function runReinitialize(args: string[]): Promise<void> {
 				// Unrecognised flag — warn so the user knows their input was ignored
 				// rather than silently falling through to the usage message.
 				console.error(`Unknown flag: ${flag}`);
-				console.error(
-					"Valid flags: --confirm, --dry-run",
-				);
+				console.error("Valid flags: --confirm, --dry-run");
 				console.error("");
 			}
 			console.log(
@@ -43,7 +42,9 @@ export async function runReinitialize(args: string[]): Promise<void> {
 			console.log(
 				"Run with --confirm to proceed:  knowledge-server reinitialize --confirm",
 			);
-			console.log("Run with --dry-run to preview:  knowledge-server reinitialize --dry-run");
+			console.log(
+				"Run with --dry-run to preview:  knowledge-server reinitialize --dry-run",
+			);
 			// Return rather than process.exit(0) so the finally block runs db.close().
 			// The caller (src/index.ts) exits 0 after runReinitialize() returns.
 			return;
@@ -54,6 +55,6 @@ export async function runReinitialize(args: string[]): Promise<void> {
 			`Knowledge DB reinitialized. ${entryCount} entries deleted, cursor reset.`,
 		);
 	} finally {
-		await db.close();
+		await registry.close();
 	}
 }

@@ -3,7 +3,7 @@ import pkg from "../../package.json" with { type: "json" };
 import { ActivationEngine } from "../activation/activate.js";
 import { ConsolidationEngine } from "../consolidation/consolidate.js";
 import { createEpisodeReaders } from "../consolidation/readers/index.js";
-import { createKnowledgeDB } from "../db/index.js";
+import { StoreRegistry } from "../db/store-registry.js";
 
 /**
  * `knowledge-server status`
@@ -36,12 +36,13 @@ export async function runStatus(pidPath: string): Promise<void> {
 		}
 	}
 
-	const db = await createKnowledgeDB();
+	const registry = await StoreRegistry.create();
+	const db = registry.writableStore();
 	try {
 		const stats = await db.getStats();
 		const state = await db.getConsolidationState();
 
-		const activation = new ActivationEngine(db);
+		const activation = new ActivationEngine(db, registry.readStores());
 		const readers = createEpisodeReaders();
 		const consolidation = new ConsolidationEngine(db, activation, readers);
 		const { pendingSessions } = await consolidation.checkPending();
@@ -66,6 +67,6 @@ export async function runStatus(pidPath: string): Promise<void> {
 			`  Total processed:    ${state.totalSessionsProcessed} sessions, ${state.totalEntriesCreated} created, ${state.totalEntriesUpdated} updated`,
 		);
 	} finally {
-		await db.close();
+		await registry.close();
 	}
 }
