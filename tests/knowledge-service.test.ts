@@ -95,9 +95,10 @@ describe("KnowledgeService.updateEntry", () => {
 			service.updateEntry("e5", { content: "updated" }),
 		).rejects.toThrow("API quota exceeded");
 
-		// DB should be unchanged — no partial write
+		// DB should be unchanged — no partial write (content, topics, embedding all intact)
 		const entry = await db.getEntry("e5");
 		expect(entry?.content).toBe("original");
+		expect(entry?.topics).toEqual(["test"]); // fixture default — unchanged
 		expect(entry?.embedding?.[0]).toBeCloseTo(0.9);
 	});
 
