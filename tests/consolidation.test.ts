@@ -119,7 +119,9 @@ describe("KnowledgeDB — getEntriesWithOverlappingTopics", () => {
 		await db.insertEntry(
 			makeEntry({ id: "a2", topics: ["typescript", "sqlite"], embedding: emb }),
 		);
-		await db.insertEntry(makeEntry({ id: "a3", topics: ["python"], embedding: emb }));
+		await db.insertEntry(
+			makeEntry({ id: "a3", topics: ["python"], embedding: emb }),
+		);
 
 		const results = await db.getEntriesWithOverlappingTopics(
 			["typescript", "bun"],
@@ -134,7 +136,9 @@ describe("KnowledgeDB — getEntriesWithOverlappingTopics", () => {
 
 	it("returns empty array when topics list is empty", async () => {
 		const emb = fakeEmbedding("test");
-		await db.insertEntry(makeEntry({ id: "b1", topics: ["test"], embedding: emb }));
+		await db.insertEntry(
+			makeEntry({ id: "b1", topics: ["test"], embedding: emb }),
+		);
 		const results = await db.getEntriesWithOverlappingTopics([], []);
 		expect(results).toEqual([]);
 	});
@@ -402,7 +406,11 @@ describe("KnowledgeDB — applyContradictionResolution clears conflicted status 
 
 		// New entry decisively supersedes the loser
 		await db.insertEntry(makeEntry({ id: "new-decisive", topics: ["x"] }));
-		await db.applyContradictionResolution("supersede_old", "new-decisive", "loser");
+		await db.applyContradictionResolution(
+			"supersede_old",
+			"new-decisive",
+			"loser",
+		);
 
 		// loser is superseded
 		expect((await db.getEntry("loser"))?.status).toBe("superseded");
@@ -410,7 +418,9 @@ describe("KnowledgeDB — applyContradictionResolution clears conflicted status 
 		expect((await db.getEntry("winner"))?.status).toBe("active");
 		// winner's contradicts relation should be gone
 		expect(
-			(await db.getRelationsFor("winner")).some((r) => r.type === "contradicts"),
+			(await db.getRelationsFor("winner")).some(
+				(r) => r.type === "contradicts",
+			),
 		).toBe(false);
 	});
 
@@ -441,7 +451,9 @@ describe("KnowledgeDB — applyContradictionResolution clears conflicted status 
 		expect((await db.getEntry("conf-b"))?.status).toBe("active");
 		// conf-a's contradicts relation should be gone
 		expect(
-			(await db.getRelationsFor("conf-a")).some((r) => r.type === "contradicts"),
+			(await db.getRelationsFor("conf-a")).some(
+				(r) => r.type === "contradicts",
+			),
 		).toBe(false);
 	});
 
@@ -462,7 +474,11 @@ describe("KnowledgeDB — applyContradictionResolution clears conflicted status 
 		// Winning this battle decisively settles conf-b's conflict — both conf-b and conf-a
 		// should be restored to active.
 		await db.insertEntry(makeEntry({ id: "new-entry", topics: ["topic"] }));
-		await db.applyContradictionResolution("supersede_new", "new-entry", "conf-b");
+		await db.applyContradictionResolution(
+			"supersede_new",
+			"new-entry",
+			"conf-b",
+		);
 
 		expect((await db.getEntry("new-entry"))?.status).toBe("superseded");
 		// conf-b won — should be restored to active
@@ -470,7 +486,9 @@ describe("KnowledgeDB — applyContradictionResolution clears conflicted status 
 		// conf-a (conf-b's orphaned counterpart) should also be restored
 		expect((await db.getEntry("conf-a"))?.status).toBe("active");
 		expect(
-			(await db.getRelationsFor("conf-b")).some((r) => r.type === "contradicts"),
+			(await db.getRelationsFor("conf-b")).some(
+				(r) => r.type === "contradicts",
+			),
 		).toBe(false);
 	});
 
@@ -483,7 +501,11 @@ describe("KnowledgeDB — applyContradictionResolution clears conflicted status 
 		// decisive-new arrives and supersede_new means conf-q wins (existing) — conf-p is superseded
 		// conf-p was conf-q's conflict partner — conf-q should be restored to active
 		await db.insertEntry(makeEntry({ id: "decisive-new", topics: ["topic"] }));
-		await db.applyContradictionResolution("supersede_new", "conf-p", "decisive-new");
+		await db.applyContradictionResolution(
+			"supersede_new",
+			"conf-p",
+			"decisive-new",
+		);
 
 		// conf-p (the loser/new entry in this call) is superseded
 		expect((await db.getEntry("conf-p"))?.status).toBe("superseded");
@@ -492,7 +514,9 @@ describe("KnowledgeDB — applyContradictionResolution clears conflicted status 
 		// conf-q (conf-p's orphaned counterpart) must be restored to active
 		expect((await db.getEntry("conf-q"))?.status).toBe("active");
 		expect(
-			(await db.getRelationsFor("conf-q")).some((r) => r.type === "contradicts"),
+			(await db.getRelationsFor("conf-q")).some(
+				(r) => r.type === "contradicts",
+			),
 		).toBe(false);
 	});
 
@@ -730,19 +754,53 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 		// Insert 4 entries — not enough to form a ripe cluster (min=5)
 		const emb1 = fakeEmbedding("TypeScript static");
 		const emb2 = fakeEmbedding("TypeScript types");
-		await db.insertEntry(makeEntry({ id: "e1", content: "TypeScript is statically typed.", topics: ["typescript"], embedding: emb1 }));
-		await db.insertEntry(makeEntry({ id: "e2", content: "TypeScript has structural types.", topics: ["typescript"], embedding: emb2 }));
-		await db.insertEntry(makeEntry({ id: "e3", content: "TypeScript checks types at compile time.", topics: ["typescript"], embedding: emb1 }));
-		await db.insertEntry(makeEntry({ id: "e4", content: "TypeScript interfaces define contracts.", topics: ["typescript"], embedding: emb2 }));
+		await db.insertEntry(
+			makeEntry({
+				id: "e1",
+				content: "TypeScript is statically typed.",
+				topics: ["typescript"],
+				embedding: emb1,
+			}),
+		);
+		await db.insertEntry(
+			makeEntry({
+				id: "e2",
+				content: "TypeScript has structural types.",
+				topics: ["typescript"],
+				embedding: emb2,
+			}),
+		);
+		await db.insertEntry(
+			makeEntry({
+				id: "e3",
+				content: "TypeScript checks types at compile time.",
+				topics: ["typescript"],
+				embedding: emb1,
+			}),
+		);
+		await db.insertEntry(
+			makeEntry({
+				id: "e4",
+				content: "TypeScript interfaces define contracts.",
+				topics: ["typescript"],
+				embedding: emb2,
+			}),
+		);
 
-		spyOn(OpenCodeEpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
-			{ id: "session-1", maxMessageTime: Date.now() },
+		spyOn(
+			OpenCodeEpisodeReader.prototype,
+			"getCandidateSessions",
+		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
+		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
+			makeEpisode(),
 		]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 		spyOn(activation.embeddings, "embed").mockResolvedValue(emb1);
 		spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([]);
-		const synthSpy = spyOn(ConsolidationLLM.prototype, "synthesizePrinciple").mockResolvedValue([]);
+		const synthSpy = spyOn(
+			ConsolidationLLM.prototype,
+			"synthesizePrinciple",
+		).mockResolvedValue([]);
 
 		await engine.consolidate();
 		await engine.runSynthesis();
@@ -754,20 +812,61 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 	it("calls synthesizePrinciple when a new cluster with ≥ 5 members forms", async () => {
 		// Insert 5 semantically similar entries — they should cluster together
 		const emb = fakeEmbedding("TypeScript static");
-		await db.insertEntry(makeEntry({ id: "e1", content: "TypeScript is statically typed.", topics: ["typescript"], embedding: emb }));
-		await db.insertEntry(makeEntry({ id: "e2", content: "TypeScript has structural types.", topics: ["typescript"], embedding: emb }));
-		await db.insertEntry(makeEntry({ id: "e3", content: "TypeScript checks types at compile time.", topics: ["typescript"], embedding: emb }));
-		await db.insertEntry(makeEntry({ id: "e4", content: "TypeScript interfaces define contracts.", topics: ["typescript"], embedding: emb }));
-		await db.insertEntry(makeEntry({ id: "e5", content: "TypeScript generics enable type-safe reuse.", topics: ["typescript"], embedding: emb }));
+		await db.insertEntry(
+			makeEntry({
+				id: "e1",
+				content: "TypeScript is statically typed.",
+				topics: ["typescript"],
+				embedding: emb,
+			}),
+		);
+		await db.insertEntry(
+			makeEntry({
+				id: "e2",
+				content: "TypeScript has structural types.",
+				topics: ["typescript"],
+				embedding: emb,
+			}),
+		);
+		await db.insertEntry(
+			makeEntry({
+				id: "e3",
+				content: "TypeScript checks types at compile time.",
+				topics: ["typescript"],
+				embedding: emb,
+			}),
+		);
+		await db.insertEntry(
+			makeEntry({
+				id: "e4",
+				content: "TypeScript interfaces define contracts.",
+				topics: ["typescript"],
+				embedding: emb,
+			}),
+		);
+		await db.insertEntry(
+			makeEntry({
+				id: "e5",
+				content: "TypeScript generics enable type-safe reuse.",
+				topics: ["typescript"],
+				embedding: emb,
+			}),
+		);
 
-		spyOn(OpenCodeEpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
-			{ id: "session-1", maxMessageTime: Date.now() },
+		spyOn(
+			OpenCodeEpisodeReader.prototype,
+			"getCandidateSessions",
+		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
+		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
+			makeEpisode(),
 		]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 		spyOn(activation.embeddings, "embed").mockResolvedValue(emb);
 		spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([]);
-		const synthSpy = spyOn(ConsolidationLLM.prototype, "synthesizePrinciple").mockResolvedValue([]);
+		const synthSpy = spyOn(
+			ConsolidationLLM.prototype,
+			"synthesizePrinciple",
+		).mockResolvedValue([]);
 
 		await engine.consolidate();
 		await engine.runSynthesis();
@@ -780,16 +879,54 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 		const emb = fakeEmbedding("TypeScript static");
 		const synthEmb = [0, 0, 0, 0, 0, 0, 0, 1]; // orthogonal to all fakeEmbedding() outputs
 
-		await db.insertEntry(makeEntry({ id: "e1", content: "TypeScript is statically typed.", topics: ["typescript"], embedding: emb }));
-		await db.insertEntry(makeEntry({ id: "e2", content: "TypeScript has structural types.", topics: ["typescript"], embedding: emb }));
-		await db.insertEntry(makeEntry({ id: "e3", content: "TypeScript checks types at compile time.", topics: ["typescript"], embedding: emb }));
-		await db.insertEntry(makeEntry({ id: "e4", content: "TypeScript interfaces define contracts.", topics: ["typescript"], embedding: emb }));
-		await db.insertEntry(makeEntry({ id: "e5", content: "TypeScript generics enable type-safe reuse.", topics: ["typescript"], embedding: emb }));
+		await db.insertEntry(
+			makeEntry({
+				id: "e1",
+				content: "TypeScript is statically typed.",
+				topics: ["typescript"],
+				embedding: emb,
+			}),
+		);
+		await db.insertEntry(
+			makeEntry({
+				id: "e2",
+				content: "TypeScript has structural types.",
+				topics: ["typescript"],
+				embedding: emb,
+			}),
+		);
+		await db.insertEntry(
+			makeEntry({
+				id: "e3",
+				content: "TypeScript checks types at compile time.",
+				topics: ["typescript"],
+				embedding: emb,
+			}),
+		);
+		await db.insertEntry(
+			makeEntry({
+				id: "e4",
+				content: "TypeScript interfaces define contracts.",
+				topics: ["typescript"],
+				embedding: emb,
+			}),
+		);
+		await db.insertEntry(
+			makeEntry({
+				id: "e5",
+				content: "TypeScript generics enable type-safe reuse.",
+				topics: ["typescript"],
+				embedding: emb,
+			}),
+		);
 
-		spyOn(OpenCodeEpisodeReader.prototype, "getCandidateSessions").mockReturnValue([
-			{ id: "session-1", maxMessageTime: Date.now() },
+		spyOn(
+			OpenCodeEpisodeReader.prototype,
+			"getCandidateSessions",
+		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
+		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
+			makeEpisode(),
 		]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([makeEpisode()]);
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 		// embed is called to embed the synthesized entry; return orthogonal vec to avoid dedupe
 		spyOn(activation.embeddings, "embed").mockResolvedValue(synthEmb);
@@ -808,7 +945,9 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 		await engine.runSynthesis();
 
 		const allEntries = await db.getEntries({});
-		const synthesized = allEntries.find((e) => e.content === "Static typing produces more reliable code.");
+		const synthesized = allEntries.find(
+			(e) => e.content === "Static typing produces more reliable code.",
+		);
 		expect(synthesized).toBeDefined();
 		expect(synthesized?.type).toBe("principle");
 		expect(synthesized?.isSynthesized).toBe(true);
@@ -1192,11 +1331,11 @@ describe("ConsolidationEngine.consolidate() — cursor advancement", () => {
 		);
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
-		const initialCursor = await db.getSourceCursor("opencode");
+		const initialCursor = await db.getSourceCursor("opencode", "default");
 
 		await engine.consolidate();
 
-		const cursor = await db.getSourceCursor("opencode");
+		const cursor = await db.getSourceCursor("opencode", "default");
 		// Batch was NOT full (returned 2, limit is much higher) → cursor must advance to t2
 		expect(cursor.lastMessageTimeCreated).toBe(t2);
 		expect(cursor.lastMessageTimeCreated).toBeGreaterThan(
@@ -1240,7 +1379,7 @@ describe("ConsolidationEngine.consolidate() — cursor advancement", () => {
 
 		await engine.consolidate();
 
-		const cursor = await db.getSourceCursor("opencode");
+		const cursor = await db.getSourceCursor("opencode", "default");
 		// Batch was full → cursor must be capped to lastSession.maxMessageTime - 1
 		expect(cursor.lastMessageTimeCreated).toBe(lastSession.maxMessageTime - 1);
 	});
@@ -1248,7 +1387,9 @@ describe("ConsolidationEngine.consolidate() — cursor advancement", () => {
 	it("never moves cursor backwards", async () => {
 		// Set the opencode source cursor to a future timestamp
 		const futureCursor = Date.now() + 100_000;
-		await db.updateSourceCursor("opencode", { lastMessageTimeCreated: futureCursor });
+		await db.updateSourceCursor("opencode", "default", {
+			lastMessageTimeCreated: futureCursor,
+		});
 
 		spyOn(
 			OpenCodeEpisodeReader.prototype,
@@ -1258,7 +1399,7 @@ describe("ConsolidationEngine.consolidate() — cursor advancement", () => {
 
 		await engine.consolidate();
 
-		const cursor = await db.getSourceCursor("opencode");
+		const cursor = await db.getSourceCursor("opencode", "default");
 		// Cursor must not go backwards
 		expect(cursor.lastMessageTimeCreated).toBeGreaterThanOrEqual(futureCursor);
 	});
@@ -1329,8 +1470,9 @@ describe("ConsolidationEngine.consolidate() — full pipeline with mocked LLM + 
 		expect(result.conflictsResolved).toBe(0); // irresolvable doesn't count as resolved
 
 		// The new entry must be in the DB as conflicted
-		const newEntry = (await db.getEntries({ type: "fact" }))
-			.find((e) => e.content.includes("9090"));
+		const newEntry = (await db.getEntries({ type: "fact" })).find((e) =>
+			e.content.includes("9090"),
+		);
 		expect(newEntry).toBeDefined();
 		expect(newEntry?.status).toBe("conflicted"); // irresolvable marks both as conflicted
 
@@ -1362,7 +1504,9 @@ describe("ConsolidationEngine.consolidate() — full pipeline with mocked LLM + 
 		await engine.consolidate();
 
 		// The episode range must now be recorded in the DB under the "opencode" source
-		const ranges = await db.getProcessedEpisodeRanges("opencode", ["session-1"]);
+		const ranges = await db.getProcessedEpisodeRanges("opencode", "default", [
+			"session-1",
+		]);
 		const sessionRanges = ranges.get("session-1") ?? [];
 		const recorded = sessionRanges.find(
 			(r) =>

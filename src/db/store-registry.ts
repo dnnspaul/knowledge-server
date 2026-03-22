@@ -33,6 +33,12 @@ export class StoreRegistry {
 	private readable: IKnowledgeDB[];
 	/** Domain router for consolidation routing. Null when no domains are configured. */
 	readonly domainRouter: DomainRouter | null;
+	/**
+	 * Stable user identifier for multi-user shared DB setups.
+	 * Scopes the consolidation cursor and episode log per user.
+	 * Resolved from USER_ID env var → config.jsonc userId → hostname → "default".
+	 */
+	readonly userId: string;
 
 	private constructor(
 		stores: Map<string, IKnowledgeDB>,
@@ -52,6 +58,7 @@ export class StoreRegistry {
 			config.domains.length > 0
 				? new DomainRouter(config, stores, writable)
 				: null;
+		this.userId = config.userId;
 	}
 
 	/** The store that receives consolidation writes. */

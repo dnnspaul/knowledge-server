@@ -49,6 +49,7 @@ export async function runStatus(pidPath: string): Promise<void> {
 			activation,
 			readers,
 			registry.domainRouter,
+			registry.userId,
 		);
 		const { pendingSessions } = await consolidation.checkPending();
 		consolidation.close();

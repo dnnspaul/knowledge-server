@@ -60,6 +60,8 @@ export function createApp(
 	adminToken: string,
 	/** Whether adminToken was explicitly configured (vs randomly generated for local use). */
 	adminTokenIsStable = false,
+	/** User identifier for cursor scoping in multi-user shared DB setups. */
+	userId = "default",
 ): Hono {
 	const app = new Hono();
 	// Reuse ActivationEngine's EmbeddingClient to avoid a second model connection.
@@ -351,7 +353,7 @@ export function createApp(
 		// last-consolidated timestamp and high-water mark without tailing logs.
 		const sourceCursors = await Promise.all(
 			["opencode", "claude-code"].map(async (source) => {
-				const cursor = await db.getSourceCursor(source);
+				const cursor = await db.getSourceCursor(source, userId);
 				return {
 					source,
 					lastConsolidatedAt: cursor.lastConsolidatedAt

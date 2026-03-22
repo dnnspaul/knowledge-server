@@ -205,28 +205,30 @@ describe("KnowledgeDB", () => {
 
 	it("should manage source cursors", async () => {
 		// Default zero state for unknown source
-		const initial = await db.getSourceCursor("opencode");
+		const initial = await db.getSourceCursor("opencode", "default");
 		expect(initial.source).toBe("opencode");
+		expect(initial.userId).toBe("default");
 		expect(initial.lastMessageTimeCreated).toBe(0);
 		expect(initial.lastConsolidatedAt).toBe(0);
 
 		// Update and re-read
-		await db.updateSourceCursor("opencode", {
+		await db.updateSourceCursor("opencode", "default", {
 			lastMessageTimeCreated: 999999,
 			lastConsolidatedAt: 1000000,
 		});
-		const updated = await db.getSourceCursor("opencode");
+		const updated = await db.getSourceCursor("opencode", "default");
 		expect(updated.lastMessageTimeCreated).toBe(999999);
 		expect(updated.lastConsolidatedAt).toBe(1000000);
 
 		// Different source is independent
-		const other = await db.getSourceCursor("claude-code");
+		const other = await db.getSourceCursor("claude-code", "default");
 		expect(other.lastMessageTimeCreated).toBe(0);
 	});
 
 	it("should record and retrieve episode ranges", async () => {
 		await db.recordEpisode(
 			"opencode",
+			"default",
 			"session-1",
 			"msg-start-1",
 			"msg-end-1",
@@ -235,6 +237,7 @@ describe("KnowledgeDB", () => {
 		);
 		await db.recordEpisode(
 			"opencode",
+			"default",
 			"session-1",
 			"msg-start-2",
 			"msg-end-2",
@@ -243,6 +246,7 @@ describe("KnowledgeDB", () => {
 		);
 		await db.recordEpisode(
 			"opencode",
+			"default",
 			"session-2",
 			"msg-start-3",
 			"msg-end-3",
@@ -250,7 +254,7 @@ describe("KnowledgeDB", () => {
 			0,
 		);
 
-		const ranges = await db.getProcessedEpisodeRanges("opencode", [
+		const ranges = await db.getProcessedEpisodeRanges("opencode", "default", [
 			"session-1",
 			"session-2",
 		]);
@@ -280,9 +284,18 @@ describe("KnowledgeDB", () => {
 	});
 
 	it("episodes from different sources are isolated", async () => {
-		await db.recordEpisode("opencode", "session-1", "msg-a", "msg-b", "messages", 2);
+		await db.recordEpisode(
+			"opencode",
+			"default",
+			"session-1",
+			"msg-a",
+			"msg-b",
+			"messages",
+			2,
+		);
 		await db.recordEpisode(
 			"claude-code",
+			"default",
 			"session-1",
 			"msg-a",
 			"msg-b",
@@ -291,22 +304,44 @@ describe("KnowledgeDB", () => {
 		);
 
 		// Each source only sees its own episodes
-		const oc = await db.getProcessedEpisodeRanges("opencode", ["session-1"]);
-		const cc = await db.getProcessedEpisodeRanges("claude-code", ["session-1"]);
+		const oc = await db.getProcessedEpisodeRanges("opencode", "default", [
+			"session-1",
+		]);
+		const cc = await db.getProcessedEpisodeRanges("claude-code", "default", [
+			"session-1",
+		]);
 		expect(oc.get("session-1")).toHaveLength(1);
 		expect(cc.get("session-1")).toHaveLength(1);
 	});
 
 	it("recordEpisode is idempotent — duplicate inserts are ignored", async () => {
-		await db.recordEpisode("opencode", "session-1", "msg-a", "msg-b", "messages", 2);
-		await db.recordEpisode("opencode", "session-1", "msg-a", "msg-b", "messages", 2);
+		await db.recordEpisode(
+			"opencode",
+			"default",
+			"session-1",
+			"msg-a",
+			"msg-b",
+			"messages",
+			2,
+		);
+		await db.recordEpisode(
+			"opencode",
+			"default",
+			"session-1",
+			"msg-a",
+			"msg-b",
+			"messages",
+			2,
+		);
 
-		const ranges = await db.getProcessedEpisodeRanges("opencode", ["session-1"]);
+		const ranges = await db.getProcessedEpisodeRanges("opencode", "default", [
+			"session-1",
+		]);
 		expect(ranges.get("session-1")).toHaveLength(1);
 	});
 
 	it("getProcessedEpisodeRanges returns empty map for unknown session", async () => {
-		const ranges = await db.getProcessedEpisodeRanges("opencode", [
+		const ranges = await db.getProcessedEpisodeRanges("opencode", "default", [
 			"no-such-session",
 		]);
 		expect(ranges.size).toBe(0);
@@ -638,16 +673,29 @@ describe("KnowledgeDB — cluster CRUD", () => {
 
 		// First persist — new cluster
 		await db.persistClusters([
-			{ id: "cluster-1", centroid, memberIds: ["e1", "e2"], isNew: true, membershipChanged: true },
+			{
+				id: "cluster-1",
+				centroid,
+				memberIds: ["e1", "e2"],
+				isNew: true,
+				membershipChanged: true,
+			},
 		]);
-		const before = (await db.getClustersWithMembers())[0].lastMembershipChangedAt;
+		const before = (await db.getClustersWithMembers())[0]
+			.lastMembershipChangedAt;
 
 		// Small delay to ensure timestamps differ if the code is wrong
 		const newCentroid = [0.6, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
 		// Re-persist same cluster, same members, membershipChanged=false
 		await db.persistClusters([
-			{ id: "cluster-1", centroid: newCentroid, memberIds: ["e1", "e2"], isNew: false, membershipChanged: false },
+			{
+				id: "cluster-1",
+				centroid: newCentroid,
+				memberIds: ["e1", "e2"],
+				isNew: false,
+				membershipChanged: false,
+			},
 		]);
 
 		const after = (await db.getClustersWithMembers())[0];
@@ -660,13 +708,25 @@ describe("KnowledgeDB — cluster CRUD", () => {
 		await insertEntry("e1", centroid);
 
 		await db.persistClusters([
-			{ id: "cluster-old", centroid, memberIds: ["e1"], isNew: true, membershipChanged: true },
+			{
+				id: "cluster-old",
+				centroid,
+				memberIds: ["e1"],
+				isNew: true,
+				membershipChanged: true,
+			},
 		]);
 		expect(await db.getClustersWithMembers()).toHaveLength(1);
 
 		// New pass produces a different cluster (cluster-old disappears)
 		await db.persistClusters([
-			{ id: "cluster-new", centroid, memberIds: ["e1"], isNew: true, membershipChanged: true },
+			{
+				id: "cluster-new",
+				centroid,
+				memberIds: ["e1"],
+				isNew: true,
+				membershipChanged: true,
+			},
 		]);
 
 		const clusters = await db.getClustersWithMembers();
@@ -679,7 +739,13 @@ describe("KnowledgeDB — cluster CRUD", () => {
 		await insertEntry("e1", centroid);
 
 		await db.persistClusters([
-			{ id: "cluster-1", centroid, memberIds: ["e1"], isNew: true, membershipChanged: true },
+			{
+				id: "cluster-1",
+				centroid,
+				memberIds: ["e1"],
+				isNew: true,
+				membershipChanged: true,
+			},
 		]);
 
 		expect((await db.getClustersWithMembers())[0].lastSynthesizedAt).toBeNull();
@@ -698,7 +764,13 @@ describe("KnowledgeDB — cluster CRUD", () => {
 		const centroid = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 		await insertEntry("e1", centroid);
 		await db.persistClusters([
-			{ id: "cluster-1", centroid, memberIds: ["e1"], isNew: true, membershipChanged: true },
+			{
+				id: "cluster-1",
+				centroid,
+				memberIds: ["e1"],
+				isNew: true,
+				membershipChanged: true,
+			},
 		]);
 		expect(await db.getClustersWithMembers()).toHaveLength(1);
 

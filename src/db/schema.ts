@@ -48,9 +48,18 @@
  *   Replaces the fragile source.startsWith('synthesis:') convention with an
  *   authoritative persistent flag. Existing synthesis entries are backfilled.
  * - MIGRATION: v9 → v10 is incremental: ALTER TABLE + UPDATE backfill. No data loss.
+ *
+ * v11: Multi-user cursor support.
+ * - source_cursor gains a `user_id` column and a new composite PK (source, user_id).
+ *   Each user running against a shared DB advances their own cursor independently.
+ * - consolidated_episode gains a `user_id` column and is added to the PK.
+ *   Prevents one user's processed episodes from blocking another user's consolidation.
+ * - user_id defaults to 'default' for backwards-compatible single-user mode.
+ *   In multi-user setups, set user_id via the USER_ID env var or config.jsonc.
+ * - MIGRATION: v10 → v11 is incremental: ALTER TABLE + PK rebuild via drop+recreate.
  */
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 /**
  * Expected columns for each table, derived from the DDL below.
@@ -103,11 +112,13 @@ export const EXPECTED_TABLE_COLUMNS: Readonly<
 	],
 	source_cursor: [
 		"source",
+		"user_id",
 		"last_message_time_created",
 		"last_consolidated_at",
 	],
 	consolidated_episode: [
 		"source",
+		"user_id",
 		"session_id",
 		"start_message_id",
 		"end_message_id",
@@ -189,29 +200,34 @@ export const CREATE_TABLES = `
   INSERT OR IGNORE INTO consolidation_state (id, last_consolidated_at, total_sessions_processed, total_entries_created, total_entries_updated)
   VALUES (1, 0, 0, 0, 0);
 
-  -- Per-source high-water mark cursor.
-  -- Replaces the single last_message_time_created in consolidation_state so each
-  -- source (opencode, claude-code) can advance independently.
+  -- Per-source per-user high-water mark cursor.
+  -- user_id (added v11) scopes the cursor per user in shared-DB setups so each
+  -- user's consolidation advances independently. Defaults to 'default' for
+  -- single-user backwards compatibility.
   CREATE TABLE IF NOT EXISTS source_cursor (
-    source                   TEXT    PRIMARY KEY,  -- e.g. "opencode", "claude-code"
+    source                   TEXT    NOT NULL,  -- e.g. "opencode", "claude-code"
+    user_id                  TEXT    NOT NULL DEFAULT 'default',
     last_message_time_created INTEGER NOT NULL DEFAULT 0,
-    last_consolidated_at      INTEGER NOT NULL DEFAULT 0
+    last_consolidated_at      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (source, user_id)
   );
 
   -- Per-episode processing log — enables incremental within-session consolidation.
-  -- source column added in v6 to namespace episodes per reader.
+  -- source added v6; user_id added v11 so each user's processed episodes are tracked
+  -- independently in shared-DB setups.
   CREATE TABLE IF NOT EXISTS consolidated_episode (
     source           TEXT    NOT NULL,
+    user_id          TEXT    NOT NULL DEFAULT 'default',
     session_id       TEXT    NOT NULL,
     start_message_id TEXT    NOT NULL,
     end_message_id   TEXT    NOT NULL,
     content_type     TEXT    NOT NULL,
     processed_at     INTEGER NOT NULL,
     entries_created  INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (source, session_id, start_message_id, end_message_id)
+    PRIMARY KEY (source, user_id, session_id, start_message_id, end_message_id)
   );
 
-  CREATE INDEX IF NOT EXISTS idx_episode_source_session ON consolidated_episode(source, session_id);
+  CREATE INDEX IF NOT EXISTS idx_episode_source_user_session ON consolidated_episode(source, user_id, session_id);
   CREATE INDEX IF NOT EXISTS idx_episode_processed ON consolidated_episode(processed_at);
 
   -- Synthesis clusters — persistent embedding-similarity groups of knowledge entries.

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 
 /**
@@ -72,6 +72,26 @@ export interface KnowledgeServerConfig {
 	stores: StoreConfig[];
 	domains: DomainConfig[];
 	projects: ProjectConfig[];
+	/**
+	 * Stable identifier for this user/machine in a shared DB setup.
+	 *
+	 * Used to scope the consolidation cursor and episode log so multiple users
+	 * sharing the same knowledge DB advance independently.
+	 *
+	 * Resolution order:
+	 *   1. KNOWLEDGE_USER_ID environment variable
+	 *   2. userId field in config.jsonc
+	 *   3. OS hostname (os.hostname())
+	 *   4. "default" (fallback)
+	 *
+	 * Note: USER_ID is intentionally NOT used — on Linux it contains the
+	 * numeric process UID (e.g. "1000") which would silently route cursors
+	 * to a numeric string. KNOWLEDGE_USER_ID is unambiguous.
+	 *
+	 * Single-user setups: leave unset. The default "default" keeps behaviour
+	 * identical to pre-v11 — no cursor namespacing.
+	 */
+	userId: string;
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
@@ -278,7 +298,12 @@ function validateConfigFile(
 		}
 	}
 
-	return { stores, domains, projects };
+	// userId — optional, resolved via resolveUserId() for full priority chain
+	const configUserId =
+		"userId" in obj && typeof obj.userId === "string" ? obj.userId : undefined;
+	const userId = resolveUserId(configUserId);
+
+	return { stores, domains, projects, userId };
 }
 
 function validateDomain(
@@ -447,6 +472,26 @@ export function resolveSqlitePath(store: StoreConfig): string {
 	return store.path ?? DEFAULT_SQLITE_PATH;
 }
 
+// ── User ID resolution ────────────────────────────────────────────────────────
+
+/**
+ * Resolve the effective user_id for consolidation cursor scoping.
+ *
+ * Priority:
+ *   1. USER_ID env var (override for automated / CI contexts)
+ *   2. userId from config.jsonc (explicit machine/user label)
+ *   3. OS hostname (stable, unique per machine in typical home lab / small team)
+ *   4. "default" (safe fallback — single-user backwards-compatible behaviour)
+ */
+export function resolveUserId(configUserId?: string): string {
+	const envUserId = process.env.KNOWLEDGE_USER_ID?.trim();
+	if (envUserId) return envUserId;
+	if (configUserId?.trim()) return configUserId.trim();
+	const host = hostname().trim();
+	if (host) return host;
+	return "default";
+}
+
 // ── Default config (no config file) ──────────────────────────────────────────
 
 /**
@@ -463,4 +508,5 @@ export const DEFAULT_CONFIG: KnowledgeServerConfig = {
 	],
 	domains: [],
 	projects: [],
+	userId: resolveUserId(),
 };

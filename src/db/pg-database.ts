@@ -280,6 +280,76 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 						}
 					},
 				},
+				{
+					version: 11,
+					label:
+						"add user_id to source_cursor and consolidated_episode for multi-user support",
+					up: async (sql: TxSql) => {
+						// source_cursor: add user_id column, rebuild PK to (source, user_id).
+						// Add table_schema filter so we don't match a same-named table in a
+						// different schema (e.g. when multiple apps share one PG instance).
+						const cursorCols = await sql`
+							SELECT column_name FROM information_schema.columns
+							WHERE table_schema = current_schema()
+							  AND table_name = 'source_cursor'
+							  AND column_name = 'user_id'
+						`;
+						if (cursorCols.length === 0) {
+							await sql`
+								ALTER TABLE source_cursor
+								ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'
+							`;
+							// Look up the actual PK constraint name rather than assuming
+							// the auto-generated name — avoids failure on restored dumps
+							// or manually named constraints.
+							const cursorPkRows = await sql`
+								SELECT constraint_name FROM information_schema.table_constraints
+								WHERE table_schema = current_schema()
+								  AND table_name = 'source_cursor'
+								  AND constraint_type = 'PRIMARY KEY'
+							`;
+							if (cursorPkRows.length > 0) {
+								const pkName = cursorPkRows[0].constraint_name as string;
+								await sql`ALTER TABLE source_cursor DROP CONSTRAINT ${sql(pkName)}`;
+							}
+							await sql`ALTER TABLE source_cursor ADD PRIMARY KEY (source, user_id)`;
+						}
+
+						// consolidated_episode: add user_id column, rebuild PK.
+						const episodeCols = await sql`
+							SELECT column_name FROM information_schema.columns
+							WHERE table_schema = current_schema()
+							  AND table_name = 'consolidated_episode'
+							  AND column_name = 'user_id'
+						`;
+						if (episodeCols.length === 0) {
+							await sql`
+								ALTER TABLE consolidated_episode
+								ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'
+							`;
+							const episodePkRows = await sql`
+								SELECT constraint_name FROM information_schema.table_constraints
+								WHERE table_schema = current_schema()
+								  AND table_name = 'consolidated_episode'
+								  AND constraint_type = 'PRIMARY KEY'
+							`;
+							if (episodePkRows.length > 0) {
+								const pkName = episodePkRows[0].constraint_name as string;
+								await sql`ALTER TABLE consolidated_episode DROP CONSTRAINT ${sql(pkName)}`;
+							}
+							await sql`
+								ALTER TABLE consolidated_episode
+								ADD PRIMARY KEY (source, user_id, session_id, start_message_id, end_message_id)
+							`;
+							// Update index to include user_id
+							await sql`DROP INDEX IF EXISTS idx_episode_source_session`;
+							await sql`
+								CREATE INDEX IF NOT EXISTS idx_episode_source_user_session
+								ON consolidated_episode(source, user_id, session_id)
+							`;
+						}
+					},
+				},
 			];
 
 			let migratedTo = currentVersion;
@@ -900,6 +970,7 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 
 	async recordEpisode(
 		source: string,
+		userId: string,
 		sessionId: string,
 		startMessageId: string,
 		endMessageId: string,
@@ -908,14 +979,15 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 	): Promise<void> {
 		await this.sql`
 			INSERT INTO consolidated_episode
-			(source, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created)
-			VALUES (${source}, ${sessionId}, ${startMessageId}, ${endMessageId}, ${contentType}, ${Date.now()}, ${entriesCreated})
+			(source, user_id, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created)
+			VALUES (${source}, ${userId}, ${sessionId}, ${startMessageId}, ${endMessageId}, ${contentType}, ${Date.now()}, ${entriesCreated})
 			ON CONFLICT DO NOTHING
 		`;
 	}
 
 	async getProcessedEpisodeRanges(
 		source: string,
+		userId: string,
 		sessionIds: string[],
 	): Promise<Map<string, ProcessedRange[]>> {
 		if (sessionIds.length === 0) return new Map();
@@ -924,6 +996,7 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 			SELECT session_id, start_message_id, end_message_id
 			FROM consolidated_episode
 			WHERE source = ${source}
+			  AND user_id = ${userId}
 			  AND session_id = ANY(${sessionIds}::text[])
 		`;
 
@@ -943,18 +1016,24 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 
 	// ── Source Cursor ──
 
-	async getSourceCursor(source: string): Promise<SourceCursor> {
+	async getSourceCursor(source: string, userId: string): Promise<SourceCursor> {
 		const rows = await this.sql`
 			SELECT last_message_time_created, last_consolidated_at
-			FROM source_cursor WHERE source = ${source}
+			FROM source_cursor WHERE source = ${source} AND user_id = ${userId}
 		`;
 
 		if (rows.length === 0) {
-			return { source, lastMessageTimeCreated: 0, lastConsolidatedAt: 0 };
+			return {
+				source,
+				userId,
+				lastMessageTimeCreated: 0,
+				lastConsolidatedAt: 0,
+			};
 		}
 
 		return {
 			source,
+			userId,
 			lastMessageTimeCreated: toNum(
 				rows[0].last_message_time_created as number | string,
 			),
@@ -966,18 +1045,19 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 
 	async updateSourceCursor(
 		source: string,
-		cursor: Partial<Omit<SourceCursor, "source">>,
+		userId: string,
+		cursor: Partial<Omit<SourceCursor, "source" | "userId">>,
 	): Promise<void> {
-		const current = await this.getSourceCursor(source);
+		const current = await this.getSourceCursor(source, userId);
 		const newLastMessageTime =
 			cursor.lastMessageTimeCreated ?? current.lastMessageTimeCreated;
 		const newLastConsolidated =
 			cursor.lastConsolidatedAt ?? current.lastConsolidatedAt;
 
 		await this.sql`
-			INSERT INTO source_cursor (source, last_message_time_created, last_consolidated_at)
-			VALUES (${source}, ${newLastMessageTime}, ${newLastConsolidated})
-			ON CONFLICT (source) DO UPDATE SET
+			INSERT INTO source_cursor (source, user_id, last_message_time_created, last_consolidated_at)
+			VALUES (${source}, ${userId}, ${newLastMessageTime}, ${newLastConsolidated})
+			ON CONFLICT (source, user_id) DO UPDATE SET
 				last_message_time_created = EXCLUDED.last_message_time_created,
 				last_consolidated_at = EXCLUDED.last_consolidated_at
 		`;

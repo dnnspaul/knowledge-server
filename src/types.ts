@@ -125,6 +125,13 @@ export interface ConsolidationState {
  */
 export interface SourceCursor {
 	source: string; // e.g. "opencode", "claude-code"
+	/**
+	 * User identifier for multi-user shared DB support (added v11).
+	 * Scopes the cursor so each user advances independently.
+	 * Defaults to "default" for single-user backwards-compatible mode.
+	 * Set via USER_ID env var or config.jsonc userId field.
+	 */
+	userId: string;
 	lastMessageTimeCreated: number; // max time_created of messages seen in last run
 	lastConsolidatedAt: number; // unix timestamp ms of last successful consolidation
 }

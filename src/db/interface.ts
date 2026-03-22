@@ -147,8 +147,14 @@ export interface IKnowledgeDB {
 
 	// ── Episode Tracking ──
 
+	/**
+	 * Record a processed episode range for idempotency tracking.
+	 * userId scopes the record per user so multi-user shared DBs don't
+	 * suppress other users' episodes.
+	 */
 	recordEpisode(
 		source: string,
+		userId: string,
 		sessionId: string,
 		startMessageId: string,
 		endMessageId: string,
@@ -156,18 +162,31 @@ export interface IKnowledgeDB {
 		entriesCreated: number,
 	): Promise<void>;
 
+	/**
+	 * Return already-processed episode ranges for the given sessions.
+	 * userId scopes the lookup so each user sees only their own records.
+	 */
 	getProcessedEpisodeRanges(
 		source: string,
+		userId: string,
 		sessionIds: string[],
 	): Promise<Map<string, ProcessedRange[]>>;
 
 	// ── Source Cursor ──
 
-	getSourceCursor(source: string): Promise<SourceCursor>;
+	/**
+	 * Get the per-source per-user high-water mark cursor.
+	 * Returns a zeroed cursor if none exists yet.
+	 */
+	getSourceCursor(source: string, userId: string): Promise<SourceCursor>;
 
+	/**
+	 * Advance the cursor for a source+user pair.
+	 */
 	updateSourceCursor(
 		source: string,
-		cursor: Partial<Omit<SourceCursor, "source">>,
+		userId: string,
+		cursor: Partial<Omit<SourceCursor, "source" | "userId">>,
 	): Promise<void>;
 
 	// ── Consolidation State ──

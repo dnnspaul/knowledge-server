@@ -202,7 +202,10 @@ Options:
 		activation,
 		readers,
 		registry.domainRouter,
+		registry.userId,
 	);
+
+	logger.log(`[user] Consolidating as user: ${registry.userId}`);
 
 	// Check if this is a first run (no knowledge yet, but episodes exist)
 	const stats = await db.getStats();
@@ -302,6 +305,7 @@ Options:
 		consolidation,
 		adminToken,
 		adminTokenIsStable,
+		registry.userId,
 	);
 
 	// Start server — PID file written after this succeeds so it only exists

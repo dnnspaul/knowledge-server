@@ -50,6 +50,11 @@ export class ConsolidationEngine {
 	private reconsolidator: Reconsolidator;
 	private contradictionScanner: ContradictionScanner;
 	private domainRouter: DomainRouter | null;
+	/**
+	 * User identifier for multi-user shared DB support.
+	 * Scopes cursor and episode log so each user's consolidation advances independently.
+	 */
+	private userId: string;
 
 	/**
 	 * Concurrency guard — only one consolidation run at a time, regardless of
@@ -95,11 +100,13 @@ export class ConsolidationEngine {
 		activation: ActivationEngine,
 		readers: IEpisodeReader[] = [],
 		domainRouter: DomainRouter | null = null,
+		userId = "default",
 	) {
 		this.db = db;
 		this.activation = activation;
 		this.readers = readers;
 		this.domainRouter = domainRouter;
+		this.userId = userId;
 		this.llm = new ConsolidationLLM();
 		this.reconsolidator = new Reconsolidator(
 			db,
@@ -122,7 +129,7 @@ export class ConsolidationEngine {
 		let pendingSessions = 0;
 
 		for (const reader of this.readers) {
-			const cursor = await this.db.getSourceCursor(reader.source);
+			const cursor = await this.db.getSourceCursor(reader.source, this.userId);
 			pendingSessions += reader.countNewSessions(cursor.lastMessageTimeCreated);
 		}
 
@@ -240,7 +247,7 @@ export class ConsolidationEngine {
 		conflictsDetected: number;
 		conflictsResolved: number;
 	}> {
-		const cursor = await this.db.getSourceCursor(reader.source);
+		const cursor = await this.db.getSourceCursor(reader.source, this.userId);
 
 		// 1. Fetch candidate sessions: those with messages newer than this source's cursor.
 		//    Returns session IDs plus the max message timestamp per session,
@@ -263,9 +270,10 @@ export class ConsolidationEngine {
 
 		const candidateIds = candidateSessions.map((s) => s.id);
 
-		// 2. Load already-processed episode ranges for this source's batch of sessions.
+		// 2. Load already-processed episode ranges for this source + user's sessions.
 		const processedRanges = await this.db.getProcessedEpisodeRanges(
 			reader.source,
+			this.userId,
 			candidateIds,
 		);
 
@@ -373,7 +381,7 @@ export class ConsolidationEngine {
 		// Safety floor: never move the cursor backwards.
 		newCursor = Math.max(newCursor, cursor.lastMessageTimeCreated);
 
-		await this.db.updateSourceCursor(reader.source, {
+		await this.db.updateSourceCursor(reader.source, this.userId, {
 			lastMessageTimeCreated: newCursor,
 			lastConsolidatedAt: Date.now(),
 		});
@@ -607,6 +615,7 @@ export class ConsolidationEngine {
 		for (const ep of chunk) {
 			await this.db.recordEpisode(
 				source,
+				this.userId,
 				ep.sessionId,
 				ep.startMessageId,
 				ep.endMessageId,

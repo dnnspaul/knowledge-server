@@ -22,6 +22,7 @@ export async function runConsolidate(): Promise<void> {
 		activation,
 		readers,
 		registry.domainRouter,
+		registry.userId,
 	);
 
 	try {

@@ -163,6 +163,80 @@ export class KnowledgeDB implements IKnowledgeDB {
 					}
 				},
 			},
+			{
+				version: 11,
+				label:
+					"add user_id to source_cursor and consolidated_episode for multi-user support",
+				up: (db) => {
+					// source_cursor: add user_id column and rebuild with composite PK.
+					// SQLite does not support ALTER PRIMARY KEY, so we drop+recreate.
+					// If the table doesn't exist yet (fresh DB running migrations before
+					// CREATE_TABLES), skip — CREATE_TABLES will create it correctly.
+					const cursorCols = (
+						db.prepare("PRAGMA table_info(source_cursor)").all() as Array<{
+							name: string;
+						}>
+					).map((c) => c.name);
+					if (cursorCols.length > 0 && !cursorCols.includes("user_id")) {
+						// Each statement in a separate exec() call — multi-statement strings
+						// in db.exec() may auto-commit DDL individually in some SQLite binding
+						// versions, breaking the enclosing transaction. Individual calls ensure
+						// all DDL runs atomically within this.db.transaction().
+						db.exec(
+							"ALTER TABLE source_cursor ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'",
+						);
+						db.exec(`CREATE TABLE source_cursor_v11 (
+							source                    TEXT    NOT NULL,
+							user_id                   TEXT    NOT NULL DEFAULT 'default',
+							last_message_time_created INTEGER NOT NULL DEFAULT 0,
+							last_consolidated_at      INTEGER NOT NULL DEFAULT 0,
+							PRIMARY KEY (source, user_id)
+						)`);
+						db.exec(
+							"INSERT OR IGNORE INTO source_cursor_v11 SELECT source, user_id, last_message_time_created, last_consolidated_at FROM source_cursor",
+						);
+						db.exec("DROP TABLE source_cursor");
+						db.exec("ALTER TABLE source_cursor_v11 RENAME TO source_cursor");
+					}
+
+					// consolidated_episode: add user_id column and rebuild with new PK.
+					// Same guard — skip if table doesn't exist yet.
+					const episodeCols = (
+						db
+							.prepare("PRAGMA table_info(consolidated_episode)")
+							.all() as Array<{ name: string }>
+					).map((c) => c.name);
+					if (episodeCols.length > 0 && !episodeCols.includes("user_id")) {
+						db.exec(
+							"ALTER TABLE consolidated_episode ADD COLUMN user_id TEXT NOT NULL DEFAULT 'default'",
+						);
+						db.exec(`CREATE TABLE consolidated_episode_v11 (
+							source           TEXT    NOT NULL,
+							user_id          TEXT    NOT NULL DEFAULT 'default',
+							session_id       TEXT    NOT NULL,
+							start_message_id TEXT    NOT NULL,
+							end_message_id   TEXT    NOT NULL,
+							content_type     TEXT    NOT NULL,
+							processed_at     INTEGER NOT NULL,
+							entries_created  INTEGER NOT NULL DEFAULT 0,
+							PRIMARY KEY (source, user_id, session_id, start_message_id, end_message_id)
+						)`);
+						db.exec(
+							"INSERT OR IGNORE INTO consolidated_episode_v11 SELECT source, user_id, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created FROM consolidated_episode",
+						);
+						db.exec("DROP TABLE consolidated_episode");
+						db.exec(
+							"ALTER TABLE consolidated_episode_v11 RENAME TO consolidated_episode",
+						);
+						db.exec(
+							"CREATE INDEX IF NOT EXISTS idx_episode_source_user_session ON consolidated_episode(source, user_id, session_id)",
+						);
+						db.exec(
+							"CREATE INDEX IF NOT EXISTS idx_episode_processed ON consolidated_episode(processed_at)",
+						);
+					}
+				},
+			},
 		];
 
 		let migratedTo = currentVersion;
@@ -987,6 +1061,7 @@ export class KnowledgeDB implements IKnowledgeDB {
 	 */
 	async recordEpisode(
 		source: string,
+		userId: string,
 		sessionId: string,
 		startMessageId: string,
 		endMessageId: string,
@@ -996,11 +1071,12 @@ export class KnowledgeDB implements IKnowledgeDB {
 		this.db
 			.prepare(
 				`INSERT OR IGNORE INTO consolidated_episode
-         (source, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+         (source, user_id, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				source,
+				userId,
 				sessionId,
 				startMessageId,
 				endMessageId,
@@ -1027,6 +1103,7 @@ export class KnowledgeDB implements IKnowledgeDB {
 	 */
 	async getProcessedEpisodeRanges(
 		source: string,
+		userId: string,
 		sessionIds: string[],
 	): Promise<Map<string, ProcessedRange[]>> {
 		if (sessionIds.length === 0) return new Map();
@@ -1036,9 +1113,10 @@ export class KnowledgeDB implements IKnowledgeDB {
 				`SELECT session_id, start_message_id, end_message_id
          FROM consolidated_episode
          WHERE source = ?
+           AND user_id = ?
            AND session_id IN (SELECT value FROM json_each(?))`,
 			)
-			.all(source, JSON.stringify(sessionIds)) as Array<{
+			.all(source, userId, JSON.stringify(sessionIds)) as Array<{
 			session_id: string;
 			start_message_id: string;
 			end_message_id: string;
@@ -1067,40 +1145,47 @@ export class KnowledgeDB implements IKnowledgeDB {
 	// ── Source Cursor ──
 
 	/**
-	 * Get the high-water mark cursor for a specific source.
-	 * Returns a zero-state cursor if no row exists for this source yet.
+	 * Get the high-water mark cursor for a specific source + user.
+	 * Returns a zero-state cursor if no row exists yet.
 	 */
-	async getSourceCursor(source: string): Promise<SourceCursor> {
+	async getSourceCursor(source: string, userId: string): Promise<SourceCursor> {
 		const row = this.db
 			.prepare(
-				"SELECT last_message_time_created, last_consolidated_at FROM source_cursor WHERE source = ?",
+				"SELECT last_message_time_created, last_consolidated_at FROM source_cursor WHERE source = ? AND user_id = ?",
 			)
-			.get(source) as {
+			.get(source, userId) as {
 			last_message_time_created: number;
 			last_consolidated_at: number;
 		} | null;
 
 		if (!row) {
-			return { source, lastMessageTimeCreated: 0, lastConsolidatedAt: 0 };
+			return {
+				source,
+				userId,
+				lastMessageTimeCreated: 0,
+				lastConsolidatedAt: 0,
+			};
 		}
 
 		return {
 			source,
+			userId,
 			lastMessageTimeCreated: row.last_message_time_created,
 			lastConsolidatedAt: row.last_consolidated_at,
 		};
 	}
 
 	/**
-	 * Upsert the high-water mark cursor for a specific source.
+	 * Upsert the high-water mark cursor for a specific source + user.
 	 * Uses INSERT OR REPLACE so the first call creates the row automatically.
 	 */
 	async updateSourceCursor(
 		source: string,
-		cursor: Partial<Omit<SourceCursor, "source">>,
+		userId: string,
+		cursor: Partial<Omit<SourceCursor, "source" | "userId">>,
 	): Promise<void> {
 		// Read current values so we only update what's provided
-		const current = await this.getSourceCursor(source);
+		const current = await this.getSourceCursor(source, userId);
 
 		const newLastMessageTime =
 			cursor.lastMessageTimeCreated ?? current.lastMessageTimeCreated;
@@ -1109,10 +1194,10 @@ export class KnowledgeDB implements IKnowledgeDB {
 
 		this.db
 			.prepare(
-				`INSERT OR REPLACE INTO source_cursor (source, last_message_time_created, last_consolidated_at)
-         VALUES (?, ?, ?)`,
+				`INSERT OR REPLACE INTO source_cursor (source, user_id, last_message_time_created, last_consolidated_at)
+         VALUES (?, ?, ?, ?)`,
 			)
-			.run(source, newLastMessageTime, newLastConsolidated);
+			.run(source, userId, newLastMessageTime, newLastConsolidated);
 	}
 
 	// ── Consolidation State ──
