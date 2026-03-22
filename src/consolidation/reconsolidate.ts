@@ -146,10 +146,10 @@ export class Reconsolidator {
 	): Promise<void> {
 		// insertDb: where NEW entries land (domain-routed or default writable store).
 		const insertDb = targetDb ?? this.db;
-		// Cross-store reconsolidation is not supported — updates and reinforcements
-		// always target this.db because entriesMap is loaded exclusively from this.db.
-		// Using this.db directly (not an alias) makes it explicit that this is always
-		// the primary store, not a parameter that could diverge in a future refactor.
+		// Updates and reinforcements of EXISTING entries always use this.db directly
+		// (not insertDb) because entriesMap is loaded exclusively from this.db.
+		// targetDb controls insert destination only — do NOT use it for mergeEntry
+		// or reinforceObservation, as the existing entry lives in this.db.
 
 		// Embed the extracted entry content (skip if pre-computed by caller)
 		const entryEmbedding =
