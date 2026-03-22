@@ -228,9 +228,15 @@ export class EpisodeUploader {
 
 	/**
 	 * Run the daemon in polling mode — upload on interval until stopped.
+	 *
 	 * @param intervalMs  Upload interval in milliseconds (default: 5 minutes).
+	 * @param onShutdown  Optional async cleanup callback called before process.exit.
+	 *                    Use this to close DB connections and readers gracefully.
 	 */
-	async runPolling(intervalMs = 5 * 60 * 1000): Promise<void> {
+	async runPolling(
+		intervalMs = 5 * 60 * 1000,
+		onShutdown?: () => Promise<void>,
+	): Promise<void> {
 		logger.log(
 			`[daemon] Starting. Upload interval: ${Math.round(intervalMs / 1000)}s. User: ${this.userId}`,
 		);
@@ -244,14 +250,27 @@ export class EpisodeUploader {
 			});
 		}, intervalMs);
 
-		// Keep process alive and handle graceful shutdown
-		const cleanup = () => {
+		// Graceful shutdown: stop the interval, run caller cleanup, then exit.
+		// Uses process.on (not once) so both SIGTERM and SIGINT are always handled.
+		// The re-entrancy guard prevents double-cleanup if both signals fire in rapid
+		// succession before the async onShutdown resolves (process.once would leave
+		// the second signal unhandled, causing a hard exit mid-onShutdown).
+		let shuttingDown = false;
+		const cleanup = async () => {
+			if (shuttingDown) return;
+			shuttingDown = true;
 			clearInterval(interval);
+			logger.log("[daemon] Stopping…");
+			if (onShutdown) {
+				await onShutdown().catch((err) => {
+					logger.error("[daemon] Error during shutdown:", err);
+				});
+			}
 			logger.log("[daemon] Stopped.");
 			process.exit(0);
 		};
 
-		process.on("SIGTERM", cleanup);
-		process.on("SIGINT", cleanup);
+		process.on("SIGTERM", () => void cleanup());
+		process.on("SIGINT", () => void cleanup());
 	}
 }

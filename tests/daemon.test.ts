@@ -7,16 +7,8 @@
  * - EpisodeUploader core logic (upload, cursor advance, dedup)
  * - PendingEpisodesReader (prepare, getCandidateSessions, getNewEpisodes, afterConsolidated)
  */
-import {
-	afterEach,
-	beforeEach,
-	describe,
-	expect,
-	it,
-	mock,
-	spyOn,
-} from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EpisodeUploader } from "../src/daemon/uploader";
@@ -414,5 +406,46 @@ describe("PendingEpisodesReader", () => {
 		const remaining = await db.getPendingEpisodes("opencode", "alice", 0);
 		expect(remaining).toHaveLength(1);
 		expect(remaining[0].id).toBe("ep-del-2");
+	});
+
+	it("countNewSessions returns 1 (conservative) before prepare() is called", () => {
+		const reader = new PendingEpisodesReader("opencode", "alice", db);
+		// prepare() not called — should signal "there may be pending episodes"
+		expect(reader.countNewSessions(0)).toBe(1);
+	});
+
+	it("countNewSessions returns 0 after prepare() when table is empty", async () => {
+		const reader = new PendingEpisodesReader("opencode", "alice", db);
+		await reader.prepare(0); // table is empty
+		// After prepare(), genuinely empty result must return 0, not 1
+		expect(reader.countNewSessions(0)).toBe(0);
+	});
+
+	it("countNewSessions returns correct count after prepare() with episodes", async () => {
+		const now = Date.now();
+		await db.insertPendingEpisode(
+			makePendingEpisode({
+				id: "ep-cnt-1",
+				source: "opencode",
+				userId: "alice",
+				sessionId: "s1",
+				maxMessageTime: now,
+			}),
+		);
+		await db.insertPendingEpisode(
+			makePendingEpisode({
+				id: "ep-cnt-2",
+				source: "opencode",
+				userId: "alice",
+				sessionId: "s2",
+				maxMessageTime: now + 1,
+			}),
+		);
+
+		const reader = new PendingEpisodesReader("opencode", "alice", db);
+		await reader.prepare(0);
+		expect(reader.countNewSessions(0)).toBe(2);
+		// Filtered by cursor
+		expect(reader.countNewSessions(now)).toBe(1);
 	});
 });

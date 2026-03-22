@@ -60,6 +60,12 @@ export class PendingEpisodesReader implements IEpisodeReader {
 	}
 
 	countNewSessions(afterMessageTimeCreated: number): number {
+		// If prepare() hasn't been called yet, return 1 as a conservative
+		// "there may be pending episodes" signal so checkPending() doesn't skip
+		// consolidation. The real count is determined after prepare() runs inside
+		// consolidateSource. We use an explicit _prepared flag (not _cachedCandidates.length)
+		// so that a genuine empty result after prepare() correctly returns 0.
+		if (!this._prepared) return 1;
 		return this._cachedCandidates.filter(
 			(s) => s.maxMessageTime > afterMessageTimeCreated,
 		).length;
@@ -70,6 +76,13 @@ export class PendingEpisodesReader implements IEpisodeReader {
 	 * Called by ConsolidationEngine before getCandidateSessions (optional hook).
 	 */
 	async prepare(afterMessageTimeCreated: number): Promise<void> {
+		// Reset cache state each time prepare() is called so stale candidates
+		// from a previous consolidation run don't persist into the next one.
+		// This also resets _prepared so countNewSessions' conservative default
+		// doesn't short-circuit when the cache holds expired data.
+		this._cachedRows = [];
+		this._cachedCandidates = [];
+		this._prepared = true;
 		const rows = await this.db.getPendingEpisodes(
 			this.originalSource,
 			this.userId,
@@ -149,6 +162,7 @@ export class PendingEpisodesReader implements IEpisodeReader {
 		// No resources to release — DB is owned by the caller
 	}
 
+	private _prepared = false;
 	private _cachedRows: PendingEpisode[] = [];
 	private _cachedCandidates: Array<{ id: string; maxMessageTime: number }> = [];
 }

@@ -91,6 +91,11 @@ if (onceFlag) {
 	process.exit(0);
 } else {
 	// Polling mode: run until SIGTERM/SIGINT.
-	await uploader.runPolling(intervalMs);
-	// runPolling handles its own cleanup and process.exit
+	// Pass an onShutdown callback so DB connections and readers are properly
+	// closed before process.exit, avoiding SQLite WAL and Postgres pool leaks.
+	await uploader.runPolling(intervalMs, async () => {
+		for (const reader of readers) reader.close();
+		await localDb.close();
+		await registry.close();
+	});
 }
