@@ -86,19 +86,21 @@ describe("KnowledgeService.updateEntry", () => {
 
 	it("propagates embed errors without writing to DB", async () => {
 		await db.insertEntry(
-			makeEntry({ id: "e5", content: "original", embedding: [0.9, 0.9, 0.9] }),
+			makeEntry({ id: "e5", content: "original", topics: ["original-topic"], embedding: [0.9, 0.9, 0.9] }),
 		);
 
 		embedSpy.mockRejectedValueOnce(new Error("API quota exceeded"));
 
+		// Update both content AND topics so the rollback assertion for topics is
+		// meaningful — if the DB were partially written, topics would be "changed-topic".
 		await expect(
-			service.updateEntry("e5", { content: "updated" }),
+			service.updateEntry("e5", { content: "updated", topics: ["changed-topic"] }),
 		).rejects.toThrow("API quota exceeded");
 
 		// DB should be unchanged — no partial write (content, topics, embedding all intact)
 		const entry = await db.getEntry("e5");
 		expect(entry?.content).toBe("original");
-		expect(entry?.topics).toEqual(["test"]); // fixture default — unchanged
+		expect(entry?.topics).toEqual(["original-topic"]);
 		expect(entry?.embedding?.[0]).toBeCloseTo(0.9);
 	});
 
