@@ -86,26 +86,32 @@ export const PG_CREATE_TABLES = `
   VALUES (1, 0, 0, 0, 0)
   ON CONFLICT (id) DO NOTHING;
 
-  -- Per-source high-water mark cursor.
+  -- Per-source per-user high-water mark cursor (user_id added v11).
+  -- user_id scopes the cursor per user in shared-DB setups so each user's
+  -- consolidation advances independently. Defaults to 'default' for single-user mode.
   CREATE TABLE IF NOT EXISTS source_cursor (
-    source TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT 'default',
     last_message_time_created BIGINT NOT NULL DEFAULT 0,
-    last_consolidated_at BIGINT NOT NULL DEFAULT 0
+    last_consolidated_at BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (source, user_id)
   );
 
   -- Per-episode processing log — enables incremental within-session consolidation.
+  -- user_id added v11 so each user's processed episodes are tracked independently.
   CREATE TABLE IF NOT EXISTS consolidated_episode (
     source TEXT NOT NULL,
+    user_id TEXT NOT NULL DEFAULT 'default',
     session_id TEXT NOT NULL,
     start_message_id TEXT NOT NULL,
     end_message_id TEXT NOT NULL,
     content_type TEXT NOT NULL,
     processed_at BIGINT NOT NULL,
     entries_created INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (source, session_id, start_message_id, end_message_id)
+    PRIMARY KEY (source, user_id, session_id, start_message_id, end_message_id)
   );
 
-  CREATE INDEX IF NOT EXISTS idx_episode_source_session ON consolidated_episode(source, session_id);
+  CREATE INDEX IF NOT EXISTS idx_episode_source_user_session ON consolidated_episode(source, user_id, session_id);
   CREATE INDEX IF NOT EXISTS idx_episode_processed ON consolidated_episode(processed_at);
 
   -- Synthesis clusters — persistent embedding-similarity groups of knowledge entries.
