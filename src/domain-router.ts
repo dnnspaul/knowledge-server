@@ -139,7 +139,7 @@ export class DomainRouter {
 	 * Resolve the store for a specific domain id.
 	 * Used for per-entry routing when the LLM assigns a domain to an extracted entry.
 	 *
-	 * Returns undefined when domainId is undefined/null or not found —
+	 * Returns undefined when domainId is undefined or not found —
 	 * callers fall back to the chunk's default resolved store.
 	 */
 	resolveStore(domainId: string | undefined): IKnowledgeDB | undefined {

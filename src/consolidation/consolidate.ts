@@ -527,9 +527,9 @@ export class ConsolidationEngine {
 				// resolve() only returns non-null when domains are configured, and domains
 				// being configured is the precondition for domainRouter being non-null.
 				const domainRouter = this.domainRouter;
-				// domainResolution.domainId is always a non-null string here:
+				// domainResolution.domainId is always a defined string here:
 				// domainRouter is non-null only when config.domains.length > 0, which
-				// means resolve() cannot hit its early-exit null path.
+				// means resolve() cannot hit its early-exit undefined path.
 				const entryTargetStore =
 					domainResolution && domainRouter
 						? (domainRouter.resolveStore(
