@@ -999,7 +999,7 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 			INSERT INTO consolidated_episode
 			(source, user_id, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created)
 			VALUES (${source}, ${userId}, ${sessionId}, ${startMessageId}, ${endMessageId}, ${contentType}, ${Date.now()}, ${entriesCreated})
-			ON CONFLICT DO NOTHING
+			ON CONFLICT (source, user_id, session_id, start_message_id, end_message_id) DO NOTHING
 		`;
 	}
 
