@@ -94,8 +94,12 @@ export async function runReview(args: string[]): Promise<void> {
 			output: process.stdout,
 		});
 
+		// rl is guaranteed to be assigned by this point — it's set two lines above.
+		// The type is `| undefined` because it's hoisted before `try`, but within
+		// this branch (past the toReview.length === 0 early return) it is always set.
+		const rl_ = rl as NonNullable<typeof rl>;
 		const prompt = (question: string): Promise<string> =>
-			new Promise((resolve) => rl.question(question, resolve));
+			new Promise((resolve) => rl_.question(question, resolve));
 
 		let kept = 0;
 		let deleted = 0;
