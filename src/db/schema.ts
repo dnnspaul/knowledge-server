@@ -55,7 +55,7 @@
  * - consolidated_episode gains a `user_id` column and is added to the PK.
  *   Prevents one user's processed episodes from blocking another user's consolidation.
  * - user_id defaults to 'default' for backwards-compatible single-user mode.
- *   In multi-user setups, set user_id via the USER_ID env var or config.jsonc.
+ *   In multi-user setups, set user_id via the KNOWLEDGE_USER_ID env var or config.jsonc.
  * - MIGRATION: v10 → v11 is incremental: ALTER TABLE + PK rebuild via drop+recreate.
  */
 

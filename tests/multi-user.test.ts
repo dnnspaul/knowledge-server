@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveUserId } from "../src/config-file";
 import { KnowledgeDB } from "../src/db/database";
@@ -58,7 +57,7 @@ describe("KnowledgeDB multi-user cursor isolation", () => {
 	let db: KnowledgeDB;
 
 	beforeEach(() => {
-		tempDir = mkdtempSync(join(tmpdir(), "ks-multiuser-test-"));
+		tempDir = mkdtempSync(join(os.tmpdir(), "ks-multiuser-test-"));
 		db = new KnowledgeDB(join(tempDir, "test.db"));
 	});
 

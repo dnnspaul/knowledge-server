@@ -478,7 +478,7 @@ export function resolveSqlitePath(store: StoreConfig): string {
  * Resolve the effective user_id for consolidation cursor scoping.
  *
  * Priority:
- *   1. USER_ID env var (override for automated / CI contexts)
+ *   1. KNOWLEDGE_USER_ID env var (override for automated / CI contexts)
  *   2. userId from config.jsonc (explicit machine/user label)
  *   3. OS hostname (stable, unique per machine in typical home lab / small team)
  *   4. "default" (safe fallback — single-user backwards-compatible behaviour)
