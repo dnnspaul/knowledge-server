@@ -117,27 +117,22 @@ export class EpisodeUploader {
 		const candidateIds = candidateSessions.map((s) => s.id);
 
 		// Load already-uploaded episodes to skip re-uploading on restart.
-		// We use getProcessedEpisodeRanges from targetDb, keyed on the source name,
-		// so we know what's already in pending_episodes or already consolidated.
-		const processedRanges = await this.targetDb.getProcessedEpisodeRanges(
-			reader.source,
-			this.userId,
-			candidateIds,
-		);
+		// Scoped to candidateIds so we only check the sessions we're about to upload.
+		const processedRanges =
+			await this.targetDb.getProcessedEpisodeRanges(candidateIds);
 
 		// Also check what's already pending (uploaded but not yet consolidated).
 		// Scoped to cursor.lastMessageTimeCreated so we only scan the relevant
 		// window rather than the entire table — avoids O(table_size) fetches when
 		// pending rows accumulate (e.g. server is offline for days).
 		const alreadyPending = await this.targetDb.getPendingEpisodes(
-			reader.source,
-			this.userId,
 			cursor.lastMessageTimeCreated,
 		);
+		// Filter to this source only — getPendingEpisodes now returns all sources.
 		const pendingSet = new Set(
-			alreadyPending.map(
-				(ep) => `${ep.sessionId}|${ep.startMessageId}|${ep.endMessageId}`,
-			),
+			alreadyPending
+				.filter((ep) => ep.source === reader.source)
+				.map((ep) => `${ep.sessionId}|${ep.startMessageId}|${ep.endMessageId}`),
 		);
 
 		let episodes: Episode[];

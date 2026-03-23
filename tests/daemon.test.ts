@@ -79,14 +79,14 @@ describe("pending_episodes DB operations", () => {
 		const ep = makePendingEpisode();
 		await db.insertPendingEpisode(ep);
 
-		const rows = await db.getPendingEpisodes("opencode", "alice", 0);
+		const rows = await db.getPendingEpisodes(0);
 		expect(rows).toHaveLength(1);
 		expect(rows[0].id).toBe("ep-test-1");
 		expect(rows[0].userId).toBe("alice");
 		expect(rows[0].content).toBe("User asked about TypeScript types.");
 	});
 
-	it("filters by source and userId", async () => {
+	it("returns all episodes regardless of source or userId", async () => {
 		await db.insertPendingEpisode(
 			makePendingEpisode({ id: "ep-1", source: "opencode", userId: "alice" }),
 		);
@@ -101,13 +101,8 @@ describe("pending_episodes DB operations", () => {
 			makePendingEpisode({ id: "ep-3", source: "opencode", userId: "bob" }),
 		);
 
-		const aliceOpenCode = await db.getPendingEpisodes("opencode", "alice", 0);
-		expect(aliceOpenCode).toHaveLength(1);
-		expect(aliceOpenCode[0].id).toBe("ep-1");
-
-		const bob = await db.getPendingEpisodes("opencode", "bob", 0);
-		expect(bob).toHaveLength(1);
-		expect(bob[0].id).toBe("ep-3");
+		const all = await db.getPendingEpisodes(0);
+		expect(all).toHaveLength(3);
 	});
 
 	it("filters by afterMaxMessageTime", async () => {
@@ -119,7 +114,7 @@ describe("pending_episodes DB operations", () => {
 			makePendingEpisode({ id: "new", maxMessageTime: now }),
 		);
 
-		const rows = await db.getPendingEpisodes("opencode", "alice", now - 5000);
+		const rows = await db.getPendingEpisodes(now - 5000);
 		expect(rows).toHaveLength(1);
 		expect(rows[0].id).toBe("new");
 	});
@@ -129,7 +124,7 @@ describe("pending_episodes DB operations", () => {
 		await db.insertPendingEpisode(ep);
 		await db.insertPendingEpisode(ep); // same id
 
-		const rows = await db.getPendingEpisodes("opencode", "alice", 0);
+		const rows = await db.getPendingEpisodes(0);
 		expect(rows).toHaveLength(1);
 	});
 
@@ -139,7 +134,7 @@ describe("pending_episodes DB operations", () => {
 
 		await db.deletePendingEpisodes(["ep-1"]);
 
-		const rows = await db.getPendingEpisodes("opencode", "alice", 0);
+		const rows = await db.getPendingEpisodes(0);
 		expect(rows).toHaveLength(1);
 		expect(rows[0].id).toBe("ep-2");
 	});
@@ -147,7 +142,7 @@ describe("pending_episodes DB operations", () => {
 	it("deletePendingEpisodes is a no-op on empty array", async () => {
 		await db.insertPendingEpisode(makePendingEpisode());
 		await db.deletePendingEpisodes([]);
-		const rows = await db.getPendingEpisodes("opencode", "alice", 0);
+		const rows = await db.getPendingEpisodes(0);
 		expect(rows).toHaveLength(1);
 	});
 });
@@ -195,6 +190,7 @@ describe("EpisodeUploader.upload", () => {
 			[{ id: "session-1", maxMessageTime: now }],
 			[
 				{
+					source: "opencode",
 					sessionId: "session-1",
 					startMessageId: "msg-a",
 					endMessageId: "msg-b",
@@ -216,7 +212,7 @@ describe("EpisodeUploader.upload", () => {
 		expect(result.episodesUploaded).toBe(1);
 		expect(result.sessionsProcessed).toBe(1);
 
-		const pending = await db.getPendingEpisodes("opencode", "alice", 0);
+		const pending = await db.getPendingEpisodes(0);
 		expect(pending).toHaveLength(1);
 		expect(pending[0].sessionId).toBe("session-1");
 		expect(pending[0].userId).toBe("alice");
@@ -245,6 +241,7 @@ describe("EpisodeUploader.upload", () => {
 			[{ id: "session-1", maxMessageTime: now }],
 			[
 				{
+					source: "opencode",
 					sessionId: "session-1",
 					startMessageId: "msg-a",
 					endMessageId: "msg-b",
@@ -265,7 +262,7 @@ describe("EpisodeUploader.upload", () => {
 
 		// Should not upload again — already in pending_episodes
 		expect(result.episodesUploaded).toBe(0);
-		const pending = await db.getPendingEpisodes("opencode", "alice", 0);
+		const pending = await db.getPendingEpisodes(0);
 		expect(pending).toHaveLength(1);
 		expect(pending[0].id).toBe("pre-existing");
 	});
@@ -286,6 +283,7 @@ describe("EpisodeUploader.upload", () => {
 			[{ id: "session-cc-1", maxMessageTime: now }],
 			[
 				{
+					source: "claude-code",
 					sessionId: "session-cc-1",
 					startMessageId: "msg-x",
 					endMessageId: "msg-y",
@@ -311,8 +309,9 @@ describe("EpisodeUploader.upload", () => {
 
 		// opencode failed but claude-code succeeded
 		expect(result.episodesUploaded).toBe(1);
-		const pending = await db.getPendingEpisodes("claude-code", "alice", 0);
+		const pending = await db.getPendingEpisodes(0);
 		expect(pending).toHaveLength(1);
+		expect(pending[0].source).toBe("claude-code");
 	});
 });
 
@@ -331,7 +330,7 @@ describe("PendingEpisodesReader", () => {
 			}),
 		);
 
-		const reader = new PendingEpisodesReader("opencode", "alice", db);
+		const reader = new PendingEpisodesReader(db);
 		await reader.prepare(0);
 
 		const candidates = reader.getCandidateSessions(0);
@@ -341,11 +340,12 @@ describe("PendingEpisodesReader", () => {
 		const episodes = reader.getNewEpisodes(["session-r1"], new Map());
 		expect(episodes).toHaveLength(1);
 		expect(episodes[0].sessionId).toBe("session-r1");
+		expect(episodes[0].source).toBe("opencode");
 	});
 
-	it("source name is prefixed with 'pending:'", () => {
-		const reader = new PendingEpisodesReader("opencode", "alice", db);
-		expect(reader.source).toBe("pending:opencode");
+	it("source name is 'pending'", () => {
+		const reader = new PendingEpisodesReader(db);
+		expect(reader.source).toBe("pending");
 	});
 
 	it("getNewEpisodes excludes already-processed ranges", async () => {
@@ -362,19 +362,60 @@ describe("PendingEpisodesReader", () => {
 			}),
 		);
 
-		const reader = new PendingEpisodesReader("opencode", "alice", db);
+		const reader = new PendingEpisodesReader(db);
 		await reader.prepare(0);
 
-		// Mark as already processed
+		// Mark as already processed — must include source for the match
 		const processedRanges = new Map([
 			[
 				"session-p1",
-				[{ startMessageId: "msg-start", endMessageId: "msg-end" }],
+				[
+					{
+						source: "opencode",
+						startMessageId: "msg-start",
+						endMessageId: "msg-end",
+					},
+				],
 			],
 		]);
 
 		const episodes = reader.getNewEpisodes(["session-p1"], processedRanges);
 		expect(episodes).toHaveLength(0);
+	});
+
+	it("getNewEpisodes does NOT exclude ranges from a different source", async () => {
+		const now = Date.now();
+		await db.insertPendingEpisode(
+			makePendingEpisode({
+				id: "ep-src",
+				source: "opencode",
+				userId: "alice",
+				sessionId: "session-s1",
+				startMessageId: "msg-start",
+				endMessageId: "msg-end",
+				maxMessageTime: now,
+			}),
+		);
+
+		const reader = new PendingEpisodesReader(db);
+		await reader.prepare(0);
+
+		// Processed range is for a different source — should not suppress opencode episode
+		const processedRanges = new Map([
+			[
+				"session-s1",
+				[
+					{
+						source: "claude-code",
+						startMessageId: "msg-start",
+						endMessageId: "msg-end",
+					},
+				],
+			],
+		]);
+
+		const episodes = reader.getNewEpisodes(["session-s1"], processedRanges);
+		expect(episodes).toHaveLength(1);
 	});
 
 	it("afterConsolidated deletes processed rows from pending_episodes", async () => {
@@ -398,24 +439,24 @@ describe("PendingEpisodesReader", () => {
 			}),
 		);
 
-		const reader = new PendingEpisodesReader("opencode", "alice", db);
+		const reader = new PendingEpisodesReader(db);
 		await reader.prepare(0);
 
 		await reader.afterConsolidated(["session-del-1"]);
 
-		const remaining = await db.getPendingEpisodes("opencode", "alice", 0);
+		const remaining = await db.getPendingEpisodes(0);
 		expect(remaining).toHaveLength(1);
 		expect(remaining[0].id).toBe("ep-del-2");
 	});
 
 	it("countNewSessions returns 1 (conservative) before prepare() is called", () => {
-		const reader = new PendingEpisodesReader("opencode", "alice", db);
+		const reader = new PendingEpisodesReader(db);
 		// prepare() not called — should signal "there may be pending episodes"
 		expect(reader.countNewSessions(0)).toBe(1);
 	});
 
 	it("countNewSessions returns 0 after prepare() when table is empty", async () => {
-		const reader = new PendingEpisodesReader("opencode", "alice", db);
+		const reader = new PendingEpisodesReader(db);
 		await reader.prepare(0); // table is empty
 		// After prepare(), genuinely empty result must return 0, not 1
 		expect(reader.countNewSessions(0)).toBe(0);
@@ -442,7 +483,7 @@ describe("PendingEpisodesReader", () => {
 			}),
 		);
 
-		const reader = new PendingEpisodesReader("opencode", "alice", db);
+		const reader = new PendingEpisodesReader(db);
 		await reader.prepare(0);
 		expect(reader.countNewSessions(0)).toBe(2);
 		// Filtered by cursor

@@ -18,7 +18,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setupCodex, setupCursor, stripJsoncComments } from "../src/commands/setup-tool";
+import {
+	setupCodex,
+	setupCursor,
+	stripJsoncComments,
+} from "../src/commands/setup-tool";
 
 describe("stripJsoncComments", () => {
 	// ── Basic comment stripping ───────────────────────────────────────────────
@@ -170,7 +174,9 @@ describe("setupCursor", () => {
 
 		expect(existsSync(mcpPath)).toBe(true);
 		const written = JSON.parse(readFileSync(mcpPath, "utf8")) as {
-			mcpServers: { knowledge: { command: string; env: Record<string, string> } };
+			mcpServers: {
+				knowledge: { command: string; env: Record<string, string> };
+			};
 		};
 		expect(written.mcpServers).toBeDefined();
 		expect(written.mcpServers.knowledge).toBeDefined();
@@ -196,7 +202,11 @@ describe("setupCursor", () => {
 		const mcpPath = join(tmpDir, "mcp.json");
 		writeFileSync(
 			mcpPath,
-			JSON.stringify({ mcpServers: { other: { command: "other-cmd" } } }, null, 2),
+			JSON.stringify(
+				{ mcpServers: { other: { command: "other-cmd" } } },
+				null,
+				2,
+			),
 		);
 
 		setupCursor();
@@ -288,13 +298,13 @@ describe("setupCodex", () => {
 
 	it("appends to an existing config.toml without clobbering it", () => {
 		const configPath = join(tmpDir, "config.toml");
-		writeFileSync(configPath, "[model]\nname = \"o4-mini\"\n");
+		writeFileSync(configPath, '[model]\nname = "o4-mini"\n');
 
 		setupCodex();
 
 		const content = readFileSync(configPath, "utf8");
 		// Original content preserved
-		expect(content).toContain('[model]');
+		expect(content).toContain("[model]");
 		expect(content).toContain('name = "o4-mini"');
 		// New section appended
 		expect(content).toContain("[mcp_servers.knowledge]");

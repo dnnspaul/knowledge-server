@@ -46,7 +46,10 @@ function serverBaseUrl(): string {
  * Check whether the knowledge HTTP server is reachable.
  * Returns true if it responds to GET /status within the given timeout.
  */
-async function isServerReachable(baseUrl: string, timeoutMs = 2000): Promise<boolean> {
+async function isServerReachable(
+	baseUrl: string,
+	timeoutMs = 2000,
+): Promise<boolean> {
 	try {
 		const res = await fetch(`${baseUrl}/status`, {
 			signal: AbortSignal.timeout(timeoutMs),

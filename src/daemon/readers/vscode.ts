@@ -333,6 +333,7 @@ export class VSCodeEpisodeReader implements IEpisodeReader {
 				: "";
 
 			episodes.push({
+				source: this.source,
 				sessionId: session.sessionId,
 				startMessageId: startId,
 				endMessageId: endId,

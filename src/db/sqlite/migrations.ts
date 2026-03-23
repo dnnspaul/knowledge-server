@@ -208,12 +208,59 @@ export const MIGRATIONS: Array<{
 
 			if (!existingTables.includes("daemon_cursor")) {
 				db.exec(`
-					CREATE TABLE daemon_cursor (
-						source                    TEXT    PRIMARY KEY,
-						last_message_time_created INTEGER NOT NULL DEFAULT 0,
-						last_uploaded_at          INTEGER NOT NULL DEFAULT 0
-					)
+				CREATE TABLE daemon_cursor (
+					source                    TEXT    PRIMARY KEY,
+					last_message_time_created INTEGER NOT NULL DEFAULT 0,
+					last_uploaded_at          INTEGER NOT NULL DEFAULT 0
+				)
+			`);
+			}
+		},
+	},
+	{
+		version: 13,
+		label:
+			"daemon-only consolidation: drop source_cursor, remove user_id from consolidated_episode",
+		up: (db) => {
+			// Drop source_cursor — no longer needed with daemon-only consolidation.
+			// pending_episodes is self-draining; consolidated_episode handles idempotency.
+			db.exec("DROP TABLE IF EXISTS source_cursor");
+
+			// Rebuild consolidated_episode without user_id.
+			// Guard: skip if table doesn't exist yet (fresh DB gets correct schema from CREATE_TABLES).
+			const episodeCols = (
+				db.prepare("PRAGMA table_info(consolidated_episode)").all() as Array<{
+					name: string;
+				}>
+			).map((c) => c.name);
+			if (episodeCols.length > 0 && episodeCols.includes("user_id")) {
+				db.exec(`CREATE TABLE consolidated_episode_v13 (
+					source           TEXT    NOT NULL,
+					session_id       TEXT    NOT NULL,
+					start_message_id TEXT    NOT NULL,
+					end_message_id   TEXT    NOT NULL,
+					content_type     TEXT    NOT NULL,
+					processed_at     INTEGER NOT NULL,
+					entries_created  INTEGER NOT NULL DEFAULT 0,
+					PRIMARY KEY (source, session_id, start_message_id, end_message_id)
+				)`);
+				// Copy data; INSERT OR IGNORE deduplicates on the new PK in case the same
+				// (source, session_id, start, end) was recorded for multiple user_ids.
+				db.exec(`
+					INSERT OR IGNORE INTO consolidated_episode_v13
+					SELECT source, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created
+					FROM consolidated_episode
 				`);
+				db.exec("DROP TABLE consolidated_episode");
+				db.exec(
+					"ALTER TABLE consolidated_episode_v13 RENAME TO consolidated_episode",
+				);
+				db.exec(
+					"CREATE INDEX IF NOT EXISTS idx_episode_source_session ON consolidated_episode(source, session_id)",
+				);
+				db.exec(
+					"CREATE INDEX IF NOT EXISTS idx_episode_processed ON consolidated_episode(processed_at)",
+				);
 			}
 		},
 	},

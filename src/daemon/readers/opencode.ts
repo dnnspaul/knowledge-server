@@ -388,6 +388,7 @@ export class OpenCodeEpisodeReader implements IEpisodeReader {
 		for (const point of compactionPoints) {
 			const tokens = approxTokens(point.summaryText);
 			episodes.push({
+				source: this.source,
 				sessionId: session.id,
 				startMessageId: point.summaryMessageId,
 				endMessageId: point.summaryMessageId,
@@ -417,6 +418,7 @@ export class OpenCodeEpisodeReader implements IEpisodeReader {
 				const content = formatMessages(chunk);
 				if (content.trim()) {
 					episodes.push({
+						source: this.source,
 						sessionId: session.id,
 						startMessageId: chunk[0].messageId,
 						endMessageId: chunk[chunk.length - 1].messageId,
@@ -501,6 +503,7 @@ export class OpenCodeEpisodeReader implements IEpisodeReader {
 			const content = formatMessages(chunk);
 			if (content.trim()) {
 				episodes.push({
+					source: this.source,
 					sessionId: session.id,
 					startMessageId: chunk[0].messageId,
 					endMessageId: chunk[chunk.length - 1].messageId,

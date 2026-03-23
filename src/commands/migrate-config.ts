@@ -6,7 +6,7 @@ import { DEFAULT_CONFIG_PATH, DEFAULT_SQLITE_PATH } from "../config-file.js";
  * `knowledge-server migrate-config`
  *
  * Generates ~/.config/knowledge-server/config.jsonc from legacy environment
- * variables (POSTGRES_CONNECTION_URI, KNOWLEDGE_DB_PATH).
+ * variables (POSTGRES_CONNECTION_URI, KNOWLEDGE_DB_PATH, KNOWLEDGE_USER_ID).
  *
  * Safe to run multiple times — exits early if config.jsonc already exists.
  */
@@ -19,6 +19,7 @@ export function runMigrateConfig(): void {
 
 	const pgUri = process.env.POSTGRES_CONNECTION_URI;
 	const sqlitePath = process.env.KNOWLEDGE_DB_PATH ?? DEFAULT_SQLITE_PATH;
+	const userId = process.env.KNOWLEDGE_USER_ID?.trim();
 
 	let storeBlock: string;
 	let envVarsToRemove: string[];
@@ -46,6 +47,24 @@ export function runMigrateConfig(): void {
 			sqlitePath !== DEFAULT_SQLITE_PATH ? ["KNOWLEDGE_DB_PATH"] : [];
 	}
 
+	// userId block — written only when KNOWLEDGE_USER_ID is set, so the generated
+	// file reflects the actual identity rather than defaulting to hostname.
+	const userIdBlock = userId
+		? `
+  // userId: stable identifier for this user/machine in shared-DB setups.
+  // Scopes the consolidation cursor so multiple users sharing the same DB advance independently.
+  // From KNOWLEDGE_USER_ID env var — you can remove that var now that it is captured here.
+  "userId": ${JSON.stringify(userId)},`
+		: `
+  // userId: stable identifier for this user/machine in shared-DB setups.
+  // Defaults to the OS hostname when unset. Set explicitly to avoid surprises if the
+  // hostname changes (e.g. after a OS reinstall).
+  // "userId": "your-name-or-machine-id",`;
+
+	if (userId) {
+		envVarsToRemove = [...envVarsToRemove, "KNOWLEDGE_USER_ID"];
+	}
+
 	const content = `{
   // Knowledge Server configuration
   // See: https://github.com/MAnders333/knowledge-server#configuration
@@ -56,7 +75,13 @@ export function runMigrateConfig(): void {
   //   - all stores are used for activation reads (fan-out)
   "stores": [
 ${storeBlock}
-  ]
+  ],
+${userIdBlock}
+
+  // domains and projects: optional routing config for multi-store setups.
+  // See docs for examples.
+  "domains": [],
+  "projects": []
 }
 `;
 

@@ -1,6 +1,6 @@
 import { ActivationEngine } from "../activation/activate.js";
 import { ConsolidationEngine } from "../consolidation/consolidate.js";
-import { createEpisodeReaders } from "../daemon/readers/index.js";
+import { PendingEpisodesReader } from "../consolidation/readers/pending.js";
 import { StoreRegistry } from "../db/store-registry.js";
 import { logger } from "../logger.js";
 
@@ -16,13 +16,11 @@ export async function runConsolidate(): Promise<void> {
 	const registry = await StoreRegistry.create();
 	const db = registry.writableStore();
 	const activation = new ActivationEngine(db, registry.readStores());
-	const readers = createEpisodeReaders();
 	const consolidation = new ConsolidationEngine(
 		db,
 		activation,
-		readers,
+		[new PendingEpisodesReader(db)],
 		registry.domainRouter,
-		registry.userId,
 	);
 
 	try {

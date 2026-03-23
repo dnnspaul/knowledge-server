@@ -14,39 +14,59 @@ import {
 	mock,
 	spyOn,
 } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ActivationEngine } from "../src/activation/activate";
-import { config } from "../src/config";
 import { ConsolidationEngine } from "../src/consolidation/consolidate";
 import { ConsolidationLLM } from "../src/consolidation/llm";
-import { OpenCodeEpisodeReader } from "../src/daemon/readers/opencode";
+import type { Episode, IEpisodeReader } from "../src/types";
 import { KnowledgeDB } from "../src/db/sqlite/index";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 import { fakeEmbedding, makeEntry } from "./fixtures";
 
+// ── Mock episode reader ───────────────────────────────────────────────────────
+
+/**
+ * Controllable mock reader used by all consolidation tests.
+ * Tests set _sessions and _episodes directly before calling engine.consolidate().
+ */
+class MockEpisodeReader implements IEpisodeReader {
+	readonly source = "opencode";
+	_sessions: Array<{ id: string; maxMessageTime: number }> = [];
+	_episodes: Episode[] = [];
+
+	getCandidateSessions(_after: number, _limit?: number) {
+		return this._sessions;
+	}
+	countNewSessions(_after: number) {
+		return this._sessions.length;
+	}
+	getNewEpisodes(
+		_ids: string[],
+		_ranges: Map<string, import("../src/types").ProcessedRange[]>,
+	) {
+		return this._episodes;
+	}
+	close() {}
+}
+
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
 let db: KnowledgeDB;
 let activation: ActivationEngine;
 let engine: ConsolidationEngine;
+let mockReader: MockEpisodeReader;
 let tempDir: string;
 
 beforeEach(() => {
 	tempDir = mkdtempSync(join(tmpdir(), "ks-consolidation-test-"));
-	const fakeOpenCodeDbPath = join(tempDir, "opencode-fake.db");
-	// Create an empty file so OpenCodeEpisodeReader can open it in readonly mode.
-	// All tests spy on the prototype methods so no real DB queries ever run.
-	writeFileSync(fakeOpenCodeDbPath, "");
 	db = new KnowledgeDB(join(tempDir, "test.db"));
 	activation = new ActivationEngine(db);
-	// Pass a real OpenCodeEpisodeReader instance so prototype spies in each test
-	// intercept the methods and no real OpenCode DB queries are executed.
-	const reader = new OpenCodeEpisodeReader(fakeOpenCodeDbPath);
-	engine = new ConsolidationEngine(db, activation, [reader]);
+	mockReader = new MockEpisodeReader();
+	engine = new ConsolidationEngine(db, activation, [mockReader]);
 });
 
 afterEach(async () => {
@@ -74,10 +94,7 @@ describe("ConsolidationEngine.applyDecay (via consolidate early-return path)", (
 
 		// Mock getCandidateSessions so consolidate() hits the early-return path
 		// without opening the real OpenCode DB (which may have sessions in CI).
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([]);
+		mockReader._sessions = [];
 		// Mock ensureEmbeddings to avoid real embedding network calls
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
@@ -95,10 +112,7 @@ describe("ConsolidationEngine — concurrency guard", () => {
 	});
 
 	it("isConsolidating flag is cleared after consolidate() completes", async () => {
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([]);
+		mockReader._sessions = [];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
 		expect(engine.isConsolidating).toBe(false);
@@ -555,23 +569,10 @@ describe("KnowledgeDB — applyContradictionResolution clears conflicted status 
 
 // ── Helper: build a synthetic Episode ────────────────────────────────────────
 
-function makeEpisode(
-	overrides: Partial<{
-		sessionId: string;
-		startMessageId: string;
-		endMessageId: string;
-		sessionTitle: string;
-		projectName: string;
-		directory: string;
-		timeCreated: number;
-		maxMessageTime: number;
-		content: string;
-		contentType: "messages" | "compaction_summary";
-		approxTokens: number;
-	}> = {},
-) {
+function makeEpisode(overrides: Partial<Episode> = {}): Episode {
 	const now = Date.now();
 	return {
+		source: "opencode",
 		sessionId: "session-1",
 		startMessageId: "msg-start",
 		endMessageId: "msg-end",
@@ -592,13 +593,8 @@ function makeEpisode(
 describe("ConsolidationEngine.reconsolidate() — novel entry (below threshold)", () => {
 	it("inserts a new entry when the knowledge base is empty", async () => {
 		// No existing entries → similarity is 0 → insert unconditionally
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			makeEpisode(),
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: Date.now() }];
+		mockReader._episodes = [makeEpisode()];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
 		// Give embed a deterministic vector
@@ -640,13 +636,8 @@ describe("ConsolidationEngine.reconsolidate() — novel entry (below threshold)"
 			}),
 		);
 
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			makeEpisode(),
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: Date.now() }];
+		mockReader._episodes = [makeEpisode()];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
 		// New entry embedding is orthogonal to existing — sim = 0
@@ -691,13 +682,8 @@ describe("ConsolidationEngine.reconsolidate() — 'keep' decision (above thresho
 			}),
 		);
 
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			makeEpisode(),
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: Date.now() }];
+		mockReader._episodes = [makeEpisode()];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
 		// Near-identical embedding → similarity above threshold
@@ -787,13 +773,8 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 			}),
 		);
 
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			makeEpisode(),
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: Date.now() }];
+		mockReader._episodes = [makeEpisode()];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 		spyOn(activation.embeddings, "embed").mockResolvedValue(emb1);
 		spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([]);
@@ -853,13 +834,8 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 			}),
 		);
 
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			makeEpisode(),
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: Date.now() }];
+		mockReader._episodes = [makeEpisode()];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 		spyOn(activation.embeddings, "embed").mockResolvedValue(emb);
 		spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([]);
@@ -920,13 +896,8 @@ describe("ConsolidationEngine — cluster-based synthesis (runKBSynthesis)", () 
 			}),
 		);
 
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			makeEpisode(),
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: Date.now() }];
+		mockReader._episodes = [makeEpisode()];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 		// embed is called to embed the synthesized entry; return orthogonal vec to avoid dedupe
 		spyOn(activation.embeddings, "embed").mockResolvedValue(synthEmb);
@@ -967,13 +938,8 @@ describe("ConsolidationEngine.reconsolidate() — 'update' decision (above thres
 			}),
 		);
 
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			makeEpisode(),
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: Date.now() }];
+		mockReader._episodes = [makeEpisode()];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
 		spyOn(activation.embeddings, "embed").mockResolvedValue(existingEmb);
@@ -1025,13 +991,8 @@ describe("ConsolidationEngine.reconsolidate() — 'insert' decision (above thres
 			}),
 		);
 
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			makeEpisode(),
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: Date.now() }];
+		mockReader._episodes = [makeEpisode()];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
 		spyOn(activation.embeddings, "embed").mockResolvedValue(existingEmb);
@@ -1076,13 +1037,8 @@ describe("ConsolidationEngine.runContradictionScan() — hallucinated candidateI
 			}),
 		);
 
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			makeEpisode(),
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: Date.now() }];
+		mockReader._episodes = [makeEpisode()];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
 		// The new entry's embedding must be in the mid-band [contradictionMinSimilarity, reconsolidationThreshold)
@@ -1156,13 +1112,8 @@ describe("ConsolidationEngine.runContradictionScan() — supersede_new stops fur
 			}),
 		);
 
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			makeEpisode(),
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: Date.now() }];
+		mockReader._episodes = [makeEpisode()];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
 		// embed returns newEmb → cos(newEmb, candidateEmb) = 0.6 → below reconsolidationThreshold
@@ -1235,13 +1186,8 @@ describe("ConsolidationEngine.runContradictionScan() — superseded_in_scan trac
 			}),
 		);
 
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: Date.now() }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			makeEpisode(),
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: Date.now() }];
+		mockReader._episodes = [makeEpisode()];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
 		// embed is called once per extracted entry (during reconsolidate).
@@ -1311,99 +1257,8 @@ describe("ConsolidationEngine.runContradictionScan() — superseded_in_scan trac
 	});
 });
 
-// ── ConsolidationEngine.consolidate() cursor advancement ─────────────────────
-
-describe("ConsolidationEngine.consolidate() — cursor advancement", () => {
-	it("advances cursor past all sessions when batch is not full (no boundary risk)", async () => {
-		const t1 = Date.now() - 2000;
-		const t2 = Date.now() - 1000;
-
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([
-			{ id: "session-1", maxMessageTime: t1 },
-			{ id: "session-2", maxMessageTime: t2 },
-		]);
-		// No episodes → sessionsProcessed reflects candidates, not episodes
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue(
-			[],
-		);
-		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
-
-		const initialCursor = await db.getSourceCursor("opencode", "default");
-
-		await engine.consolidate();
-
-		const cursor = await db.getSourceCursor("opencode", "default");
-		// Batch was NOT full (returned 2, limit is much higher) → cursor must advance to t2
-		expect(cursor.lastMessageTimeCreated).toBe(t2);
-		expect(cursor.lastMessageTimeCreated).toBeGreaterThan(
-			initialCursor.lastMessageTimeCreated,
-		);
-	});
-
-	it("caps cursor below last session's maxMessageTime when batch is full", async () => {
-		// Simulate a full batch: return exactly maxSessionsPerRun sessions.
-		// To trigger the cap guard we also need episodes — otherwise maxEpisodeMessageTime=0
-		// and Math.min(0, cap) = 0. Include one episode in the last session so that
-		// maxEpisodeMessageTime = lastSession.maxMessageTime, then the cap fires.
-		const limit = config.consolidation.maxSessionsPerRun;
-
-		const baseTime = Date.now();
-		const sessions = Array.from({ length: limit }, (_, i) => ({
-			id: `session-${i}`,
-			maxMessageTime: baseTime + i * 1000,
-		}));
-
-		const lastSession = sessions[sessions.length - 1];
-
-		// One episode whose maxMessageTime equals the last session's timestamp
-		const ep = makeEpisode({
-			sessionId: lastSession.id,
-			maxMessageTime: lastSession.maxMessageTime,
-		});
-
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue(sessions);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			ep,
-		]);
-		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
-		spyOn(activation.embeddings, "embed").mockResolvedValue(
-			fakeEmbedding("test"),
-		);
-		spyOn(ConsolidationLLM.prototype, "extractKnowledge").mockResolvedValue([]);
-
-		await engine.consolidate();
-
-		const cursor = await db.getSourceCursor("opencode", "default");
-		// Batch was full → cursor must be capped to lastSession.maxMessageTime - 1
-		expect(cursor.lastMessageTimeCreated).toBe(lastSession.maxMessageTime - 1);
-	});
-
-	it("never moves cursor backwards", async () => {
-		// Set the opencode source cursor to a future timestamp
-		const futureCursor = Date.now() + 100_000;
-		await db.updateSourceCursor("opencode", "default", {
-			lastMessageTimeCreated: futureCursor,
-		});
-
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([]);
-		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
-
-		await engine.consolidate();
-
-		const cursor = await db.getSourceCursor("opencode", "default");
-		// Cursor must not go backwards
-		expect(cursor.lastMessageTimeCreated).toBeGreaterThanOrEqual(futureCursor);
-	});
-});
+// Cursor advancement tests removed in v13 — source_cursor table dropped.
+// pending_episodes is self-draining; no per-source high-water mark needed.
 
 // ── Full pipeline: extract → reconsolidate → contradiction scan ───────────────
 
@@ -1425,13 +1280,8 @@ describe("ConsolidationEngine.consolidate() — full pipeline with mocked LLM + 
 		);
 
 		const now = Date.now();
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: now }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			makeEpisode(),
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: now }];
+		mockReader._episodes = [makeEpisode()];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 
 		// mid-band embedding: cos(newEmb, existingEmb) = 0.6 → below threshold → insert
@@ -1488,13 +1338,8 @@ describe("ConsolidationEngine.consolidate() — full pipeline with mocked LLM + 
 			maxMessageTime: now,
 		});
 
-		spyOn(
-			OpenCodeEpisodeReader.prototype,
-			"getCandidateSessions",
-		).mockReturnValue([{ id: "session-1", maxMessageTime: now }]);
-		spyOn(OpenCodeEpisodeReader.prototype, "getNewEpisodes").mockReturnValue([
-			ep,
-		]);
+		mockReader._sessions = [{ id: "session-1", maxMessageTime: now }];
+		mockReader._episodes = [ep];
 		spyOn(activation, "ensureEmbeddings").mockResolvedValue(0);
 		spyOn(activation.embeddings, "embed").mockResolvedValue(
 			fakeEmbedding("anything"),
@@ -1504,13 +1349,13 @@ describe("ConsolidationEngine.consolidate() — full pipeline with mocked LLM + 
 		await engine.consolidate();
 
 		// The episode range must now be recorded in the DB under the "opencode" source
-		const ranges = await db.getProcessedEpisodeRanges("opencode", "default", [
-			"session-1",
-		]);
+		const ranges = await db.getProcessedEpisodeRanges(["session-1"]);
 		const sessionRanges = ranges.get("session-1") ?? [];
 		const recorded = sessionRanges.find(
 			(r) =>
-				r.startMessageId === "stable-start" && r.endMessageId === "stable-end",
+				r.source === "opencode" &&
+				r.startMessageId === "stable-start" &&
+				r.endMessageId === "stable-end",
 		);
 		expect(recorded).toBeDefined();
 	});

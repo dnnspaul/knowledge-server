@@ -122,6 +122,7 @@ export class LocalFilesEpisodeReader implements IEpisodeReader {
 			}
 
 			episodes.push({
+				source: this.source,
 				sessionId: filePath,
 				startMessageId: hash,
 				endMessageId: hash,
@@ -153,7 +154,10 @@ export class LocalFilesEpisodeReader implements IEpisodeReader {
 	private scanMarkdownFiles(): Array<{ path: string; mtimeMs: number }> {
 		let entries: Dirent<string>[];
 		try {
-			entries = readdirSync(this.dir, { withFileTypes: true, encoding: "utf8" });
+			entries = readdirSync(this.dir, {
+				withFileTypes: true,
+				encoding: "utf8",
+			});
 		} catch {
 			// Directory does not exist — opt-in feature, silently return empty.
 			return [];
@@ -197,5 +201,8 @@ function deriveTitle(content: string, filePath: string): string {
  * within a single source (collision probability negligible for personal file counts).
  */
 function contentHash(content: string): string {
-	return createHash("sha256").update(content, "utf8").digest("hex").slice(0, 16);
+	return createHash("sha256")
+		.update(content, "utf8")
+		.digest("hex")
+		.slice(0, 16);
 }

@@ -399,7 +399,8 @@ export async function runUpdate(
 	// still had the separate binary (i.e. currentVersion < v1.7.0 / v2.0.0).
 	// Users already on v2.x have already re-run setup-tool and don't need the reminder.
 	const currentMatch = /^v(\d+)\.(\d+)/.exec(currentVersion);
-	if (!currentMatch) throw new Error(`Unexpected currentVersion format: ${currentVersion}`);
+	if (!currentMatch)
+		throw new Error(`Unexpected currentVersion format: ${currentVersion}`);
 	const wasOnOldBinary =
 		Number(currentMatch[1]) === 1 && Number(currentMatch[2]) < 7;
 	if (wasOnOldBinary) {

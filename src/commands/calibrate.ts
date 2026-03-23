@@ -1,4 +1,8 @@
-import { EmbeddingClient, cosineSimilarity, formatEmbeddingText } from "../activation/embeddings.js";
+import {
+	EmbeddingClient,
+	cosineSimilarity,
+	formatEmbeddingText,
+} from "../activation/embeddings.js";
 import { config } from "../config.js";
 import type { KnowledgeType } from "../types.js";
 
@@ -39,12 +43,14 @@ const NEAR_DUPLICATES: CalibrationPair[] = [
 		label: "deploy process (reworded)",
 		a: {
 			type: "procedure",
-			content: "To deploy to production, first run the test suite, then create a release tag, and finally trigger the CI/CD pipeline.",
+			content:
+				"To deploy to production, first run the test suite, then create a release tag, and finally trigger the CI/CD pipeline.",
 			topics: ["deployment", "ci-cd", "production"],
 		},
 		b: {
 			type: "procedure",
-			content: "Production deployment procedure: execute all tests, tag a release, and kick off the CI/CD pipeline.",
+			content:
+				"Production deployment procedure: execute all tests, tag a release, and kick off the CI/CD pipeline.",
 			topics: ["deployment", "ci-cd", "production"],
 		},
 	},
@@ -52,12 +58,14 @@ const NEAR_DUPLICATES: CalibrationPair[] = [
 		label: "database timeout fact (reworded)",
 		a: {
 			type: "fact",
-			content: "PostgreSQL queries on the orders table time out after 30 seconds when the table exceeds 50 million rows.",
+			content:
+				"PostgreSQL queries on the orders table time out after 30 seconds when the table exceeds 50 million rows.",
 			topics: ["postgresql", "performance", "orders"],
 		},
 		b: {
 			type: "fact",
-			content: "Queries against the orders table in PostgreSQL hit a 30-second timeout once row count goes above 50M.",
+			content:
+				"Queries against the orders table in PostgreSQL hit a 30-second timeout once row count goes above 50M.",
 			topics: ["postgresql", "performance", "orders"],
 		},
 	},
@@ -65,12 +73,14 @@ const NEAR_DUPLICATES: CalibrationPair[] = [
 		label: "API rate limit pattern (reworded)",
 		a: {
 			type: "pattern",
-			content: "The Stripe API returns 429 errors when batch processing exceeds 100 requests per second.",
+			content:
+				"The Stripe API returns 429 errors when batch processing exceeds 100 requests per second.",
 			topics: ["stripe", "api", "rate-limiting"],
 		},
 		b: {
 			type: "pattern",
-			content: "Stripe's API rate-limits at 100 req/s — exceeding that triggers HTTP 429 responses during batch operations.",
+			content:
+				"Stripe's API rate-limits at 100 req/s — exceeding that triggers HTTP 429 responses during batch operations.",
 			topics: ["stripe", "api", "rate-limiting"],
 		},
 	},
@@ -78,12 +88,14 @@ const NEAR_DUPLICATES: CalibrationPair[] = [
 		label: "tech stack decision (reworded)",
 		a: {
 			type: "decision",
-			content: "We chose React over Vue for the frontend because the team has more React experience and the existing component library is React-based.",
+			content:
+				"We chose React over Vue for the frontend because the team has more React experience and the existing component library is React-based.",
 			topics: ["frontend", "react", "tech-stack"],
 		},
 		b: {
 			type: "decision",
-			content: "The frontend framework decision was React instead of Vue, driven by team expertise and our existing React component library.",
+			content:
+				"The frontend framework decision was React instead of Vue, driven by team expertise and our existing React component library.",
 			topics: ["frontend", "react", "tech-stack"],
 		},
 	},
@@ -91,12 +103,14 @@ const NEAR_DUPLICATES: CalibrationPair[] = [
 		label: "caching principle (reworded)",
 		a: {
 			type: "principle",
-			content: "Always cache database query results that are accessed more than 10 times per minute and change less than once per hour.",
+			content:
+				"Always cache database query results that are accessed more than 10 times per minute and change less than once per hour.",
 			topics: ["caching", "database", "performance"],
 		},
 		b: {
 			type: "principle",
-			content: "Database results with >10 reads/min and <1 write/hour should always be cached.",
+			content:
+				"Database results with >10 reads/min and <1 write/hour should always be cached.",
 			topics: ["caching", "database", "performance"],
 		},
 	},
@@ -113,12 +127,14 @@ const TOPICALLY_RELATED: CalibrationPair[] = [
 		label: "deploy: different steps",
 		a: {
 			type: "procedure",
-			content: "To deploy to production, first run the test suite, then create a release tag, and finally trigger the CI/CD pipeline.",
+			content:
+				"To deploy to production, first run the test suite, then create a release tag, and finally trigger the CI/CD pipeline.",
 			topics: ["deployment", "ci-cd", "production"],
 		},
 		b: {
 			type: "procedure",
-			content: "To roll back a production deployment, revert the release tag, run the rollback script, and notify the on-call team.",
+			content:
+				"To roll back a production deployment, revert the release tag, run the rollback script, and notify the on-call team.",
 			topics: ["deployment", "rollback", "production"],
 		},
 	},
@@ -126,12 +142,14 @@ const TOPICALLY_RELATED: CalibrationPair[] = [
 		label: "PostgreSQL: different performance issues",
 		a: {
 			type: "fact",
-			content: "PostgreSQL queries on the orders table time out after 30 seconds when the table exceeds 50 million rows.",
+			content:
+				"PostgreSQL queries on the orders table time out after 30 seconds when the table exceeds 50 million rows.",
 			topics: ["postgresql", "performance", "orders"],
 		},
 		b: {
 			type: "fact",
-			content: "PostgreSQL VACUUM operations on the orders table take over 4 hours and cause elevated I/O during business hours.",
+			content:
+				"PostgreSQL VACUUM operations on the orders table take over 4 hours and cause elevated I/O during business hours.",
 			topics: ["postgresql", "performance", "orders", "maintenance"],
 		},
 	},
@@ -139,12 +157,14 @@ const TOPICALLY_RELATED: CalibrationPair[] = [
 		label: "API: different services same domain",
 		a: {
 			type: "pattern",
-			content: "The Stripe API returns 429 errors when batch processing exceeds 100 requests per second.",
+			content:
+				"The Stripe API returns 429 errors when batch processing exceeds 100 requests per second.",
 			topics: ["stripe", "api", "rate-limiting"],
 		},
 		b: {
 			type: "pattern",
-			content: "The Stripe webhook delivery retries up to 3 times with exponential backoff before marking the event as failed.",
+			content:
+				"The Stripe webhook delivery retries up to 3 times with exponential backoff before marking the event as failed.",
 			topics: ["stripe", "api", "webhooks"],
 		},
 	},
@@ -152,12 +172,14 @@ const TOPICALLY_RELATED: CalibrationPair[] = [
 		label: "frontend: different aspects",
 		a: {
 			type: "decision",
-			content: "We chose React over Vue for the frontend because the team has more React experience and the existing component library is React-based.",
+			content:
+				"We chose React over Vue for the frontend because the team has more React experience and the existing component library is React-based.",
 			topics: ["frontend", "react", "tech-stack"],
 		},
 		b: {
 			type: "principle",
-			content: "Frontend components should be kept under 200 lines of code to maintain readability and testability.",
+			content:
+				"Frontend components should be kept under 200 lines of code to maintain readability and testability.",
 			topics: ["frontend", "react", "code-quality"],
 		},
 	},
@@ -165,12 +187,14 @@ const TOPICALLY_RELATED: CalibrationPair[] = [
 		label: "caching: different strategies",
 		a: {
 			type: "principle",
-			content: "Always cache database query results that are accessed more than 10 times per minute and change less than once per hour.",
+			content:
+				"Always cache database query results that are accessed more than 10 times per minute and change less than once per hour.",
 			topics: ["caching", "database", "performance"],
 		},
 		b: {
 			type: "decision",
-			content: "We chose Redis over Memcached for caching because we need support for sorted sets and pub/sub messaging.",
+			content:
+				"We chose Redis over Memcached for caching because we need support for sorted sets and pub/sub messaging.",
 			topics: ["caching", "redis", "infrastructure"],
 		},
 	},
@@ -187,12 +211,14 @@ const UNRELATED: CalibrationPair[] = [
 		label: "deploy vs. cooking recipe",
 		a: {
 			type: "procedure",
-			content: "To deploy to production, first run the test suite, then create a release tag, and finally trigger the CI/CD pipeline.",
+			content:
+				"To deploy to production, first run the test suite, then create a release tag, and finally trigger the CI/CD pipeline.",
 			topics: ["deployment", "ci-cd", "production"],
 		},
 		b: {
 			type: "procedure",
-			content: "To make sourdough bread, feed the starter 12 hours before, mix the dough, bulk ferment for 4 hours, then bake at 450F.",
+			content:
+				"To make sourdough bread, feed the starter 12 hours before, mix the dough, bulk ferment for 4 hours, then bake at 450F.",
 			topics: ["cooking", "bread", "sourdough"],
 		},
 	},
@@ -200,12 +226,14 @@ const UNRELATED: CalibrationPair[] = [
 		label: "PostgreSQL vs. gardening",
 		a: {
 			type: "fact",
-			content: "PostgreSQL queries on the orders table time out after 30 seconds when the table exceeds 50 million rows.",
+			content:
+				"PostgreSQL queries on the orders table time out after 30 seconds when the table exceeds 50 million rows.",
 			topics: ["postgresql", "performance", "orders"],
 		},
 		b: {
 			type: "fact",
-			content: "Tomato plants require at least 6 hours of direct sunlight per day and should be watered deeply twice a week.",
+			content:
+				"Tomato plants require at least 6 hours of direct sunlight per day and should be watered deeply twice a week.",
 			topics: ["gardening", "tomatoes", "plants"],
 		},
 	},
@@ -213,12 +241,14 @@ const UNRELATED: CalibrationPair[] = [
 		label: "Stripe API vs. music theory",
 		a: {
 			type: "pattern",
-			content: "The Stripe API returns 429 errors when batch processing exceeds 100 requests per second.",
+			content:
+				"The Stripe API returns 429 errors when batch processing exceeds 100 requests per second.",
 			topics: ["stripe", "api", "rate-limiting"],
 		},
 		b: {
 			type: "principle",
-			content: "In Western music theory, the circle of fifths maps all 12 chromatic pitches into a cycle of perfect fifth intervals.",
+			content:
+				"In Western music theory, the circle of fifths maps all 12 chromatic pitches into a cycle of perfect fifth intervals.",
 			topics: ["music", "theory", "harmony"],
 		},
 	},
@@ -226,12 +256,14 @@ const UNRELATED: CalibrationPair[] = [
 		label: "React decision vs. astronomy",
 		a: {
 			type: "decision",
-			content: "We chose React over Vue for the frontend because the team has more React experience and the existing component library is React-based.",
+			content:
+				"We chose React over Vue for the frontend because the team has more React experience and the existing component library is React-based.",
 			topics: ["frontend", "react", "tech-stack"],
 		},
 		b: {
 			type: "fact",
-			content: "The James Webb Space Telescope orbits the L2 Lagrange point approximately 1.5 million kilometers from Earth.",
+			content:
+				"The James Webb Space Telescope orbits the L2 Lagrange point approximately 1.5 million kilometers from Earth.",
 			topics: ["astronomy", "space", "telescope"],
 		},
 	},
@@ -239,12 +271,14 @@ const UNRELATED: CalibrationPair[] = [
 		label: "caching vs. ancient history",
 		a: {
 			type: "principle",
-			content: "Always cache database query results that are accessed more than 10 times per minute and change less than once per hour.",
+			content:
+				"Always cache database query results that are accessed more than 10 times per minute and change less than once per hour.",
 			topics: ["caching", "database", "performance"],
 		},
 		b: {
 			type: "fact",
-			content: "The construction of the Great Pyramid of Giza took approximately 20 years and required an estimated 2.3 million limestone blocks.",
+			content:
+				"The construction of the Great Pyramid of Giza took approximately 20 years and required an estimated 2.3 million limestone blocks.",
 			topics: ["history", "egypt", "architecture"],
 		},
 	},
@@ -302,23 +336,39 @@ export async function runCalibrate(): Promise<void> {
 	}
 
 	// Pre-compute text indices for each pair set.
-	const ndIndices = NEAR_DUPLICATES.map((p) => ({ aIdx: addText(p.a), bIdx: addText(p.b), label: p.label }));
-	const trIndices = TOPICALLY_RELATED.map((p) => ({ aIdx: addText(p.a), bIdx: addText(p.b), label: p.label }));
-	const urIndices = UNRELATED.map((p) => ({ aIdx: addText(p.a), bIdx: addText(p.b), label: p.label }));
+	const ndIndices = NEAR_DUPLICATES.map((p) => ({
+		aIdx: addText(p.a),
+		bIdx: addText(p.b),
+		label: p.label,
+	}));
+	const trIndices = TOPICALLY_RELATED.map((p) => ({
+		aIdx: addText(p.a),
+		bIdx: addText(p.b),
+		label: p.label,
+	}));
+	const urIndices = UNRELATED.map((p) => ({
+		aIdx: addText(p.a),
+		bIdx: addText(p.b),
+		label: p.label,
+	}));
 
 	// Embed all texts in one batch call.
 	let embeddings: number[][];
 	try {
 		embeddings = await client.embedBatch(texts);
 	} catch (e) {
-		console.error(`\n  Failed to generate embeddings: ${e instanceof Error ? e.message : String(e)}`);
+		console.error(
+			`\n  Failed to generate embeddings: ${e instanceof Error ? e.message : String(e)}`,
+		);
 		process.exit(1);
 	}
 
 	console.log(`  Embedded ${texts.length} unique texts.\n`);
 
 	// Compute similarities per category.
-	function computeSims(indices: { aIdx: number; bIdx: number; label: string }[]): { label: string; similarity: number }[] {
+	function computeSims(
+		indices: { aIdx: number; bIdx: number; label: string }[],
+	): { label: string; similarity: number }[] {
 		return indices.map(({ aIdx, bIdx, label }) => ({
 			label,
 			similarity: cosineSimilarity(embeddings[aIdx], embeddings[bIdx]),
@@ -374,7 +424,9 @@ export async function runCalibrate(): Promise<void> {
 			console.log(`    ${s.similarity.toFixed(4)}  ${s.label}`);
 		}
 		console.log("");
-		console.log(`    min: ${cat.stats.min.toFixed(4)}  max: ${cat.stats.max.toFixed(4)}  mean: ${cat.stats.mean.toFixed(4)}`);
+		console.log(
+			`    min: ${cat.stats.min.toFixed(4)}  max: ${cat.stats.max.toFixed(4)}  mean: ${cat.stats.mean.toFixed(4)}`,
+		);
 		console.log("");
 	}
 
@@ -417,66 +469,110 @@ export async function runCalibrate(): Promise<void> {
 	// Sanity: activation < contradictionMin < reconsolidation
 	// If the model's distribution is very compressed, these may overlap.
 	// Detect and warn but still output the best-effort values.
-	const bandOk = activation < contradictionMin && contradictionMin < reconsolidation;
+	const bandOk =
+		activation < contradictionMin && contradictionMin < reconsolidation;
 
 	console.log("───────────────────────────────────────");
 	console.log("  Recommended Thresholds");
 	console.log("───────────────────────────────────────");
 	console.log("");
-	console.log(`  RECONSOLIDATION_SIMILARITY_THRESHOLD          ${reconsolidation.toFixed(2)}`);
-	console.log("    Near-duplicate merge cutoff. Entries above this \u2192 decideMerge LLM call.");
-	console.log(`    Derived from: P10(near-duplicates)=${ndP10.toFixed(4)}, max(topical)+0.03=${trMaxPlusMargin.toFixed(4)}`);
+	console.log(
+		`  RECONSOLIDATION_SIMILARITY_THRESHOLD          ${reconsolidation.toFixed(2)}`,
+	);
+	console.log(
+		"    Near-duplicate merge cutoff. Entries above this \u2192 decideMerge LLM call.",
+	);
+	console.log(
+		`    Derived from: P10(near-duplicates)=${ndP10.toFixed(4)}, max(topical)+0.03=${trMaxPlusMargin.toFixed(4)}`,
+	);
 	console.log("");
-	console.log(`  CONTRADICTION_MIN_SIMILARITY       ${contradictionMin.toFixed(2)}`);
-	console.log(`    Lower bound of contradiction scan band [${contradictionMin.toFixed(2)}, ${reconsolidation.toFixed(2)}).`);
-	console.log(`    Derived from: midpoint(P90(unrelated)=${urP90.toFixed(4)}, P10(topical)=${trP10.toFixed(4)})`);
+	console.log(
+		`  CONTRADICTION_MIN_SIMILARITY       ${contradictionMin.toFixed(2)}`,
+	);
+	console.log(
+		`    Lower bound of contradiction scan band [${contradictionMin.toFixed(2)}, ${reconsolidation.toFixed(2)}).`,
+	);
+	console.log(
+		`    Derived from: midpoint(P90(unrelated)=${urP90.toFixed(4)}, P10(topical)=${trP10.toFixed(4)})`,
+	);
 	console.log("");
 	console.log(`  ACTIVATION_SIMILARITY_THRESHOLD    ${activation.toFixed(2)}`);
-	console.log("    Minimum cosine similarity for activation. Entries below this are noise.");
-	console.log(`    Derived from: P90(unrelated)=${urP90.toFixed(4)} + 0.02 buffer`);
+	console.log(
+		"    Minimum cosine similarity for activation. Entries below this are noise.",
+	);
+	console.log(
+		`    Derived from: P90(unrelated)=${urP90.toFixed(4)} + 0.02 buffer`,
+	);
 	console.log("");
 
 	if (!bandOk) {
-		console.log("  WARNING: The derived thresholds overlap or are inverted. This suggests the");
-		console.log("  embedding model does not produce well-separated similarity distributions.");
-		console.log("  The values above are best-effort — manual tuning may be required.");
+		console.log(
+			"  WARNING: The derived thresholds overlap or are inverted. This suggests the",
+		);
+		console.log(
+			"  embedding model does not produce well-separated similarity distributions.",
+		);
+		console.log(
+			"  The values above are best-effort — manual tuning may be required.",
+		);
 		console.log("");
 	}
 
 	// Show current vs recommended comparison.
 	const currentReconsolidation = config.consolidation.reconsolidationThreshold;
-	const currentContradictionMin = config.consolidation.contradictionMinSimilarity;
+	const currentContradictionMin =
+		config.consolidation.contradictionMinSimilarity;
 	const currentActivation = config.activation.similarityThreshold;
 
-	const reconsolidationChanged = currentReconsolidation.toFixed(2) !== reconsolidation.toFixed(2);
-	const contradictionMinChanged = currentContradictionMin.toFixed(2) !== contradictionMin.toFixed(2);
-	const activationChanged = currentActivation.toFixed(2) !== activation.toFixed(2);
+	const reconsolidationChanged =
+		currentReconsolidation.toFixed(2) !== reconsolidation.toFixed(2);
+	const contradictionMinChanged =
+		currentContradictionMin.toFixed(2) !== contradictionMin.toFixed(2);
+	const activationChanged =
+		currentActivation.toFixed(2) !== activation.toFixed(2);
 
 	console.log("  Current vs Recommended");
-	console.log("  ─────────────────────────────────────────────────────────────");
-	console.log(`  Reconsolidation:       ${currentReconsolidation.toFixed(2)} \u2192 ${reconsolidation.toFixed(2)}${reconsolidationChanged ? "" : "  (no change)"}`);
-	console.log(`  Contradiction min:     ${currentContradictionMin.toFixed(2)} \u2192 ${contradictionMin.toFixed(2)}${contradictionMinChanged ? "" : "  (no change)"}`);
-	console.log(`  Activation threshold:  ${currentActivation.toFixed(2)} \u2192 ${activation.toFixed(2)}${activationChanged ? "" : "  (no change)"}`);
+	console.log(
+		"  ─────────────────────────────────────────────────────────────",
+	);
+	console.log(
+		`  Reconsolidation:       ${currentReconsolidation.toFixed(2)} \u2192 ${reconsolidation.toFixed(2)}${reconsolidationChanged ? "" : "  (no change)"}`,
+	);
+	console.log(
+		`  Contradiction min:     ${currentContradictionMin.toFixed(2)} \u2192 ${contradictionMin.toFixed(2)}${contradictionMinChanged ? "" : "  (no change)"}`,
+	);
+	console.log(
+		`  Activation threshold:  ${currentActivation.toFixed(2)} \u2192 ${activation.toFixed(2)}${activationChanged ? "" : "  (no change)"}`,
+	);
 	console.log("");
 
 	// Output ready-to-paste env vars if any value changed.
-	const anyChanged = reconsolidationChanged || contradictionMinChanged || activationChanged;
+	const anyChanged =
+		reconsolidationChanged || contradictionMinChanged || activationChanged;
 
 	if (anyChanged) {
 		console.log("  To apply, add these to your .env file:");
 		console.log("");
 		if (reconsolidationChanged) {
-			console.log(`    RECONSOLIDATION_SIMILARITY_THRESHOLD=${reconsolidation.toFixed(2)}`);
+			console.log(
+				`    RECONSOLIDATION_SIMILARITY_THRESHOLD=${reconsolidation.toFixed(2)}`,
+			);
 		}
 		if (contradictionMinChanged) {
-			console.log(`    CONTRADICTION_MIN_SIMILARITY=${contradictionMin.toFixed(2)}`);
+			console.log(
+				`    CONTRADICTION_MIN_SIMILARITY=${contradictionMin.toFixed(2)}`,
+			);
 		}
 		if (activationChanged) {
-			console.log(`    ACTIVATION_SIMILARITY_THRESHOLD=${activation.toFixed(2)}`);
+			console.log(
+				`    ACTIVATION_SIMILARITY_THRESHOLD=${activation.toFixed(2)}`,
+			);
 		}
 		console.log("");
 	} else {
-		console.log("  All thresholds match the current defaults \u2014 no changes needed.");
+		console.log(
+			"  All thresholds match the current defaults \u2014 no changes needed.",
+		);
 	}
 	console.log("");
 }

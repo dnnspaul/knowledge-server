@@ -238,7 +238,9 @@ export class ContradictionScanner {
 			const midBandCandidates = candidates.filter((c) => {
 				if (supersededInThisScan.has(c.id)) return false; // skip already-resolved candidates
 				const sim = cosineSimilarity(entryEmbedding, c.embedding);
-				return sim >= minSim && sim < config.consolidation.reconsolidationThreshold;
+				return (
+					sim >= minSim && sim < config.consolidation.reconsolidationThreshold
+				);
 			});
 
 			if (midBandCandidates.length === 0) continue;
@@ -247,7 +249,11 @@ export class ContradictionScanner {
 				`[contradiction] Checking ${midBandCandidates.length} candidates for ${JSON.stringify(entry.content)}`,
 			);
 
-			const { entrySuperseded, detected: d, resolved: r } = await this.runBatched(
+			const {
+				entrySuperseded,
+				detected: d,
+				resolved: r,
+			} = await this.runBatched(
 				entry,
 				midBandCandidates,
 				supersededInThisScan,
@@ -293,7 +299,10 @@ export class ContradictionScanner {
 				// Only mid-band: sim ≥ reconsolidationThreshold was already handled by decideMerge (the
 				// "insert" decision means decideMerge considered them distinct; contradiction
 				// scan is the right follow-up for mid-band pairs that weren't compared at all).
-				if (sim >= minSim && sim < config.consolidation.reconsolidationThreshold) {
+				if (
+					sim >= minSim &&
+					sim < config.consolidation.reconsolidationThreshold
+				) {
 					intraChunkCandidates.push(entryB);
 				}
 			}
@@ -304,7 +313,11 @@ export class ContradictionScanner {
 				`[contradiction] Intra-chunk: checking ${intraChunkCandidates.length} same-chunk candidates for ${JSON.stringify(entryA.content)}`,
 			);
 
-			const { entrySuperseded: entryASuperseded, detected: d, resolved: r } = await this.runBatched(
+			const {
+				entrySuperseded: entryASuperseded,
+				detected: d,
+				resolved: r,
+			} = await this.runBatched(
 				entryA,
 				intraChunkCandidates,
 				supersededInThisScan,

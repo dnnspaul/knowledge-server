@@ -32,19 +32,19 @@ const MAX_CHUNK_TOKENS = 150_000;
  * The consolidation engine — the heart of the knowledge system.
  *
  * Orchestrates the full consolidation pipeline, delegating specialised work to:
- * - IEpisodeReader[]      — one or more readers (OpenCode, Claude Code, …)
+ * - IEpisodeReader[]      — one PendingEpisodesReader draining the staging table
  * - ConsolidationLLM      — wraps all LLM calls (extract, merge, contradiction)
  * - Reconsolidator        — deduplicates extracted entries against existing knowledge
  * - ContradictionScanner  — detects and resolves contradictions in the mid-similarity band
  *
  * Models the human brain's sleep consolidation process:
- * 1. For each source reader, read NEW episodes (since that source's cursor)
+ * 1. Read NEW episodes from pending_episodes (uploaded by the daemon)
  * 2. Load EXISTING knowledge (the current mental model)
  * 3. Extract new knowledge from episodes (what's worth remembering?)
  * 4. Reconsolidate — deduplicate/merge against existing knowledge
  * 5. Contradiction scan — detect and resolve conflicts in the mid-band
- * 6. Advance that source's cursor
- * 7. After all sources: apply decay and generate embeddings
+ * 6. Delete processed rows from pending_episodes (self-draining)
+ * 7. After all readers: apply decay and generate embeddings
  */
 export class ConsolidationEngine {
 	private db: IKnowledgeDB;
@@ -54,11 +54,6 @@ export class ConsolidationEngine {
 	private reconsolidator: Reconsolidator;
 	private contradictionScanner: ContradictionScanner;
 	private domainRouter: DomainRouter | null;
-	/**
-	 * User identifier for multi-user shared DB support.
-	 * Scopes cursor and episode log so each user's consolidation advances independently.
-	 */
-	private userId: string;
 
 	/**
 	 * Concurrency guard — only one consolidation run at a time, regardless of
@@ -104,13 +99,11 @@ export class ConsolidationEngine {
 		activation: ActivationEngine,
 		readers: IEpisodeReader[] = [],
 		domainRouter: DomainRouter | null = null,
-		userId = "default",
 	) {
 		this.db = db;
 		this.activation = activation;
 		this.readers = readers;
 		this.domainRouter = domainRouter;
-		this.userId = userId;
 		this.llm = new ConsolidationLLM();
 		this.reconsolidator = new Reconsolidator(
 			db,
@@ -132,9 +125,9 @@ export class ConsolidationEngine {
 		const state = await this.db.getConsolidationState();
 		let pendingSessions = 0;
 
+		// pending_episodes is self-draining — pass 0 to count all remaining rows.
 		for (const reader of this.readers) {
-			const cursor = await this.db.getSourceCursor(reader.source, this.userId);
-			pendingSessions += reader.countNewSessions(cursor.lastMessageTimeCreated);
+			pendingSessions += reader.countNewSessions(0);
 		}
 
 		return { pendingSessions, lastConsolidatedAt: state.lastConsolidatedAt };
@@ -297,16 +290,16 @@ export class ConsolidationEngine {
 		conflictsDetected: number;
 		conflictsResolved: number;
 	}> {
-		const cursor = await this.db.getSourceCursor(reader.source, this.userId);
+		// pending_episodes is self-draining — pass 0 so all remaining rows are candidates.
+		const afterMessageTimeCreated = 0;
 
-		// 0. Optional async preparation step (e.g. PendingEpisodesReader pre-loads
-		//    its candidate list from the pending_episodes table before the sync
-		//    getCandidateSessions / countNewSessions calls).
+		// 0. Optional async preparation step (PendingEpisodesReader pre-loads its
+		//    candidate list from pending_episodes before the sync getCandidateSessions call).
 		//    Wrapped in try/catch so a prepare() failure (e.g. DB unreachable)
 		//    skips this source rather than aborting the entire consolidation run.
 		if (reader.prepare) {
 			try {
-				await reader.prepare(cursor.lastMessageTimeCreated);
+				await reader.prepare(afterMessageTimeCreated);
 			} catch (err) {
 				logger.error(
 					`[consolidation/${reader.source}] prepare() failed — skipping source this run:`,
@@ -323,11 +316,11 @@ export class ConsolidationEngine {
 			}
 		}
 
-		// 1. Fetch candidate sessions: those with messages newer than this source's cursor.
+		// 1. Fetch candidate sessions from pending_episodes.
 		//    Returns session IDs plus the max message timestamp per session,
 		//    ordered by max message time ASC for deterministic batching.
 		const candidateSessions = reader.getCandidateSessions(
-			cursor.lastMessageTimeCreated,
+			afterMessageTimeCreated,
 			config.consolidation.maxSessionsPerRun,
 		);
 
@@ -344,12 +337,9 @@ export class ConsolidationEngine {
 
 		const candidateIds = candidateSessions.map((s) => s.id);
 
-		// 2. Load already-processed episode ranges for this source + user's sessions.
-		const processedRanges = await this.db.getProcessedEpisodeRanges(
-			reader.source,
-			this.userId,
-			candidateIds,
-		);
+		// 2. Load already-processed episode ranges for these sessions (all sources).
+		const processedRanges =
+			await this.db.getProcessedEpisodeRanges(candidateIds);
 
 		// 3. Segment sessions into episodes, skipping already-processed ranges.
 		//    Wrapped in try/catch so a reader failure (e.g. corrupt JSONL file)
@@ -431,59 +421,22 @@ export class ConsolidationEngine {
 				`[consolidation/${reader.source}] Chunk ${chunkLabel} (${chunk.length} episodes): ${episodeTitles}`,
 			);
 
-			const counts = await this.processChunk(reader.source, chunk);
+			// Use the first episode's source as the log label — all episodes in a
+			// domain-grouped chunk share the same original source.
+			const counts = await this.processChunk(
+				chunk[0]?.source ?? reader.source,
+				chunk,
+			);
 			totalCreated += counts.created;
 			totalUpdated += counts.updated;
 			totalConflictsDetected += counts.conflictsDetected;
 			totalConflictsResolved += counts.conflictsResolved;
 		}
 
-		// 7. Advance the source cursor past all fetched candidates.
-		//    Same boundary-safety logic as before, but now per-source.
-		const maxEpisodeMessageTime =
-			episodes.length > 0
-				? episodes.reduce(
-						(max, ep) => (ep.maxMessageTime > max ? ep.maxMessageTime : max),
-						0,
-					)
-				: 0;
-
-		let newCursor = Math.max(
-			maxEpisodeMessageTime,
-			cursor.lastMessageTimeCreated,
-		);
-
-		const lastSession = candidateSessions[candidateSessions.length - 1];
-		const hitBatchLimit =
-			candidateSessions.length === config.consolidation.maxSessionsPerRun;
-
-		// Boundary-timestamp safety: if the batch is full, there may be additional
-		// unprocessed sessions beyond the boundary that share the exact same maxMessageTime.
-		// The next query uses `>`, so cap the cursor just below the boundary to re-fetch them.
-		if (hitBatchLimit) {
-			const cap = lastSession.maxMessageTime - 1;
-			if (cap > cursor.lastMessageTimeCreated) {
-				newCursor = Math.min(newCursor, cap);
-			}
-		} else {
-			// Batch is not full — advance past all candidates so sessions that produced
-			// no episodes don't re-appear as candidates next run.
-			newCursor = Math.max(newCursor, lastSession.maxMessageTime);
-		}
-
-		// Safety floor: never move the cursor backwards.
-		newCursor = Math.max(newCursor, cursor.lastMessageTimeCreated);
-
-		await this.db.updateSourceCursor(reader.source, this.userId, {
-			lastMessageTimeCreated: newCursor,
-			lastConsolidatedAt: Date.now(),
-		});
-
-		// Optional post-consolidation hook — PendingEpisodesReader uses this to
-		// delete consolidated rows from pending_episodes, keeping the table lean.
-		// Use candidateIds (all processed candidates) rather than episodes.map(sessionId)
-		// so sessions where all episodes were already processed (and thus absent from
-		// `episodes`) also get their pending rows cleaned up.
+		// 7. Post-consolidation hook — PendingEpisodesReader deletes processed rows from
+		//    pending_episodes to keep the table lean.
+		//    Use candidateIds (all processed candidates) rather than episodes.map(sessionId)
+		//    so sessions where all episodes were already processed also get cleaned up.
 		if (reader.afterConsolidated) {
 			await reader.afterConsolidated(candidateIds);
 		}
@@ -723,7 +676,7 @@ export class ConsolidationEngine {
 			changedIds,
 		);
 
-		// Record each episode in this chunk as processed.
+		// Record each episode in this chunk as processed using its original source.
 		// Happens after the LLM call and DB writes succeed — makes consolidation
 		// idempotent on crash/retry at the episode level.
 		const entriesPerEp = Math.round(
@@ -731,8 +684,7 @@ export class ConsolidationEngine {
 		);
 		for (const ep of chunk) {
 			await this.db.recordEpisode(
-				source,
-				this.userId,
+				ep.source,
 				ep.sessionId,
 				ep.startMessageId,
 				ep.endMessageId,

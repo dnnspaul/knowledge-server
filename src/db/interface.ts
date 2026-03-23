@@ -6,7 +6,6 @@ import type {
 	KnowledgeStatus,
 	PendingEpisode,
 	ProcessedRange,
-	SourceCursor,
 } from "../types.js";
 
 /**
@@ -157,12 +156,10 @@ export interface IKnowledgeDB {
 
 	/**
 	 * Record a processed episode range for idempotency tracking.
-	 * userId scopes the record per user so multi-user shared DBs don't
-	 * suppress other users' episodes.
+	 * source is the original episode source (e.g. "opencode"), not the reader name.
 	 */
 	recordEpisode(
 		source: string,
-		userId: string,
 		sessionId: string,
 		startMessageId: string,
 		endMessageId: string,
@@ -171,31 +168,13 @@ export interface IKnowledgeDB {
 	): Promise<void>;
 
 	/**
-	 * Return already-processed episode ranges for the given sessions.
-	 * userId scopes the lookup so each user sees only their own records.
+	 * Return already-processed episode ranges for the given session IDs across all sources.
+	 * Returns a Map keyed by sessionId. Each ProcessedRange includes the source so
+	 * idempotency is maintained per (source, session, start, end).
 	 */
 	getProcessedEpisodeRanges(
-		source: string,
-		userId: string,
 		sessionIds: string[],
 	): Promise<Map<string, ProcessedRange[]>>;
-
-	// ── Source Cursor ──
-
-	/**
-	 * Get the per-source per-user high-water mark cursor.
-	 * Returns a zeroed cursor if none exists yet.
-	 */
-	getSourceCursor(source: string, userId: string): Promise<SourceCursor>;
-
-	/**
-	 * Advance the cursor for a source+user pair.
-	 */
-	updateSourceCursor(
-		source: string,
-		userId: string,
-		cursor: Partial<Omit<SourceCursor, "source" | "userId">>,
-	): Promise<void>;
 
 	// ── Consolidation State ──
 
@@ -302,12 +281,12 @@ export interface IKnowledgeDB {
 	insertPendingEpisode(episode: PendingEpisode): Promise<void>;
 
 	/**
-	 * Fetch pending episodes for a given source and user, ordered by max_message_time ASC.
+	 * Fetch all pending episodes for a given source, ordered by max_message_time ASC.
+	 * Drains episodes from all users — user_id is provenance metadata only.
 	 * Used by PendingEpisodesReader to get new episodes for consolidation.
 	 */
 	getPendingEpisodes(
 		source: string,
-		userId: string,
 		afterMaxMessageTime: number,
 		limit?: number,
 	): Promise<PendingEpisode[]>;

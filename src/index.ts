@@ -14,7 +14,7 @@ import { runReview } from "./commands/review.js";
 import { runStatus } from "./commands/status.js";
 import { config, validateConfig } from "./config.js";
 import { ConsolidationEngine } from "./consolidation/consolidate.js";
-import { createEpisodeReaders } from "./daemon/readers/index.js";
+import { PendingEpisodesReader } from "./consolidation/readers/pending.js";
 import { StoreRegistry } from "./db/store-registry.js";
 import { logger } from "./logger.js";
 import { main as mcpMain } from "./mcp/index.js";
@@ -208,16 +208,12 @@ Run \`knowledge-server help-advanced\` for additional commands.
 	const registry = await StoreRegistry.create();
 	const db = registry.writableStore();
 	const activation = new ActivationEngine(db, registry.readStores());
-	const readers = createEpisodeReaders();
 	const consolidation = new ConsolidationEngine(
 		db,
 		activation,
-		readers,
+		[new PendingEpisodesReader(db)],
 		registry.domainRouter,
-		registry.userId,
 	);
-
-	logger.log(`[user] Consolidating as user: ${registry.userId}`);
 
 	// Check if this is a first run (no knowledge yet, but episodes exist)
 	const stats = await db.getStats();
@@ -317,7 +313,6 @@ Run \`knowledge-server help-advanced\` for additional commands.
 		consolidation,
 		adminToken,
 		adminTokenIsStable,
-		registry.userId,
 		registry.unavailableStoreIds,
 	);
 

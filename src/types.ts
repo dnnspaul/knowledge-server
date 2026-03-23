@@ -109,31 +109,12 @@ export interface KnowledgeRelation {
 
 /**
  * Consolidation state — global counters and last-run timestamp.
- * Per-source high-water marks have moved to SourceCursor.
  */
 export interface ConsolidationState {
 	lastConsolidatedAt: number; // unix timestamp ms
 	totalSessionsProcessed: number;
 	totalEntriesCreated: number;
 	totalEntriesUpdated: number;
-}
-
-/**
- * Per-source high-water mark cursor.
- * Tracks the max time_created of messages processed for each source independently,
- * so OpenCode and Claude Code can advance without interfering with each other.
- */
-export interface SourceCursor {
-	source: string; // e.g. "opencode", "claude-code"
-	/**
-	 * User identifier for multi-user shared DB support (added v11).
-	 * Scopes the cursor so each user advances independently.
-	 * Defaults to "default" for single-user backwards-compatible mode.
-	 * Set via KNOWLEDGE_USER_ID env var or config.jsonc userId field.
-	 */
-	userId: string;
-	lastMessageTimeCreated: number; // max time_created of messages seen in last run
-	lastConsolidatedAt: number; // unix timestamp ms of last successful consolidation
 }
 
 /**
@@ -153,6 +134,8 @@ export interface SourceCursor {
  * on the same session only processes messages after the last recorded endMessageId.
  */
 export interface Episode {
+	/** Original source name, e.g. "opencode", "claude-code". Used for idempotency keying. */
+	source: string;
 	sessionId: string;
 	startMessageId: string; // first message ID in this episode (stable OpenCode UUID)
 	endMessageId: string; // last message ID in this episode (stable OpenCode UUID)
@@ -194,8 +177,11 @@ export interface DaemonCursor {
 /**
  * An already-processed episode range, keyed by stable message IDs.
  * Loaded from consolidated_episode to skip re-processing on subsequent runs.
+ * source is included so episodes from different tools with the same session ID
+ * don't suppress each other's idempotency check.
  */
 export interface ProcessedRange {
+	source: string;
 	startMessageId: string;
 	endMessageId: string;
 }

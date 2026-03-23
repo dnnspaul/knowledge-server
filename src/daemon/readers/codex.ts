@@ -516,9 +516,7 @@ export class CodexEpisodeReader implements IEpisodeReader {
 
 		if (maxTimestampMs === 0) return null; // truly unresolvable
 
-		const projectName = cwd
-			? (basename(cwd) || "unknown")
-			: "unknown";
+		const projectName = cwd ? basename(cwd) || "unknown" : "unknown";
 
 		return {
 			sessionId,
@@ -567,6 +565,7 @@ export class CodexEpisodeReader implements IEpisodeReader {
 			if (!content.trim()) continue;
 
 			episodes.push({
+				source: this.source,
 				sessionId: session.sessionId,
 				startMessageId,
 				endMessageId,

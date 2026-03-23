@@ -11,7 +11,6 @@ import type {
 	KnowledgeStatus,
 	PendingEpisode,
 	ProcessedRange,
-	SourceCursor,
 } from "../../types.js";
 import type { IKnowledgeDB } from "../interface.js";
 import { PG_MIGRATIONS } from "./migrations.js";
@@ -232,7 +231,6 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 					await sql`DROP TABLE IF EXISTS knowledge_relation CASCADE`;
 					await sql`DROP TABLE IF EXISTS knowledge_entry CASCADE`;
 					await sql`DROP TABLE IF EXISTS consolidated_episode CASCADE`;
-					await sql`DROP TABLE IF EXISTS source_cursor CASCADE`;
 					await sql`DROP TABLE IF EXISTS consolidation_state CASCADE`;
 					await sql`DROP TABLE IF EXISTS embedding_metadata CASCADE`;
 					await sql`DROP TABLE IF EXISTS schema_version CASCADE`;
@@ -814,7 +812,6 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 
 	async recordEpisode(
 		source: string,
-		userId: string,
 		sessionId: string,
 		startMessageId: string,
 		endMessageId: string,
@@ -823,31 +820,28 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 	): Promise<void> {
 		await this.sql`
 			INSERT INTO consolidated_episode
-			(source, user_id, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created)
-			VALUES (${source}, ${userId}, ${sessionId}, ${startMessageId}, ${endMessageId}, ${contentType}, ${Date.now()}, ${entriesCreated})
-			ON CONFLICT (source, user_id, session_id, start_message_id, end_message_id) DO NOTHING
+			(source, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created)
+			VALUES (${source}, ${sessionId}, ${startMessageId}, ${endMessageId}, ${contentType}, ${Date.now()}, ${entriesCreated})
+			ON CONFLICT (source, session_id, start_message_id, end_message_id) DO NOTHING
 		`;
 	}
 
 	async getProcessedEpisodeRanges(
-		source: string,
-		userId: string,
 		sessionIds: string[],
 	): Promise<Map<string, ProcessedRange[]>> {
 		if (sessionIds.length === 0) return new Map();
 
 		const rows = await this.sql`
-			SELECT session_id, start_message_id, end_message_id
+			SELECT source, session_id, start_message_id, end_message_id
 			FROM consolidated_episode
-			WHERE source = ${source}
-			  AND user_id = ${userId}
-			  AND session_id = ANY(${sessionIds}::text[])
+			WHERE session_id = ANY(${sessionIds}::text[])
 		`;
 
 		const result = new Map<string, ProcessedRange[]>();
 		for (const row of rows) {
 			const sid = row.session_id as string;
 			const range: ProcessedRange = {
+				source: row.source as string,
 				startMessageId: row.start_message_id as string,
 				endMessageId: row.end_message_id as string,
 			};
@@ -856,55 +850,6 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 			else result.set(sid, [range]);
 		}
 		return result;
-	}
-
-	// ── Source Cursor ──
-
-	async getSourceCursor(source: string, userId: string): Promise<SourceCursor> {
-		const rows = await this.sql`
-			SELECT last_message_time_created, last_consolidated_at
-			FROM source_cursor WHERE source = ${source} AND user_id = ${userId}
-		`;
-
-		if (rows.length === 0) {
-			return {
-				source,
-				userId,
-				lastMessageTimeCreated: 0,
-				lastConsolidatedAt: 0,
-			};
-		}
-
-		return {
-			source,
-			userId,
-			lastMessageTimeCreated: toNum(
-				rows[0].last_message_time_created as number | string,
-			),
-			lastConsolidatedAt: toNum(
-				rows[0].last_consolidated_at as number | string,
-			),
-		};
-	}
-
-	async updateSourceCursor(
-		source: string,
-		userId: string,
-		cursor: Partial<Omit<SourceCursor, "source" | "userId">>,
-	): Promise<void> {
-		const current = await this.getSourceCursor(source, userId);
-		const newLastMessageTime =
-			cursor.lastMessageTimeCreated ?? current.lastMessageTimeCreated;
-		const newLastConsolidated =
-			cursor.lastConsolidatedAt ?? current.lastConsolidatedAt;
-
-		await this.sql`
-			INSERT INTO source_cursor (source, user_id, last_message_time_created, last_consolidated_at)
-			VALUES (${source}, ${userId}, ${newLastMessageTime}, ${newLastConsolidated})
-			ON CONFLICT (source, user_id) DO UPDATE SET
-				last_message_time_created = EXCLUDED.last_message_time_created,
-				last_consolidated_at = EXCLUDED.last_consolidated_at
-		`;
 	}
 
 	// ── Consolidation State ──
@@ -1027,7 +972,6 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 			await sql`DELETE FROM knowledge_relation`;
 			await sql`DELETE FROM knowledge_entry`;
 			await sql`DELETE FROM consolidated_episode`;
-			await sql`DELETE FROM source_cursor`;
 			await sql`DELETE FROM embedding_metadata`;
 			await sql`
 				UPDATE consolidation_state SET
@@ -1289,15 +1233,12 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 	}
 
 	async getPendingEpisodes(
-		source: string,
-		userId: string,
 		afterMaxMessageTime: number,
 		limit = 500,
 	): Promise<PendingEpisode[]> {
 		const rows = await this.sql`
 			SELECT * FROM pending_episodes
-			WHERE source = ${source} AND user_id = ${userId}
-			  AND max_message_time > ${afterMaxMessageTime}
+			WHERE max_message_time > ${afterMaxMessageTime}
 			ORDER BY max_message_time ASC
 			LIMIT ${limit}
 		`;

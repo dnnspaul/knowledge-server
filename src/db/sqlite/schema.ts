@@ -63,13 +63,21 @@
  *   the server consolidates them. Decouples episode reading (done on the user's
  *   machine by the daemon) from consolidation (done on the server). Enables
  *   cross-device and multi-user setups where the server can't read local files.
- * - daemon_cursor: per-source per-user high-water mark for the daemon, independent
- *   from source_cursor (which is owned by the consolidation engine). Allows the
- *   daemon and server to advance their cursors independently.
+ * - daemon_cursor: per-source high-water mark for the daemon.
  * - MIGRATION: v11 → v12 is additive: CREATE TABLE IF NOT EXISTS — no data loss.
+ *
+ * v13: Daemon-only consolidation — remove direct file reader infrastructure.
+ * - source_cursor table removed: was the high-water mark for direct file readers.
+ *   With daemon-only consolidation, pending_episodes is self-draining (rows deleted
+ *   after consolidation) and consolidated_episode provides idempotency — no cursor needed.
+ * - user_id removed from consolidated_episode: consolidation drains all pending episodes
+ *   regardless of origin; user_id on pending_episodes and consolidated_episode is now
+ *   provenance metadata only, not a routing or filtering key.
+ * - MIGRATION: v12 → v13 drops source_cursor and rebuilds consolidated_episode without
+ *   user_id. Knowledge data is not affected.
  */
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 /**
  * Expected columns for each table, derived from the DDL below.
@@ -120,15 +128,8 @@ export const EXPECTED_TABLE_COLUMNS: Readonly<
 		"total_entries_created",
 		"total_entries_updated",
 	],
-	source_cursor: [
-		"source",
-		"user_id",
-		"last_message_time_created",
-		"last_consolidated_at",
-	],
 	consolidated_episode: [
 		"source",
-		"user_id",
 		"session_id",
 		"start_message_id",
 		"end_message_id",
@@ -228,34 +229,22 @@ export const CREATE_TABLES = `
   INSERT OR IGNORE INTO consolidation_state (id, last_consolidated_at, total_sessions_processed, total_entries_created, total_entries_updated)
   VALUES (1, 0, 0, 0, 0);
 
-  -- Per-source per-user high-water mark cursor.
-  -- user_id (added v11) scopes the cursor per user in shared-DB setups so each
-  -- user's consolidation advances independently. Defaults to 'default' for
-  -- single-user backwards compatibility.
-  CREATE TABLE IF NOT EXISTS source_cursor (
-    source                   TEXT    NOT NULL,  -- e.g. "opencode", "claude-code"
-    user_id                  TEXT    NOT NULL DEFAULT 'default',
-    last_message_time_created INTEGER NOT NULL DEFAULT 0,
-    last_consolidated_at      INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (source, user_id)
-  );
-
-  -- Per-episode processing log — enables incremental within-session consolidation.
-  -- source added v6; user_id added v11 so each user's processed episodes are tracked
-  -- independently in shared-DB setups.
+  -- Per-episode processing log — idempotency guard for consolidation.
+  -- Keyed by (source, session_id, start_message_id, end_message_id).
+  -- user_id removed in v13: consolidation drains all pending episodes regardless
+  -- of origin; user_id on pending_episodes is provenance metadata only.
   CREATE TABLE IF NOT EXISTS consolidated_episode (
     source           TEXT    NOT NULL,
-    user_id          TEXT    NOT NULL DEFAULT 'default',
     session_id       TEXT    NOT NULL,
     start_message_id TEXT    NOT NULL,
     end_message_id   TEXT    NOT NULL,
     content_type     TEXT    NOT NULL,
     processed_at     INTEGER NOT NULL,
     entries_created  INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (source, user_id, session_id, start_message_id, end_message_id)
+    PRIMARY KEY (source, session_id, start_message_id, end_message_id)
   );
 
-  CREATE INDEX IF NOT EXISTS idx_episode_source_user_session ON consolidated_episode(source, user_id, session_id);
+  CREATE INDEX IF NOT EXISTS idx_episode_source_session ON consolidated_episode(source, session_id);
   CREATE INDEX IF NOT EXISTS idx_episode_processed ON consolidated_episode(processed_at);
 
   -- Synthesis clusters — persistent embedding-similarity groups of knowledge entries.
@@ -321,9 +310,8 @@ export const CREATE_TABLES = `
 
   -- Daemon cursor — local high-water mark per source, tracking what has been uploaded.
   -- Always stored in the local SQLite DB on the user's machine, never in shared Postgres.
-  -- Separate from source_cursor (owned by the server) so daemon and server advance
-  -- independently. user_id is not needed here — the table is always machine-local,
-  -- so it is inherently scoped to one user.
+  -- Tracks "what have I uploaded" independently from consolidated_episode ("what has been
+  -- consolidated"). Always machine-local, so no user_id scoping needed.
   CREATE TABLE IF NOT EXISTS daemon_cursor (
     source                   TEXT    PRIMARY KEY,
     last_message_time_created INTEGER NOT NULL DEFAULT 0,

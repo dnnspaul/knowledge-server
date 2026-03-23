@@ -60,8 +60,6 @@ export function createApp(
 	adminToken: string,
 	/** Whether adminToken was explicitly configured (vs randomly generated for local use). */
 	adminTokenIsStable = false,
-	/** User identifier for cursor scoping in multi-user shared DB setups. */
-	userId = "default",
 	/** Store IDs that failed to connect at startup and are currently unavailable. */
 	unavailableStoreIds: ReadonlySet<string> = new Set(),
 ): Hono {
@@ -351,19 +349,7 @@ export function createApp(
 		const stats = await db.getStats();
 		const consolidationState = await db.getConsolidationState();
 
-		// Per-source cursor info — surfaced so operators can see each source's
-		// last-consolidated timestamp and high-water mark without tailing logs.
-		const sourceCursors = await Promise.all(
-			["opencode", "claude-code"].map(async (source) => {
-				const cursor = await db.getSourceCursor(source, userId);
-				return {
-					source,
-					lastConsolidatedAt: cursor.lastConsolidatedAt
-						? new Date(cursor.lastConsolidatedAt).toISOString()
-						: null,
-				};
-			}),
-		);
+		// No per-source cursors in daemon-only mode — pending_episodes is self-draining.
 
 		// Config block (model names, port) is gated behind the admin token.
 		// Unauthenticated callers (e.g. healthcheck scripts) still get version +
@@ -379,15 +365,11 @@ export function createApp(
 			version: pkg.version,
 			knowledge: stats,
 			consolidation: {
-				// userId gated behind admin — it's not a secret, but it identifies the
-				// running user in multi-user setups and shouldn't be publicly visible.
-				...(isAdmin ? { userId } : {}),
 				lastRun: consolidationState.lastConsolidatedAt
 					? new Date(consolidationState.lastConsolidatedAt).toISOString()
 					: null,
 				totalSessionsProcessed: consolidationState.totalSessionsProcessed,
 				totalEntriesCreated: consolidationState.totalEntriesCreated,
-				sources: sourceCursors,
 			},
 			embedding: embeddingMeta
 				? {

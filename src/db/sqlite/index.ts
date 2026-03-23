@@ -15,7 +15,6 @@ import type {
 	KnowledgeStatus,
 	PendingEpisode,
 	ProcessedRange,
-	SourceCursor,
 } from "../../types.js";
 import type { IKnowledgeDB } from "../interface.js";
 import { MIGRATIONS } from "./migrations.js";
@@ -124,7 +123,6 @@ export class KnowledgeDB implements IKnowledgeDB {
 				this.db.exec("DROP TABLE IF EXISTS knowledge_relation");
 				this.db.exec("DROP TABLE IF EXISTS knowledge_entry");
 				this.db.exec("DROP TABLE IF EXISTS consolidated_episode");
-				this.db.exec("DROP TABLE IF EXISTS source_cursor");
 				this.db.exec("DROP TABLE IF EXISTS consolidation_state");
 				this.db.exec("DROP TABLE IF EXISTS embedding_metadata");
 				this.db.exec("DROP TABLE IF EXISTS schema_version");
@@ -900,7 +898,6 @@ export class KnowledgeDB implements IKnowledgeDB {
 	 */
 	async recordEpisode(
 		source: string,
-		userId: string,
 		sessionId: string,
 		startMessageId: string,
 		endMessageId: string,
@@ -910,12 +907,11 @@ export class KnowledgeDB implements IKnowledgeDB {
 		this.db
 			.prepare(
 				`INSERT OR IGNORE INTO consolidated_episode
-         (source, user_id, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (source, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				source,
-				userId,
 				sessionId,
 				startMessageId,
 				endMessageId,
@@ -941,21 +937,18 @@ export class KnowledgeDB implements IKnowledgeDB {
 	 * @param sessionIds  Session IDs to look up.
 	 */
 	async getProcessedEpisodeRanges(
-		source: string,
-		userId: string,
 		sessionIds: string[],
 	): Promise<Map<string, ProcessedRange[]>> {
 		if (sessionIds.length === 0) return new Map();
 
 		const rows = this.db
 			.prepare(
-				`SELECT session_id, start_message_id, end_message_id
+				`SELECT source, session_id, start_message_id, end_message_id
          FROM consolidated_episode
-         WHERE source = ?
-           AND user_id = ?
-           AND session_id IN (SELECT value FROM json_each(?))`,
+         WHERE session_id IN (SELECT value FROM json_each(?))`,
 			)
-			.all(source, userId, JSON.stringify(sessionIds)) as Array<{
+			.all(JSON.stringify(sessionIds)) as Array<{
+			source: string;
 			session_id: string;
 			start_message_id: string;
 			end_message_id: string;
@@ -964,79 +957,18 @@ export class KnowledgeDB implements IKnowledgeDB {
 		const result = new Map<string, ProcessedRange[]>();
 		for (const row of rows) {
 			const existing = result.get(row.session_id);
+			const range: ProcessedRange = {
+				source: row.source,
+				startMessageId: row.start_message_id,
+				endMessageId: row.end_message_id,
+			};
 			if (existing) {
-				existing.push({
-					startMessageId: row.start_message_id,
-					endMessageId: row.end_message_id,
-				});
+				existing.push(range);
 			} else {
-				result.set(row.session_id, [
-					{
-						startMessageId: row.start_message_id,
-						endMessageId: row.end_message_id,
-					},
-				]);
+				result.set(row.session_id, [range]);
 			}
 		}
 		return result;
-	}
-
-	// ── Source Cursor ──
-
-	/**
-	 * Get the high-water mark cursor for a specific source + user.
-	 * Returns a zero-state cursor if no row exists yet.
-	 */
-	async getSourceCursor(source: string, userId: string): Promise<SourceCursor> {
-		const row = this.db
-			.prepare(
-				"SELECT last_message_time_created, last_consolidated_at FROM source_cursor WHERE source = ? AND user_id = ?",
-			)
-			.get(source, userId) as {
-			last_message_time_created: number;
-			last_consolidated_at: number;
-		} | null;
-
-		if (!row) {
-			return {
-				source,
-				userId,
-				lastMessageTimeCreated: 0,
-				lastConsolidatedAt: 0,
-			};
-		}
-
-		return {
-			source,
-			userId,
-			lastMessageTimeCreated: row.last_message_time_created,
-			lastConsolidatedAt: row.last_consolidated_at,
-		};
-	}
-
-	/**
-	 * Upsert the high-water mark cursor for a specific source + user.
-	 * Uses INSERT OR REPLACE so the first call creates the row automatically.
-	 */
-	async updateSourceCursor(
-		source: string,
-		userId: string,
-		cursor: Partial<Omit<SourceCursor, "source" | "userId">>,
-	): Promise<void> {
-		// Read current values so we only update what's provided
-		const current = await this.getSourceCursor(source, userId);
-
-		const newLastMessageTime =
-			cursor.lastMessageTimeCreated ?? current.lastMessageTimeCreated;
-		const newLastConsolidated =
-			cursor.lastConsolidatedAt ?? current.lastConsolidatedAt;
-
-		this.db
-			.prepare(
-				`INSERT OR REPLACE INTO source_cursor (source, user_id, last_message_time_created, last_consolidated_at)
-         VALUES (?, ?, ?, ?)`,
-			)
-			.run(source, userId, newLastMessageTime, newLastConsolidated);
 	}
 
 	// ── Consolidation State ──
@@ -1212,7 +1144,6 @@ export class KnowledgeDB implements IKnowledgeDB {
 			this.db.exec("DELETE FROM knowledge_relation");
 			this.db.exec("DELETE FROM knowledge_entry");
 			this.db.exec("DELETE FROM consolidated_episode");
-			this.db.exec("DELETE FROM source_cursor");
 			this.db.exec("DELETE FROM embedding_metadata");
 			this.db.exec(
 				`UPDATE consolidation_state SET
@@ -1497,19 +1428,17 @@ export class KnowledgeDB implements IKnowledgeDB {
 	}
 
 	async getPendingEpisodes(
-		source: string,
-		userId: string,
 		afterMaxMessageTime: number,
 		limit = 500,
 	): Promise<PendingEpisode[]> {
 		const rows = this.db
 			.prepare(
 				`SELECT * FROM pending_episodes
-         WHERE source = ? AND user_id = ? AND max_message_time > ?
+         WHERE max_message_time > ?
          ORDER BY max_message_time ASC
          LIMIT ?`,
 			)
-			.all(source, userId, afterMaxMessageTime, limit) as Array<{
+			.all(afterMaxMessageTime, limit) as Array<{
 			id: string;
 			user_id: string;
 			source: string;

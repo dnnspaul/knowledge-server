@@ -69,7 +69,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		// by CASCADE: knowledge_relation via source_id/target_id → knowledge_entry,
 		// knowledge_cluster_member via entry_id → knowledge_entry and
 		// cluster_id → knowledge_cluster.
-		await truncSql`TRUNCATE knowledge_entry, knowledge_cluster, consolidated_episode, source_cursor, consolidation_state, embedding_metadata, schema_version CASCADE`;
+		await truncSql`TRUNCATE knowledge_entry, knowledge_cluster, consolidated_episode, consolidation_state, embedding_metadata, schema_version CASCADE`;
 		// Re-initialize to re-stamp schema_version (truncated above).
 		// Clear initPromise (private field) so initialize() re-runs on next call.
 		(db as unknown as { initPromise: null }).initPromise = null;
@@ -342,34 +342,11 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		expect(updated.totalEntriesCreated).toBe(25);
 	});
 
-	// ── Source Cursors ──
-
-	it("manages source cursors", async () => {
-		const initial = await db.getSourceCursor("opencode", "default");
-		expect(initial.source).toBe("opencode");
-		expect(initial.userId).toBe("default");
-		expect(initial.lastMessageTimeCreated).toBe(0);
-		expect(initial.lastConsolidatedAt).toBe(0);
-
-		await db.updateSourceCursor("opencode", "default", {
-			lastMessageTimeCreated: 999999,
-			lastConsolidatedAt: 1000000,
-		});
-		const updated = await db.getSourceCursor("opencode", "default");
-		expect(updated.lastMessageTimeCreated).toBe(999999);
-		expect(updated.lastConsolidatedAt).toBe(1000000);
-
-		// Different source is independent
-		const other = await db.getSourceCursor("claude-code", "default");
-		expect(other.lastMessageTimeCreated).toBe(0);
-	});
-
 	// ── Episode Tracking ──
 
 	it("records and retrieves episode ranges", async () => {
 		await db.recordEpisode(
 			"opencode",
-			"default",
 			"session-1",
 			"msg-start-1",
 			"msg-end-1",
@@ -378,7 +355,6 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		);
 		await db.recordEpisode(
 			"opencode",
-			"default",
 			"session-1",
 			"msg-start-2",
 			"msg-end-2",
@@ -387,7 +363,6 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		);
 		await db.recordEpisode(
 			"opencode",
-			"default",
 			"session-2",
 			"msg-start-3",
 			"msg-end-3",
@@ -395,7 +370,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			0,
 		);
 
-		const ranges = await db.getProcessedEpisodeRanges("opencode", "default", [
+		const ranges = await db.getProcessedEpisodeRanges([
 			"session-1",
 			"session-2",
 		]);
@@ -406,13 +381,17 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		expect(
 			s1.some(
 				(r) =>
-					r.startMessageId === "msg-start-1" && r.endMessageId === "msg-end-1",
+					r.source === "opencode" &&
+					r.startMessageId === "msg-start-1" &&
+					r.endMessageId === "msg-end-1",
 			),
 		).toBe(true);
 		expect(
 			s1.some(
 				(r) =>
-					r.startMessageId === "msg-start-2" && r.endMessageId === "msg-end-2",
+					r.source === "opencode" &&
+					r.startMessageId === "msg-start-2" &&
+					r.endMessageId === "msg-end-2",
 			),
 		).toBe(true);
 
@@ -424,7 +403,6 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 	it("recordEpisode is idempotent", async () => {
 		await db.recordEpisode(
 			"opencode",
-			"default",
 			"session-1",
 			"msg-a",
 			"msg-b",
@@ -433,7 +411,6 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		);
 		await db.recordEpisode(
 			"opencode",
-			"default",
 			"session-1",
 			"msg-a",
 			"msg-b",
@@ -441,16 +418,13 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			2,
 		);
 
-		const ranges = await db.getProcessedEpisodeRanges("opencode", "default", [
-			"session-1",
-		]);
+		const ranges = await db.getProcessedEpisodeRanges(["session-1"]);
 		expect(ranges.get("session-1")).toHaveLength(1);
 	});
 
-	it("episodes from different sources are isolated", async () => {
+	it("episodes from different sources for the same session are both returned", async () => {
 		await db.recordEpisode(
 			"opencode",
-			"default",
 			"session-1",
 			"msg-a",
 			"msg-b",
@@ -459,7 +433,6 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		);
 		await db.recordEpisode(
 			"claude-code",
-			"default",
 			"session-1",
 			"msg-a",
 			"msg-b",
@@ -467,20 +440,12 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			2,
 		);
 
-		const oc = await db.getProcessedEpisodeRanges("opencode", "default", [
-			"session-1",
-		]);
-		const cc = await db.getProcessedEpisodeRanges("claude-code", "default", [
-			"session-1",
-		]);
-		expect(oc.get("session-1")).toHaveLength(1);
-		expect(cc.get("session-1")).toHaveLength(1);
+		const ranges = await db.getProcessedEpisodeRanges(["session-1"]);
+		expect(ranges.get("session-1")).toHaveLength(2);
 	});
 
 	it("getProcessedEpisodeRanges returns empty map for unknown session", async () => {
-		const ranges = await db.getProcessedEpisodeRanges("opencode", "default", [
-			"no-such-session",
-		]);
+		const ranges = await db.getProcessedEpisodeRanges(["no-such-session"]);
 		expect(ranges.size).toBe(0);
 	});
 
@@ -828,7 +793,6 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		await db.setEmbeddingMetadata("test-model", 128);
 		await db.recordEpisode(
 			"opencode",
-			"default",
 			"session-1",
 			"msg-a",
 			"msg-b",
@@ -840,9 +804,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 
 		expect((await db.getStats()).total).toBe(0);
 		expect(await db.getEmbeddingMetadata()).toBeNull();
-		const ranges = await db.getProcessedEpisodeRanges("opencode", "default", [
-			"session-1",
-		]);
+		const ranges = await db.getProcessedEpisodeRanges(["session-1"]);
 		expect(ranges.size).toBe(0);
 	});
 

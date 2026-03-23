@@ -219,8 +219,56 @@ export const PG_MIGRATIONS: Array<{
 					)
 				`;
 				await sql`
-					CREATE INDEX IF NOT EXISTS idx_pending_source_user_time
-					ON pending_episodes(source, user_id, max_message_time)
+				CREATE INDEX IF NOT EXISTS idx_pending_source_user_time
+				ON pending_episodes(source, user_id, max_message_time)
+			`;
+			}
+		},
+	},
+	{
+		version: 13,
+		label:
+			"daemon-only consolidation: drop source_cursor, remove user_id from consolidated_episode",
+		up: async (sql: TxSql) => {
+			// Drop source_cursor — no longer needed with daemon-only consolidation.
+			await sql`DROP TABLE IF EXISTS source_cursor`;
+
+			// Remove user_id from consolidated_episode PK.
+			// Guard: only run if user_id column still exists.
+			const userIdCol = await sql`
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = current_schema()
+				  AND table_name = 'consolidated_episode'
+				  AND column_name = 'user_id'
+			`;
+			if (userIdCol.length > 0) {
+				// Rename old table, create new without user_id, copy data, drop old.
+				await sql`ALTER TABLE consolidated_episode RENAME TO consolidated_episode_old`;
+				await sql`
+					CREATE TABLE consolidated_episode (
+						source           TEXT    NOT NULL,
+						session_id       TEXT    NOT NULL,
+						start_message_id TEXT    NOT NULL,
+						end_message_id   TEXT    NOT NULL,
+						content_type     TEXT    NOT NULL,
+						processed_at     BIGINT  NOT NULL,
+						entries_created  INTEGER NOT NULL DEFAULT 0,
+						PRIMARY KEY (source, session_id, start_message_id, end_message_id)
+					)
+				`;
+				// INSERT IGNORE equivalent in Postgres: ON CONFLICT DO NOTHING deduplicates
+				// in case the same (source, session_id, start, end) existed for multiple user_ids.
+				await sql`
+					INSERT INTO consolidated_episode
+					SELECT source, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created
+					FROM consolidated_episode_old
+					ON CONFLICT (source, session_id, start_message_id, end_message_id) DO NOTHING
+				`;
+				await sql`DROP TABLE consolidated_episode_old`;
+				await sql`DROP INDEX IF EXISTS idx_episode_source_user_session`;
+				await sql`
+					CREATE INDEX IF NOT EXISTS idx_episode_source_session
+					ON consolidated_episode(source, session_id)
 				`;
 			}
 		},

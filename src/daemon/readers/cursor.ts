@@ -351,6 +351,7 @@ export class CursorEpisodeReader implements IEpisodeReader {
 			if (!content.trim()) continue;
 
 			episodes.push({
+				source: this.source,
 				sessionId: session.sessionId,
 				startMessageId: startId,
 				endMessageId: endId,

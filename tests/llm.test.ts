@@ -10,10 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as aiModule from "ai";
-import {
-	ConsolidationLLM,
-	formatEpisodes,
-} from "../src/consolidation/llm";
+import { ConsolidationLLM, formatEpisodes } from "../src/consolidation/llm";
 import type { Episode } from "../src/types";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -504,19 +501,22 @@ describe("ConsolidationLLM.synthesizePrinciple", () => {
 	const peers = [
 		{
 			id: "p1",
-			content: "Always wrap LLM-sourced content in XML tags to prevent injection.",
+			content:
+				"Always wrap LLM-sourced content in XML tags to prevent injection.",
 			type: "principle" as const,
 			topics: ["security", "llm", "prompts"],
 		},
 		{
 			id: "p2",
-			content: "The decideMerge prompt wraps content in XML to prevent injection.",
+			content:
+				"The decideMerge prompt wraps content in XML to prevent injection.",
 			type: "fact" as const,
 			topics: ["security", "llm"],
 		},
 		{
 			id: "p3",
-			content: "extractKnowledge wraps episode content in XML to prevent injection.",
+			content:
+				"extractKnowledge wraps episode content in XML to prevent injection.",
 			type: "fact" as const,
 			topics: ["security", "extraction"],
 		},
@@ -531,7 +531,8 @@ describe("ConsolidationLLM.synthesizePrinciple", () => {
 			JSON.stringify([
 				{
 					type: "principle",
-					content: "All LLM prompts that include untrusted content should use XML delimiters to prevent injection.",
+					content:
+						"All LLM prompts that include untrusted content should use XML delimiters to prevent injection.",
 					topics: ["security", "llm", "prompts"],
 					confidence: 0.75,
 					sourceIds: ["p2", "p3"],

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import pkg from "../../package.json" with { type: "json" };
 import { ActivationEngine } from "../activation/activate.js";
 import { ConsolidationEngine } from "../consolidation/consolidate.js";
-import { createEpisodeReaders } from "../daemon/readers/index.js";
+import { PendingEpisodesReader } from "../consolidation/readers/pending.js";
 import { StoreRegistry } from "../db/store-registry.js";
 
 /**
@@ -43,13 +43,11 @@ export async function runStatus(pidPath: string): Promise<void> {
 		const state = await db.getConsolidationState();
 
 		const activation = new ActivationEngine(db, registry.readStores());
-		const readers = createEpisodeReaders();
 		const consolidation = new ConsolidationEngine(
 			db,
 			activation,
-			readers,
+			[new PendingEpisodesReader(db)],
 			registry.domainRouter,
-			registry.userId,
 		);
 		const { pendingSessions } = await consolidation.checkPending();
 		consolidation.close();

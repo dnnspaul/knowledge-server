@@ -400,6 +400,17 @@ echo ""
 
 STEP=1
 
+# For v3.0.0+, store configuration has moved from POSTGRES_CONNECTION_URI to
+# config.jsonc. Offer to run migrate-config if the old env var is still set.
+if [ -n "${POSTGRES_CONNECTION_URI:-}" ] || [ -n "${KNOWLEDGE_DB_PATH:-}" ]; then
+  echo "  $STEP. Migrate your config (v2 → v3 breaking change):"
+  echo "     You have legacy env vars set (POSTGRES_CONNECTION_URI / KNOWLEDGE_DB_PATH)."
+  echo "     Run this once to generate config.jsonc from them:"
+  echo "     knowledge-server migrate-config"
+  echo ""
+  STEP=$((STEP + 1))
+fi
+
 if [ "$ENV_CONFIGURED" = false ]; then
   echo "  $STEP. Edit $DISPLAY_ENV_FILE"
   echo "     Fill in LLM_API_KEY and LLM_BASE_ENDPOINT"
