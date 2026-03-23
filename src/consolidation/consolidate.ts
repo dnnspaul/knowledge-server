@@ -116,7 +116,7 @@ export class ConsolidationEngine {
 			activation.embeddings,
 			this.llm,
 		);
-		this.contradictionScanner = new ContradictionScanner(db, this.llm);
+		this.contradictionScanner = new ContradictionScanner(this.llm);
 	}
 
 	/**
@@ -677,7 +677,12 @@ export class ConsolidationEngine {
 		}
 
 		// Post-extraction contradiction scan.
+		// Use the chunk's resolved domain store so that both candidate queries and
+		// resolution writes target the same store the entries were written to.
+		// Falls back to this.db in single-store mode (no domain routing).
+		const contradictionDb = domainResolution?.store ?? this.db;
 		const chunkContradictions = await this.contradictionScanner.scan(
+			contradictionDb,
 			entriesMap,
 			changedIds,
 		);

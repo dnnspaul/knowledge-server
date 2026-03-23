@@ -26,11 +26,9 @@ const CONTRADICTION_BATCH_SIZE = 10;
  * - Track which candidates were already resolved this pass to avoid double-processing.
  */
 export class ContradictionScanner {
-	private db: IKnowledgeStore;
 	private llm: ConsolidationLLM;
 
-	constructor(db: IKnowledgeStore, llm: ConsolidationLLM) {
-		this.db = db;
+	constructor(llm: ConsolidationLLM) {
 		this.llm = llm;
 	}
 
@@ -52,6 +50,7 @@ export class ContradictionScanner {
 	 * its outer state (loop counters, early-continue logic).
 	 */
 	private async runBatched(
+		db: IKnowledgeStore,
 		entry: {
 			id: string;
 			content: string;
@@ -143,7 +142,7 @@ export class ContradictionScanner {
 							}
 						: undefined;
 
-				await this.db.applyContradictionResolution(
+				await db.applyContradictionResolution(
 					result.resolution,
 					entry.id,
 					result.candidateId,
@@ -200,6 +199,7 @@ export class ContradictionScanner {
 	 * Returns counts of detected and resolved contradictions.
 	 */
 	async scan(
+		db: IKnowledgeStore,
 		entriesMap: Map<string, KnowledgeEntry & { embedding: number[] }>,
 		changedIds: Set<string>,
 	): Promise<{ detected: number; resolved: number }> {
@@ -225,7 +225,7 @@ export class ContradictionScanner {
 			// Pass 1: Find topic-overlapping pre-existing entries from DB.
 			// Exclude all changedIds — they were either handled by decideMerge (sim ≥ threshold)
 			// or will be covered in pass 2 (intra-chunk pairs, below).
-			const candidates = await this.db.getEntriesWithOverlappingTopics(
+			const candidates = await db.getEntriesWithOverlappingTopics(
 				entry.topics,
 				[...changedIds], // only exclude chunk-changed entries, not all of entriesMap
 			);
@@ -254,6 +254,7 @@ export class ContradictionScanner {
 				detected: d,
 				resolved: r,
 			} = await this.runBatched(
+				db,
 				entry,
 				midBandCandidates,
 				supersededInThisScan,
@@ -318,6 +319,7 @@ export class ContradictionScanner {
 				detected: d,
 				resolved: r,
 			} = await this.runBatched(
+				db,
 				entryA,
 				intraChunkCandidates,
 				supersededInThisScan,
