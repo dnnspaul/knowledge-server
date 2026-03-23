@@ -99,15 +99,20 @@ export async function runReinitialize(args: string[]): Promise<void> {
 			console.log(`  ✓ Wiped store "${id}"`);
 		}
 
-		// Only reset serverLocalDb staging when wiping ALL stores.
-		// Wiping a single store leaves pending_episodes for other stores intact.
 		if (!storeId) {
+			// Full reset: clear all staging and bookkeeping data.
 			await serverLocalDb.reinitializeLocal();
-			console.log("  ✓ Reset consolidation state");
+			console.log("  ✓ Reset consolidation state and staging tables");
 		} else {
+			// Partial wipe: knowledge entries in the named store are removed.
+			// consolidated_episode and pending_episodes are NOT touched — they are
+			// shared across all stores and cannot be cleanly scoped to a single store
+			// without knowing the source→store mapping. Run without --store for a
+			// full reset including staging tables.
 			console.log(
-				"  Note: pending_episodes and consolidation_state in server.db were not cleared " +
-					"(only cleared when wiping all stores). Run without --store to do a full reset.",
+				"  Note: consolidation history (consolidated_episode) was not cleared — " +
+					"episodes already processed for this store will not be re-processed. " +
+					"Run without --store to do a full reset.",
 			);
 		}
 

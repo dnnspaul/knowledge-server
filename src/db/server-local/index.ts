@@ -83,32 +83,24 @@ export class ServerLocalDB implements IServerLocalDB {
     `);
 
 		// Fresh DB or already at current version — create/verify tables.
-		if (currentVersion === 0) {
-			this.db.exec(SERVER_LOCAL_CREATE_TABLES);
-			this.db
-				.prepare(
-					"INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
-				)
-				.run(SERVER_LOCAL_SCHEMA_VERSION, Date.now());
-			logger.log(
-				`[db] Server local DB: created at v${SERVER_LOCAL_SCHEMA_VERSION}`,
-			);
-			return;
-		}
-
-		// For existing DBs, ensure all tables exist (CREATE TABLE IF NOT EXISTS
-		// handles this idempotently). Never drop tables — pending_episodes may hold
-		// daemon uploads that haven't been consolidated yet. Schema migrations for
-		// server.db are always additive (new tables, new columns with defaults).
+		// Always run CREATE TABLE IF NOT EXISTS for all tables — additive and
+		// idempotent. Schema migrations for server.db are always additive; tables
+		// are never dropped (pending_episodes may have unsent daemon uploads).
 		this.db.exec(SERVER_LOCAL_CREATE_TABLES);
 
-		// Stamp the current version if it hasn't been recorded yet.
+		// Stamp the current version idempotently. INSERT OR IGNORE avoids a
+		// duplicate-row error if the table already has a row for this version.
 		if (currentVersion < SERVER_LOCAL_SCHEMA_VERSION) {
 			this.db
 				.prepare(
-					"INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+					"INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
 				)
 				.run(SERVER_LOCAL_SCHEMA_VERSION, Date.now());
+			if (currentVersion === 0) {
+				logger.log(
+					`[db] Server local DB: created at v${SERVER_LOCAL_SCHEMA_VERSION}`,
+				);
+			}
 		}
 	}
 

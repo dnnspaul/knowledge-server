@@ -119,7 +119,7 @@ export interface IServerLocalDB {
 /**
  * Knowledge store interface — the extracted knowledge graph.
  *
- * Implemented by both SQLiteKnowledgeStore and PostgresKnowledgeStore.
+ * Implemented by SQLiteKnowledgeStore and PostgresKnowledgeStore.
  * A knowledge server can have multiple stores (e.g. one SQLite for "work",
  * one Postgres for "personal"), each holding their own knowledge_entry rows.
  *

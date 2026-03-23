@@ -800,7 +800,10 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			2,
 		);
 
+		// reinitialize() clears knowledge tables; reinitializeLocal() clears staging.
+		// In the legacy combined IKnowledgeDB setup (as used here), call both.
 		await db.reinitialize();
+		await db.reinitializeLocal();
 
 		expect((await db.getStats()).total).toBe(0);
 		expect(await db.getEmbeddingMetadata()).toBeNull();
