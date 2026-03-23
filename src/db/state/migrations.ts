@@ -156,7 +156,7 @@ function copyKnowledgeDbStagingTables(db: Database): void {
 				const rows = src.prepare("SELECT * FROM daemon_cursor").all();
 				const insert = db.prepare(
 					`INSERT OR REPLACE INTO daemon_cursor (source, last_message_time_created, last_uploaded_at)
-           VALUES (?, ?, ?)`,
+             VALUES (?, ?, ?)`,
 				);
 				for (const r of rows as Record<string, SQLQueryBindings>[]) {
 					insert.run(
@@ -166,6 +166,43 @@ function copyKnowledgeDbStagingTables(db: Database): void {
 					);
 				}
 				logger.log(`[migration] Copied ${rows.length} daemon_cursor rows.`);
+			} else if (tables.has("source_cursor")) {
+				// Pre-v12 installs had source_cursor instead of daemon_cursor.
+				// In the pre-daemon world, "consolidated" and "uploaded" were the same
+				// operation — the server read source files directly. source_cursor tracked
+				// the same high-water mark that daemon_cursor now tracks (last seen
+				// message timestamp per source). Seed daemon_cursor from it so the daemon
+				// doesn't re-upload the full history on first run after upgrade.
+				//
+				// source_cursor schema (v6–v12): (source, user_id, last_message_time_created, last_consolidated_at)
+				// daemon_cursor schema (v12+):   (source, last_message_time_created, last_uploaded_at)
+				//
+				// Column mapping:
+				//   source_cursor.last_message_time_created → daemon_cursor.last_message_time_created (direct)
+				//   source_cursor.last_consolidated_at      → daemon_cursor.last_uploaded_at (closest equivalent)
+				//
+				// Only seed if daemon_cursor is currently empty — avoids overwriting a
+				// partially-populated cursor from a partial v12 migration.
+				const existingCursor = db
+					.prepare("SELECT COUNT(*) as n FROM daemon_cursor")
+					.get() as { n: number };
+				if (existingCursor.n === 0) {
+					const rows = src.prepare("SELECT * FROM source_cursor").all();
+					const insert = db.prepare(
+						`INSERT OR IGNORE INTO daemon_cursor (source, last_message_time_created, last_uploaded_at)
+               VALUES (?, ?, ?)`,
+					);
+					for (const r of rows as Record<string, SQLQueryBindings>[]) {
+						insert.run(
+							r.source,
+							r.last_message_time_created ?? 0,
+							r.last_consolidated_at ?? 0,
+						);
+					}
+					logger.log(
+						`[migration] Seeded ${rows.length} daemon_cursor rows from source_cursor (pre-v12 upgrade path).`,
+					);
+				}
 			}
 
 			// Stamp atomically with the data — a crash before this line rolls back
