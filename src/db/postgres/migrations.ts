@@ -273,4 +273,21 @@ export const PG_MIGRATIONS: Array<{
 			}
 		},
 	},
+	{
+		version: 14,
+		label:
+			"drop staging tables from Postgres — they now live in server.db (ServerLocalDB)",
+		up: async (sql: TxSql) => {
+			// consolidated_episode, consolidation_state, pending_episodes all moved to
+			// server.db (local SQLite). Drop them from Postgres so the schema is clean.
+			// These tables may not exist on fresh installs — DROP IF EXISTS is safe.
+			//
+			// IMPORTANT: any data in consolidated_episode here should have already been
+			// migrated to server.db by ServerLocalDB.migrateFromKnowledgeDb() on startup.
+			// The idempotency history from these rows is preserved in server.db.
+			await sql`DROP TABLE IF EXISTS pending_episodes CASCADE`;
+			await sql`DROP TABLE IF EXISTS consolidated_episode CASCADE`;
+			await sql`DROP TABLE IF EXISTS consolidation_state CASCADE`;
+		},
+	},
 ];

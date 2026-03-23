@@ -77,7 +77,14 @@
  *   user_id. Knowledge data is not affected.
  */
 
-export const SCHEMA_VERSION = 13;
+/**
+ * v14: Drop staging tables from Postgres knowledge stores.
+ * - consolidated_episode, consolidation_state, pending_episodes now live
+ *   exclusively in server.db (ServerLocalDB local SQLite).
+ * - These tables are dropped from Postgres on migration.
+ * - SQLite knowledge.db: no change — these tables were already handled in v13.
+ */
+export const SCHEMA_VERSION = 14;
 
 /**
  * Expected columns for each table, derived from the DDL below.

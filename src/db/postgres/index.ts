@@ -210,11 +210,6 @@ export class PostgresKnowledgeDB implements IKnowledgeStore {
 				logger.warn(
 					`[pg-db] Schema still at v${migratedTo} after migrations, code expects v${SCHEMA_VERSION}. Dropping and recreating all tables. All existing knowledge data has been cleared.`,
 				);
-				logger.warn(
-					"[pg-db] Destructive reset: consolidated_episode will be dropped — " +
-						"all processed episode records are lost. Previously consolidated sessions " +
-						"will be re-processed on next run and may produce duplicate knowledge entries.",
-				);
 				// Wrap the entire drop+recreate in a transaction so a crash mid-way
 				// leaves the DB at the last committed migration version (re-runnable
 				// on restart) rather than with a partially-dropped schema.
@@ -223,9 +218,13 @@ export class PostgresKnowledgeDB implements IKnowledgeStore {
 					await sql`DROP TABLE IF EXISTS knowledge_cluster CASCADE`;
 					await sql`DROP TABLE IF EXISTS knowledge_relation CASCADE`;
 					await sql`DROP TABLE IF EXISTS knowledge_entry CASCADE`;
+					await sql`DROP TABLE IF EXISTS embedding_metadata CASCADE`;
+					// Drop staging tables that may exist from pre-v14 Postgres schemas.
+					// These now live in server.db (ServerLocalDB) — safe to drop here
+					// since migrateFromKnowledgeDb() would have already copied them.
+					await sql`DROP TABLE IF EXISTS pending_episodes CASCADE`;
 					await sql`DROP TABLE IF EXISTS consolidated_episode CASCADE`;
 					await sql`DROP TABLE IF EXISTS consolidation_state CASCADE`;
-					await sql`DROP TABLE IF EXISTS embedding_metadata CASCADE`;
 					await sql`DROP TABLE IF EXISTS schema_version CASCADE`;
 					await sql.unsafe(PG_CREATE_TABLES);
 					await sql`

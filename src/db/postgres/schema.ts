@@ -73,37 +73,10 @@ export const PG_CREATE_TABLES = `
   CREATE INDEX IF NOT EXISTS idx_relation_target ON knowledge_relation(target_id);
   CREATE INDEX IF NOT EXISTS idx_relation_type ON knowledge_relation(type);
 
-  -- Consolidation state (global counters + last-run timestamp).
-  CREATE TABLE IF NOT EXISTS consolidation_state (
-    id INTEGER PRIMARY KEY DEFAULT 1 CHECK(id = 1),
-    last_consolidated_at BIGINT NOT NULL DEFAULT 0,
-    total_sessions_processed INTEGER NOT NULL DEFAULT 0,
-    total_entries_created INTEGER NOT NULL DEFAULT 0,
-    total_entries_updated INTEGER NOT NULL DEFAULT 0
-  );
-
-  INSERT INTO consolidation_state (id, last_consolidated_at, total_sessions_processed, total_entries_created, total_entries_updated)
-  VALUES (1, 0, 0, 0, 0)
-  ON CONFLICT (id) DO NOTHING;
-
-  -- Per-episode processing log — idempotency guard for consolidation.
-  -- user_id removed in v13: consolidation drains all pending episodes regardless
-  -- of origin; user_id on pending_episodes is provenance metadata only.
-  CREATE TABLE IF NOT EXISTS consolidated_episode (
-    source TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    start_message_id TEXT NOT NULL,
-    end_message_id TEXT NOT NULL,
-    content_type TEXT NOT NULL,
-    processed_at BIGINT NOT NULL,
-    entries_created INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (source, session_id, start_message_id, end_message_id)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_episode_source_session ON consolidated_episode(source, session_id);
-  CREATE INDEX IF NOT EXISTS idx_episode_processed ON consolidated_episode(processed_at);
-
   -- Synthesis clusters — persistent embedding-similarity groups of knowledge entries.
+  -- Note: consolidation_state, consolidated_episode, pending_episodes, and daemon_cursor
+  -- are NOT created here — they live in server.db (ServerLocalDB, local SQLite).
+  -- See src/db/server-local/schema.ts for those tables.
   CREATE TABLE IF NOT EXISTS knowledge_cluster (
     id TEXT PRIMARY KEY,
     centroid BYTEA NOT NULL,
@@ -131,26 +104,4 @@ export const PG_CREATE_TABLES = `
     recorded_at BIGINT NOT NULL
   );
 
-  -- Pending episodes — staging table written by the daemon, drained by the server.
-  -- daemon_cursor is local-SQLite-only and is NOT created in Postgres.
-  CREATE TABLE IF NOT EXISTS pending_episodes (
-    id               TEXT    PRIMARY KEY,
-    user_id          TEXT    NOT NULL DEFAULT 'default',
-    source           TEXT    NOT NULL,
-    session_id       TEXT    NOT NULL,
-    start_message_id TEXT    NOT NULL,
-    end_message_id   TEXT    NOT NULL,
-    session_title    TEXT    NOT NULL DEFAULT '',
-    project_name     TEXT    NOT NULL DEFAULT '',
-    directory        TEXT    NOT NULL DEFAULT '',
-    content          TEXT    NOT NULL,
-    content_type     TEXT    NOT NULL CHECK(content_type IN ('messages', 'compaction_summary', 'document')),
-    session_timestamp BIGINT  NOT NULL DEFAULT 0,
-    max_message_time  BIGINT  NOT NULL DEFAULT 0,
-    approx_tokens    INTEGER NOT NULL DEFAULT 0,
-    uploaded_at      BIGINT  NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_pending_source_user_time
-    ON pending_episodes(source, user_id, max_message_time);
 `;

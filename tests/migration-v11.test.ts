@@ -1,13 +1,14 @@
 /**
- * Tests for the SQLite migration chain from v10 → v13.
+ * Tests for the SQLite migration chain from v10 → v14.
  *
  * Creates a v10-schema database (source_cursor and consolidated_episode
  * without user_id), opens it with KnowledgeDB (which triggers migrations
- * v11 → v12 → v13), and verifies the resulting schema is correct.
+ * v11 → v14), and verifies the resulting schema is correct.
  *
  * v11 added user_id to both tables; v13 removed source_cursor entirely and
- * removed user_id from consolidated_episode. This test verifies the full
- * migration chain produces the correct final schema.
+ * removed user_id from consolidated_episode; v14 is a no-op for knowledge.db
+ * (staging tables moved to server.db). This test verifies the full migration
+ * chain produces the correct final schema version.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -85,7 +86,7 @@ function createV10Fixture(dbPath: string): void {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe("v11 SQLite migration (v10 → v11)", () => {
+describe("v11 SQLite migration chain (v10 → v14)", () => {
 	let tempDir: string;
 	let dbPath: string;
 	let db: KnowledgeDB;
@@ -155,7 +156,7 @@ describe("v11 SQLite migration (v10 → v11)", () => {
 		await serverLocalDb.close();
 	});
 
-	it("stamps schema version 13 after full migration chain", async () => {
+	it("stamps schema version 14 after full migration chain", async () => {
 		db = new KnowledgeDB(dbPath);
 
 		const raw = new Database(dbPath, { readonly: true });
@@ -164,7 +165,7 @@ describe("v11 SQLite migration (v10 → v11)", () => {
 			.get() as { v: number };
 		raw.close();
 
-		expect(row.v).toBe(13);
+		expect(row.v).toBe(14);
 	});
 
 	it("migrateFromKnowledgeDb copies legacy consolidated_episode rows to server.db", async () => {

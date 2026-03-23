@@ -272,4 +272,14 @@ export const MIGRATIONS: Array<{
 			}
 		},
 	},
+	{
+		version: 14,
+		label: "staging tables moved to server.db — no-op for knowledge.db (SQLite)",
+		up: (_db) => {
+			// SQLite knowledge.db: staging tables (consolidated_episode, consolidation_state,
+			// pending_episodes) were already handled in v13 and remain as orphaned legacy
+			// tables until migrateFromKnowledgeDb() copies them to server.db.
+			// No DDL changes needed for SQLite knowledge stores.
+		},
+	},
 ];
