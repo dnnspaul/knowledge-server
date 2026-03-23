@@ -26,7 +26,11 @@ import {
 const fileConfig = (() => {
 	try {
 		return loadConfigFile(DEFAULT_CONFIG_PATH) ?? DEFAULT_CONFIG;
-	} catch {
+	} catch (err) {
+		// Malformed config.jsonc — warn so user knows why defaults are used.
+		console.warn(
+			`[setup-tool] Could not parse config.jsonc: ${err instanceof Error ? err.message : String(err)}. Using defaults for port/host.`,
+		);
 		return DEFAULT_CONFIG;
 	}
 })();
