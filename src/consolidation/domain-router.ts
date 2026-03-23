@@ -84,10 +84,23 @@ export class DomainRouter {
 		this.stores = stores;
 		this.fallbackStore = fallbackStore;
 		this.unavailableStoreIds = unavailableStoreIds;
-		// Derive fallback store ID from the stores map — safer than hardcoding "default"
-		// since the user can name their store anything in config.jsonc.
-		this.fallbackStoreId =
-			[...stores.entries()].find(([, db]) => db === fallbackStore)?.[0] ?? "";
+		// Derive fallback store ID from the stores map — avoids hardcoding a name,
+		// since users can name their stores anything in config.jsonc. Without this,
+		// a store named "personal" (not "default") would never be detected as
+		// unavailable in single-store mode, silently suppressing the skip signal.
+		let fallbackStoreId = "";
+		for (const [id, db] of stores) {
+			if (db === fallbackStore) {
+				fallbackStoreId = id;
+				break;
+			}
+		}
+		if (!fallbackStoreId) {
+			logger.warn(
+				"[domain-router] fallbackStore not found in stores map — unavailability check will be skipped for single-store mode.",
+			);
+		}
+		this.fallbackStoreId = fallbackStoreId;
 	}
 
 	/**
