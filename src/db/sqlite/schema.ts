@@ -121,41 +121,11 @@ export const EXPECTED_TABLE_COLUMNS: Readonly<
 		"created_at",
 	],
 	knowledge_cluster_member: ["cluster_id", "entry_id", "joined_at"],
-	consolidation_state: [
-		"id",
-		"last_consolidated_at",
-		"total_sessions_processed",
-		"total_entries_created",
-		"total_entries_updated",
-	],
-	consolidated_episode: [
-		"source",
-		"session_id",
-		"start_message_id",
-		"end_message_id",
-		"content_type",
-		"processed_at",
-		"entries_created",
-	],
 	embedding_metadata: ["id", "model", "dimensions", "recorded_at"],
-	pending_episodes: [
-		"id",
-		"user_id",
-		"source",
-		"session_id",
-		"start_message_id",
-		"end_message_id",
-		"session_title",
-		"project_name",
-		"directory",
-		"content",
-		"content_type",
-		"session_timestamp",
-		"max_message_time",
-		"approx_tokens",
-		"uploaded_at",
-	],
-	daemon_cursor: ["source", "last_message_time_created", "last_uploaded_at"],
+	// Note: consolidation_state, consolidated_episode, pending_episodes, daemon_cursor
+	// have moved to server.db (ServerLocalDB) in v13+. They are no longer created
+	// in knowledge.db — omitting them here prevents false-positive drift warnings
+	// on new-architecture installs where these tables are absent from knowledge.db.
 };
 
 export const CREATE_TABLES = `
@@ -216,37 +186,6 @@ export const CREATE_TABLES = `
   CREATE INDEX IF NOT EXISTS idx_relation_target ON knowledge_relation(target_id);
   CREATE INDEX IF NOT EXISTS idx_relation_type ON knowledge_relation(type);
 
-  -- Consolidation state (global counters + last-run timestamp).
-  -- last_message_time_created has been removed — use source_cursor instead.
-  CREATE TABLE IF NOT EXISTS consolidation_state (
-    id INTEGER PRIMARY KEY DEFAULT 1 CHECK(id = 1),  -- singleton row
-    last_consolidated_at INTEGER NOT NULL DEFAULT 0,
-    total_sessions_processed INTEGER NOT NULL DEFAULT 0,
-    total_entries_created INTEGER NOT NULL DEFAULT 0,
-    total_entries_updated INTEGER NOT NULL DEFAULT 0
-  );
-
-  INSERT OR IGNORE INTO consolidation_state (id, last_consolidated_at, total_sessions_processed, total_entries_created, total_entries_updated)
-  VALUES (1, 0, 0, 0, 0);
-
-  -- Per-episode processing log — idempotency guard for consolidation.
-  -- Keyed by (source, session_id, start_message_id, end_message_id).
-  -- user_id removed in v13: consolidation drains all pending episodes regardless
-  -- of origin; user_id on pending_episodes is provenance metadata only.
-  CREATE TABLE IF NOT EXISTS consolidated_episode (
-    source           TEXT    NOT NULL,
-    session_id       TEXT    NOT NULL,
-    start_message_id TEXT    NOT NULL,
-    end_message_id   TEXT    NOT NULL,
-    content_type     TEXT    NOT NULL,
-    processed_at     INTEGER NOT NULL,
-    entries_created  INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (source, session_id, start_message_id, end_message_id)
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_episode_source_session ON consolidated_episode(source, session_id);
-  CREATE INDEX IF NOT EXISTS idx_episode_processed ON consolidated_episode(processed_at);
-
   -- Synthesis clusters — persistent embedding-similarity groups of knowledge entries.
   -- Rebuilt each consolidation run (greedy agglomerative clustering). Matched to
   -- existing rows by centroid similarity so stable clusters keep their ID across runs.
@@ -282,39 +221,7 @@ export const CREATE_TABLES = `
     recorded_at INTEGER NOT NULL
   );
 
-  -- Pending episodes — staging table written by the daemon, drained by the server.
-  -- Decouples episode reading (done locally by the daemon on the user's machine)
-  -- from consolidation (done by the server, which may run on a different machine).
-  -- user_id is set by the daemon from KNOWLEDGE_USER_ID / hostname.
-  -- Rows are deleted after successful consolidation.
-  CREATE TABLE IF NOT EXISTS pending_episodes (
-    id               TEXT    PRIMARY KEY,  -- UUID assigned by daemon
-    user_id          TEXT    NOT NULL DEFAULT 'default',
-    source           TEXT    NOT NULL,     -- 'opencode', 'claude-code', etc.
-    session_id       TEXT    NOT NULL,
-    start_message_id TEXT    NOT NULL,
-    end_message_id   TEXT    NOT NULL,
-    session_title    TEXT    NOT NULL DEFAULT '',
-    project_name     TEXT    NOT NULL DEFAULT '',
-    directory        TEXT    NOT NULL DEFAULT '',
-    content          TEXT    NOT NULL,
-    content_type     TEXT    NOT NULL CHECK(content_type IN ('messages', 'compaction_summary', 'document')),
-    session_timestamp INTEGER NOT NULL DEFAULT 0,
-    max_message_time  INTEGER NOT NULL DEFAULT 0,
-    approx_tokens    INTEGER NOT NULL DEFAULT 0,
-    uploaded_at      INTEGER NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_pending_source_user_time
-    ON pending_episodes(source, user_id, max_message_time);
-
-  -- Daemon cursor — local high-water mark per source, tracking what has been uploaded.
-  -- Always stored in the local SQLite DB on the user's machine, never in shared Postgres.
-  -- Tracks "what have I uploaded" independently from consolidated_episode ("what has been
-  -- consolidated"). Always machine-local, so no user_id scoping needed.
-  CREATE TABLE IF NOT EXISTS daemon_cursor (
-    source                   TEXT    PRIMARY KEY,
-    last_message_time_created INTEGER NOT NULL DEFAULT 0,
-    last_uploaded_at          INTEGER NOT NULL DEFAULT 0
-  );
+  -- Note: pending_episodes, daemon_cursor, consolidated_episode, and
+  -- consolidation_state are NOT created here. As of v13, these staging and
+  -- bookkeeping tables live in server.db (ServerLocalDB), not in knowledge.db.
 `;

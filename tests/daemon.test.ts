@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EpisodeUploader } from "../src/daemon/uploader";
 import { KnowledgeDB } from "../src/db/sqlite/index";
+import { ServerLocalDB } from "../src/db/server-local/index";
 import { PendingEpisodesReader } from "../src/consolidation/readers/pending";
 import type { IEpisodeReader, PendingEpisode } from "../src/types";
 
@@ -59,11 +60,11 @@ function makeMockReader(
 // ── setup ─────────────────────────────────────────────────────────────────────
 
 let tempDir: string;
-let db: KnowledgeDB;
+let db: ServerLocalDB;
 
 beforeEach(() => {
 	tempDir = mkdtempSync(join(tmpdir(), "ks-daemon-test-"));
-	db = new KnowledgeDB(join(tempDir, "test.db"));
+	db = new ServerLocalDB(join(tempDir, "server.db"));
 });
 
 afterEach(async () => {

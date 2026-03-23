@@ -1,8 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
 import pkg from "../../package.json" with { type: "json" };
-import { ActivationEngine } from "../activation/activate.js";
-import { ConsolidationEngine } from "../consolidation/consolidate.js";
-import { PendingEpisodesReader } from "../consolidation/readers/pending.js";
 import { StoreRegistry } from "../db/store-registry.js";
 
 /**
@@ -43,16 +40,13 @@ export async function runStatus(pidPath: string): Promise<void> {
 		const stats = await db.getStats();
 		const state = await serverLocalDb.getConsolidationState();
 
-		const activation = new ActivationEngine(db, registry.readStores());
-		const consolidation = new ConsolidationEngine(
-			db,
-			serverLocalDb,
-			activation,
-			[new PendingEpisodesReader(serverLocalDb)],
-			registry.domainRouter,
-		);
-		const { pendingSessions } = await consolidation.checkPending();
-		consolidation.close();
+		// Count pending sessions directly from server.db — avoids constructing
+		// a full ConsolidationEngine (which costs LLM/embedding client setup)
+		// and avoids the stale-1 bug from PendingEpisodesReader.countNewSessions()
+		// when prepare() has not been called.
+		const pendingRows = await serverLocalDb.getPendingEpisodes(0);
+		const pendingSessionIds = new Set(pendingRows.map((r) => r.sessionId));
+		const pendingSessions = pendingSessionIds.size;
 
 		console.log("Knowledge Server Status");
 		console.log("───────────────────────────────────────");

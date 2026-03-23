@@ -9,6 +9,7 @@ import { createApp } from "../src/api/server";
 import type { ConsolidationEngine } from "../src/consolidation/consolidate";
 import type { KnowledgeDB } from "../src/db/sqlite/index";
 import { KnowledgeDB as KnowledgeDBImpl } from "../src/db/sqlite/index";
+import { ServerLocalDB } from "../src/db/server-local/index";
 
 // Intentionally static string — production uses a random token generated at startup.
 const TEST_ADMIN_TOKEN = "test-admin-token-abc123";
@@ -20,12 +21,15 @@ describe("HTTP API", () => {
 	let activation: ActivationEngine;
 	let embedSpy: ReturnType<typeof spyOn>;
 
+	let serverLocalDb: ServerLocalDB;
+
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "knowledge-api-test-"));
 		db = new KnowledgeDBImpl(
 			join(tempDir, "test.db"),
 			join(tempDir, "opencode-fake.db"),
 		);
+		serverLocalDb = new ServerLocalDB(join(tempDir, "server.db"));
 		activation = new ActivationEngine(db);
 		embedSpy = spyOn(activation.embeddings, "embed").mockResolvedValue([
 			0.11, 0.22, 0.33,
@@ -49,11 +53,18 @@ describe("HTTP API", () => {
 			unlock: () => {},
 			close: () => {},
 		} as unknown as ConsolidationEngine;
-		app = createApp(db, db, activation, consolidation, TEST_ADMIN_TOKEN);
+		app = createApp(
+			db,
+			serverLocalDb,
+			activation,
+			consolidation,
+			TEST_ADMIN_TOKEN,
+		);
 	});
 
 	afterEach(async () => {
 		await db.close();
+		await serverLocalDb.close();
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
@@ -248,6 +259,9 @@ describe("HTTP API", () => {
 			join(tempDir, "busy.db"),
 			join(tempDir, "opencode-fake.db"),
 		);
+		const busyServerLocalDb = new ServerLocalDB(
+			join(tempDir, "busy-server.db"),
+		);
 		try {
 			const busyActivation = new ActivationEngine(busyDb);
 			const busyConsolidation = {
@@ -261,7 +275,7 @@ describe("HTTP API", () => {
 			} as unknown as ConsolidationEngine;
 			const busyApp = createApp(
 				busyDb,
-				busyDb,
+				busyServerLocalDb,
 				busyActivation,
 				busyConsolidation,
 				TEST_ADMIN_TOKEN,
@@ -273,6 +287,7 @@ describe("HTTP API", () => {
 			expect(res.status).toBe(409);
 		} finally {
 			await busyDb.close();
+			await busyServerLocalDb.close();
 		}
 	});
 

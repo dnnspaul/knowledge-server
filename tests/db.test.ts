@@ -4,19 +4,23 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KnowledgeDB } from "../src/db/sqlite/index";
+import { ServerLocalDB } from "../src/db/server-local/index";
 import { CREATE_TABLES, EXPECTED_TABLE_COLUMNS } from "../src/db/sqlite/schema";
 
 describe("KnowledgeDB", () => {
 	let db: KnowledgeDB;
+	let serverLocalDb: ServerLocalDB;
 	let tempDir: string;
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "knowledge-test-"));
 		db = new KnowledgeDB(join(tempDir, "test.db"));
+		serverLocalDb = new ServerLocalDB(join(tempDir, "server.db"));
 	});
 
 	afterEach(async () => {
 		await db.close();
+		await serverLocalDb.close();
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
@@ -187,24 +191,24 @@ describe("KnowledgeDB", () => {
 	});
 
 	it("should manage consolidation state", async () => {
-		const state = await db.getConsolidationState();
+		const state = await serverLocalDb.getConsolidationState();
 		expect(state.lastConsolidatedAt).toBe(0);
 		expect(state.totalSessionsProcessed).toBe(0);
 
-		await db.updateConsolidationState({
+		await serverLocalDb.updateConsolidationState({
 			lastConsolidatedAt: 1000000,
 			totalSessionsProcessed: 50,
 			totalEntriesCreated: 25,
 		});
 
-		const updated = await db.getConsolidationState();
+		const updated = await serverLocalDb.getConsolidationState();
 		expect(updated.lastConsolidatedAt).toBe(1000000);
 		expect(updated.totalSessionsProcessed).toBe(50);
 		expect(updated.totalEntriesCreated).toBe(25);
 	});
 
 	it("should record and retrieve episode ranges", async () => {
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-start-1",
@@ -212,7 +216,7 @@ describe("KnowledgeDB", () => {
 			"messages",
 			3,
 		);
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-start-2",
@@ -220,7 +224,7 @@ describe("KnowledgeDB", () => {
 			"compaction_summary",
 			1,
 		);
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"opencode",
 			"session-2",
 			"msg-start-3",
@@ -229,7 +233,7 @@ describe("KnowledgeDB", () => {
 			0,
 		);
 
-		const ranges = await db.getProcessedEpisodeRanges([
+		const ranges = await serverLocalDb.getProcessedEpisodeRanges([
 			"session-1",
 			"session-2",
 		]);
@@ -263,7 +267,7 @@ describe("KnowledgeDB", () => {
 	});
 
 	it("episodes from different sources for the same session are both returned", async () => {
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-a",
@@ -271,7 +275,7 @@ describe("KnowledgeDB", () => {
 			"messages",
 			2,
 		);
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"claude-code",
 			"session-1",
 			"msg-a",
@@ -280,13 +284,13 @@ describe("KnowledgeDB", () => {
 			2,
 		);
 
-		const ranges = await db.getProcessedEpisodeRanges(["session-1"]);
+		const ranges = await serverLocalDb.getProcessedEpisodeRanges(["session-1"]);
 		// Both source entries are returned — idempotency is per (source, session, start, end)
 		expect(ranges.get("session-1")).toHaveLength(2);
 	});
 
 	it("recordEpisode is idempotent — duplicate inserts are ignored", async () => {
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-a",
@@ -294,7 +298,7 @@ describe("KnowledgeDB", () => {
 			"messages",
 			2,
 		);
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-a",
@@ -303,12 +307,14 @@ describe("KnowledgeDB", () => {
 			2,
 		);
 
-		const ranges = await db.getProcessedEpisodeRanges(["session-1"]);
+		const ranges = await serverLocalDb.getProcessedEpisodeRanges(["session-1"]);
 		expect(ranges.get("session-1")).toHaveLength(1);
 	});
 
 	it("getProcessedEpisodeRanges returns empty map for unknown session", async () => {
-		const ranges = await db.getProcessedEpisodeRanges(["no-such-session"]);
+		const ranges = await serverLocalDb.getProcessedEpisodeRanges([
+			"no-such-session",
+		]);
 		expect(ranges.size).toBe(0);
 	});
 

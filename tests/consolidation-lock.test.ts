@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { ActivationEngine } from "../src/activation/activate";
 import { ConsolidationEngine } from "../src/consolidation/consolidate";
 import { KnowledgeDB } from "../src/db/sqlite/index";
+import { ServerLocalDB } from "../src/db/server-local/index";
 
 // ── SQLite lock ───────────────────────────────────────────────────────────────
 
@@ -64,18 +65,21 @@ describe("KnowledgeDB.tryAcquireConsolidationLock", () => {
 describe("ConsolidationEngine.consolidate() lock behaviour", () => {
 	let tempDir: string;
 	let db: KnowledgeDB;
+	let serverLocalDb: ServerLocalDB;
 	let engine: ConsolidationEngine;
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "ks-engine-lock-test-"));
 		db = new KnowledgeDB(join(tempDir, "test.db"));
+		serverLocalDb = new ServerLocalDB(join(tempDir, "server.db"));
 		const activation = new ActivationEngine(db);
-		engine = new ConsolidationEngine(db, db, activation, [], null);
+		engine = new ConsolidationEngine(db, serverLocalDb, activation, [], null);
 	});
 
 	afterEach(async () => {
 		mock.restore();
 		await db.close();
+		await serverLocalDb.close();
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 

@@ -22,6 +22,7 @@ import { ConsolidationEngine } from "../src/consolidation/consolidate";
 import { ConsolidationLLM } from "../src/consolidation/llm";
 import type { Episode, IEpisodeReader } from "../src/types";
 import { KnowledgeDB } from "../src/db/sqlite/index";
+import { ServerLocalDB } from "../src/db/server-local/index";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,7 @@ class MockEpisodeReader implements IEpisodeReader {
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
 let db: KnowledgeDB;
+let serverLocalDb: ServerLocalDB;
 let activation: ActivationEngine;
 let engine: ConsolidationEngine;
 let mockReader: MockEpisodeReader;
@@ -64,9 +66,10 @@ let tempDir: string;
 beforeEach(() => {
 	tempDir = mkdtempSync(join(tmpdir(), "ks-consolidation-test-"));
 	db = new KnowledgeDB(join(tempDir, "test.db"));
+	serverLocalDb = new ServerLocalDB(join(tempDir, "server.db"));
 	activation = new ActivationEngine(db);
 	mockReader = new MockEpisodeReader();
-	engine = new ConsolidationEngine(db, db, activation, [mockReader]);
+	engine = new ConsolidationEngine(db, serverLocalDb, activation, [mockReader]);
 });
 
 afterEach(async () => {
@@ -74,6 +77,7 @@ afterEach(async () => {
 	// (e.g. ConsolidationLLM.prototype.extractKnowledge mocks must not affect llm.test.ts).
 	mock.restore();
 	await db.close();
+	await serverLocalDb.close();
 	rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -1348,8 +1352,8 @@ describe("ConsolidationEngine.consolidate() — full pipeline with mocked LLM + 
 
 		await engine.consolidate();
 
-		// The episode range must now be recorded in the DB under the "opencode" source
-		const ranges = await db.getProcessedEpisodeRanges(["session-1"]);
+		// The episode range must now be recorded in server.db under the "opencode" source
+		const ranges = await serverLocalDb.getProcessedEpisodeRanges(["session-1"]);
 		const sessionRanges = ranges.get("session-1") ?? [];
 		const recorded = sessionRanges.find(
 			(r) =>

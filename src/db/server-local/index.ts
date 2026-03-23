@@ -525,10 +525,6 @@ export class ServerLocalDB implements IServerLocalDB {
 		})();
 	}
 
-	get isConsolidating(): boolean {
-		return this._consolidationLockHeld;
-	}
-
 	async close(): Promise<void> {
 		this.db.close();
 	}

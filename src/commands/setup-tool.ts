@@ -14,6 +14,24 @@ import { dirname, join, resolve } from "node:path";
 // @ts-ignore — Bun supports JSON imports natively
 import pkg from "../../package.json" with { type: "json" };
 import { config } from "../config.js";
+import {
+	DEFAULT_CONFIG,
+	DEFAULT_CONFIG_PATH,
+	loadConfigFile,
+} from "../config-file.js";
+
+// Resolve port/host from config.jsonc (with env var override via KNOWLEDGE_PORT/KNOWLEDGE_HOST).
+// Falls back to the env-var-only config for installs that have no config.jsonc yet.
+// Evaluated once at module load — setup-tool is a CLI command, not a long-running server.
+const fileConfig = (() => {
+	try {
+		return loadConfigFile(DEFAULT_CONFIG_PATH) ?? DEFAULT_CONFIG;
+	} catch {
+		return DEFAULT_CONFIG;
+	}
+})();
+const resolvedPort = fileConfig.port;
+const resolvedHost = fileConfig.host;
 
 /**
  * `knowledge-server setup-tool <opencode|claude-code|cursor|codex>`
@@ -78,8 +96,8 @@ function makeOpenCodeMcpEntry(): { command: string[] } & Record<
 > {
 	const env = {
 		// Thin HTTP proxy — only needs to locate the knowledge HTTP server.
-		KNOWLEDGE_HOST: config.host,
-		KNOWLEDGE_PORT: String(config.port),
+		KNOWLEDGE_HOST: resolvedHost,
+		KNOWLEDGE_PORT: String(resolvedPort),
 	};
 
 	if (isSourceInstall()) {
@@ -457,8 +475,8 @@ function makeClaudeMcpEntry() {
 	const env = {
 		// The MCP subcommand is a thin HTTP proxy — it only needs to locate the
 		// knowledge HTTP server. No LLM credentials required here.
-		KNOWLEDGE_HOST: config.host,
-		KNOWLEDGE_PORT: String(config.port),
+		KNOWLEDGE_HOST: resolvedHost,
+		KNOWLEDGE_PORT: String(resolvedPort),
 	};
 	if (isSourceInstall()) {
 		const projectDir = getProjectDir();
@@ -500,7 +518,7 @@ function makeClaudeMcpEntry() {
  * support matchers (fires on every prompt), so matcher is omitted.
  */
 function claudeHookUrl(): string {
-	return `http://${config.host}:${config.port}/hooks/claude-code/user-prompt`;
+	return `http://${resolvedHost}:${resolvedPort}/hooks/claude-code/user-prompt`;
 }
 
 function makeClaudeHookEntry() {
@@ -672,8 +690,8 @@ Setup complete!`);
  */
 function makeCursorMcpEntry() {
 	const env = {
-		KNOWLEDGE_HOST: config.host,
-		KNOWLEDGE_PORT: String(config.port),
+		KNOWLEDGE_HOST: resolvedHost,
+		KNOWLEDGE_PORT: String(resolvedPort),
 	};
 
 	if (isSourceInstall()) {
@@ -826,7 +844,7 @@ export function setupCodex(): void {
 	const block = `
 [mcp_servers.knowledge]
 ${commandToml}
-env = { KNOWLEDGE_HOST = "${config.host}", KNOWLEDGE_PORT = "${config.port}" }
+env = { KNOWLEDGE_HOST = "${resolvedHost}", KNOWLEDGE_PORT = "${resolvedPort}" }
 `;
 
 	// Check if the section already exists (simple string match on the header).
@@ -889,8 +907,8 @@ Setup complete!`);
  */
 function makeVSCodeMcpEntry() {
 	const env = {
-		KNOWLEDGE_HOST: config.host,
-		KNOWLEDGE_PORT: String(config.port),
+		KNOWLEDGE_HOST: resolvedHost,
+		KNOWLEDGE_PORT: String(resolvedPort),
 	};
 
 	if (isSourceInstall()) {
