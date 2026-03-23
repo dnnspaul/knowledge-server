@@ -118,6 +118,7 @@ async function downloadBinary(
 	url: string,
 	targetPath: string,
 	label: string,
+	silent = false,
 ): Promise<string> {
 	const tmpPath = join(
 		dirname(targetPath),
@@ -143,7 +144,7 @@ async function downloadBinary(
 	// compatibility layer so we can pipe through node:zlib.createGunzip().
 	const fileStream = createWriteStream(tmpPath);
 	let bytesWritten = 0;
-	process.stdout.write(`  Downloading ${label}... `);
+	if (!silent) process.stdout.write(`  Downloading ${label}... `);
 
 	try {
 		// Bun supports piping Web ReadableStream to Node streams directly.
@@ -151,9 +152,11 @@ async function downloadBinary(
 		const gunzip = createGunzip();
 		gunzip.on("data", (chunk: Buffer) => {
 			bytesWritten += chunk.length;
-			// Overwrite the same line: \r moves to start of line without newline.
-			const mb = (bytesWritten / 1_048_576).toFixed(1);
-			process.stdout.write(`\r  Downloading ${label}... ${mb} MB`);
+			if (!silent) {
+				// Overwrite the same line: \r moves to start of line without newline.
+				const mb = (bytesWritten / 1_048_576).toFixed(1);
+				process.stdout.write(`\r  Downloading ${label}... ${mb} MB`);
+			}
 		});
 
 		// Convert Web ReadableStream to Node Readable for pipeline()
@@ -166,8 +169,10 @@ async function downloadBinary(
 		);
 		await pipeline(nodeReadable, gunzip, fileStream);
 
-		const mb = (bytesWritten / 1_048_576).toFixed(1);
-		process.stdout.write(`\r  Downloading ${label}... ${mb} MB — done\n`);
+		if (!silent) {
+			const mb = (bytesWritten / 1_048_576).toFixed(1);
+			process.stdout.write(`\r  Downloading ${label}... ${mb} MB — done\n`);
+		}
 	} catch (err) {
 		await unlink(tmpPath).catch(() => {});
 		throw err;
@@ -216,7 +221,8 @@ export async function downloadAndInstallDaemon(
 	const asset = `knowledge-daemon-${platform}`;
 	const url = `${GITHUB_RELEASES}/${targetVersion}/${asset}.gz`;
 
-	const tmpPath = await downloadBinary(url, destPath, asset);
+	// silent=true: suppress the \r progress display — caller logs via structured logger
+	const tmpPath = await downloadBinary(url, destPath, asset, true);
 	// Note: downloadBinary and installBinary each clean up tmpPath on their own
 	// failure paths. The only gap is a checksum mismatch after a successful
 	// download — handle that explicitly here.
