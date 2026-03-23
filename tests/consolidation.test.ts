@@ -66,7 +66,7 @@ beforeEach(() => {
 	db = new KnowledgeDB(join(tempDir, "test.db"));
 	activation = new ActivationEngine(db);
 	mockReader = new MockEpisodeReader();
-	engine = new ConsolidationEngine(db, activation, [mockReader]);
+	engine = new ConsolidationEngine(db, db, activation, [mockReader]);
 });
 
 afterEach(async () => {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../config.js";
-import type { IKnowledgeDB } from "../db/interface.js";
+import type { IServerLocalDB } from "../db/interface.js";
 import { logger } from "../logger.js";
 import type { Episode, IEpisodeReader, PendingEpisode } from "../types.js";
 
@@ -14,36 +14,32 @@ import type { Episode, IEpisodeReader, PendingEpisode } from "../types.js";
  *   4. Writes each episode to the pending_episodes staging table
  *   5. Advances the daemon cursor
  *
- * The daemon DB (targetDb) can be:
- *   - The same local SQLite as the consolidation engine (single-machine setup)
- *   - A remote Postgres (cross-device / multi-user setup)
+ * The daemon writes pending_episodes to the server-local DB (server.db), which
+ * is always co-located with the knowledge-server. The consolidation engine reads
+ * from there, extracts knowledge via LLM, and routes entries to the appropriate
+ * knowledge store (local SQLite or remote Postgres) based on domain configuration.
  *
- * In both cases the daemon cursor is always read/written from localDb (local SQLite),
- * while episodes are written to targetDb (which may be remote Postgres).
- * This keeps the cursor local even when episodes go to a remote DB.
+ * The daemon cursor (tracking what has been uploaded) is stored in the same
+ * server-local DB alongside pending_episodes.
  */
 export class EpisodeUploader {
 	private readonly readers: IEpisodeReader[];
-	private readonly localDb: IKnowledgeDB;
-	private readonly targetDb: IKnowledgeDB;
+	private readonly serverLocalDb: IServerLocalDB;
 	private readonly userId: string;
 
 	/**
-	 * @param readers   Episode readers — one per AI tool source.
-	 * @param localDb   Local SQLite DB for daemon cursor reads/writes.
-	 * @param targetDb  Target DB for pending_episodes writes. May be the same as
-	 *                  localDb (single-machine) or a remote Postgres instance.
-	 * @param userId    Stable user identifier (KNOWLEDGE_USER_ID or hostname).
+	 * @param readers       Episode readers — one per AI tool source.
+	 * @param serverLocalDb The server-local DB — holds pending_episodes and daemon_cursor.
+	 *                      This is always the DB on the same machine as the server.
+	 * @param userId        Stable user identifier (KNOWLEDGE_USER_ID or hostname).
 	 */
 	constructor(
 		readers: IEpisodeReader[],
-		localDb: IKnowledgeDB,
-		targetDb: IKnowledgeDB,
+		serverLocalDb: IServerLocalDB,
 		userId: string,
 	) {
 		this.readers = readers;
-		this.localDb = localDb;
-		this.targetDb = targetDb;
+		this.serverLocalDb = serverLocalDb;
 		this.userId = userId;
 	}
 
@@ -102,8 +98,8 @@ export class EpisodeUploader {
 	private async uploadSource(
 		reader: IEpisodeReader,
 	): Promise<{ episodes: number; sessions: number }> {
-		// Read daemon cursor from LOCAL db — always machine-local regardless of targetDb.
-		const cursor = await this.localDb.getDaemonCursor(reader.source);
+		// Daemon cursor and pending_episodes both live in the server-local DB.
+		const cursor = await this.serverLocalDb.getDaemonCursor(reader.source);
 
 		const candidateSessions = reader.getCandidateSessions(
 			cursor.lastMessageTimeCreated,
@@ -116,19 +112,14 @@ export class EpisodeUploader {
 
 		const candidateIds = candidateSessions.map((s) => s.id);
 
-		// Load already-uploaded episodes to skip re-uploading on restart.
-		// Scoped to candidateIds so we only check the sessions we're about to upload.
+		// Load already-uploaded/consolidated episodes to avoid re-uploading.
 		const processedRanges =
-			await this.targetDb.getProcessedEpisodeRanges(candidateIds);
+			await this.serverLocalDb.getProcessedEpisodeRanges(candidateIds);
 
 		// Also check what's already pending (uploaded but not yet consolidated).
-		// Scoped to cursor.lastMessageTimeCreated so we only scan the relevant
-		// window rather than the entire table — avoids O(table_size) fetches when
-		// pending rows accumulate (e.g. server is offline for days).
-		const alreadyPending = await this.targetDb.getPendingEpisodes(
+		const alreadyPending = await this.serverLocalDb.getPendingEpisodes(
 			cursor.lastMessageTimeCreated,
 		);
-		// Filter to this reader's source — getPendingEpisodes returns all sources.
 		const pendingSet = new Set(
 			alreadyPending
 				.filter((ep) => ep.source === reader.source)
@@ -143,7 +134,6 @@ export class EpisodeUploader {
 			return { episodes: 0, sessions: 0 };
 		}
 
-		// Filter out episodes already in pending_episodes
 		const newEpisodes = episodes.filter(
 			(ep) =>
 				!pendingSet.has(
@@ -153,6 +143,10 @@ export class EpisodeUploader {
 
 		let uploadedCount = 0;
 		const uploadedSessionIds = new Set<string>();
+		// Track the max message time of successfully uploaded episodes only.
+		// If the loop exits via break (insert failure), the cursor won't advance
+		// past the failed episode — it will be retried on the next daemon run.
+		let lastSuccessMaxTime = cursor.lastMessageTimeCreated;
 
 		for (const ep of newEpisodes) {
 			const pending: PendingEpisode = {
@@ -172,39 +166,42 @@ export class EpisodeUploader {
 				approxTokens: ep.approxTokens,
 				uploadedAt: Date.now(),
 			};
-			await this.targetDb.insertPendingEpisode(pending);
-			uploadedCount++;
-			uploadedSessionIds.add(ep.sessionId);
+			try {
+				await this.serverLocalDb.insertPendingEpisode(pending);
+				uploadedCount++;
+				uploadedSessionIds.add(ep.sessionId);
+				lastSuccessMaxTime = Math.max(lastSuccessMaxTime, ep.maxMessageTime);
+			} catch (err) {
+				logger.error(
+					`[daemon/${reader.source}] Failed to insert episode ${pending.id}: ${err}`,
+				);
+				// Stop processing — cursor won't advance past this episode.
+				break;
+			}
 		}
 
 		// Advance daemon cursor — mirrors consolidation engine's boundary-safety logic.
+		// Uses lastSuccessMaxTime (not all episodes) so a failed insert doesn't
+		// silently advance the cursor past episodes that were never uploaded.
 		const lastSession = candidateSessions[candidateSessions.length - 1];
 		const hitBatchLimit =
 			candidateSessions.length === config.consolidation.maxSessionsPerRun;
 
-		const maxTime = episodes.reduce(
-			(max, ep) => Math.max(max, ep.maxMessageTime),
-			cursor.lastMessageTimeCreated,
-		);
+		const maxTime = lastSuccessMaxTime;
 
 		let newCursor = maxTime;
 		if (hitBatchLimit) {
 			const cap = lastSession.maxMessageTime - 1;
-			// Only cap if it would not move the cursor backward.
 			if (cap > cursor.lastMessageTimeCreated) {
 				newCursor = Math.min(newCursor, cap);
 			}
 		} else {
-			// Batch not full — advance past all candidates so sessions that produced
-			// no episodes don't re-appear as candidates next run.
 			newCursor = Math.max(newCursor, lastSession.maxMessageTime);
 		}
 
-		// Safety floor: never move the cursor backwards.
 		newCursor = Math.max(newCursor, cursor.lastMessageTimeCreated);
 
-		// Write daemon cursor to LOCAL db.
-		await this.localDb.updateDaemonCursor(reader.source, {
+		await this.serverLocalDb.updateDaemonCursor(reader.source, {
 			lastMessageTimeCreated: newCursor,
 			lastUploadedAt: Date.now(),
 		});

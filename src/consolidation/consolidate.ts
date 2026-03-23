@@ -1,6 +1,6 @@
 import type { ActivationEngine } from "../activation/activate.js";
 import { config } from "../config.js";
-import type { IKnowledgeDB } from "../db/index.js";
+import type { IKnowledgeDB, IServerLocalDB } from "../db/index.js";
 import type { DomainRouter } from "./domain-router.js";
 import { logger } from "../logger.js";
 import type {
@@ -48,6 +48,8 @@ const MAX_CHUNK_TOKENS = 150_000;
  */
 export class ConsolidationEngine {
 	private db: IKnowledgeDB;
+	/** Server-local DB for staging tables (pending_episodes, consolidated_episode, etc.) */
+	private serverLocalDb: IServerLocalDB;
 	private activation: ActivationEngine;
 	private readers: IEpisodeReader[];
 	private llm: ConsolidationLLM;
@@ -88,19 +90,23 @@ export class ConsolidationEngine {
 	}
 
 	/**
-	 * @param db         Knowledge DB instance
-	 * @param activation ActivationEngine (provides shared EmbeddingClient)
-	 * @param readers    Episode readers, one per source. Passed in by the caller
-	 *                   (via createEpisodeReaders()) so construction is testable
-	 *                   without real source DBs on disk.
+	 * @param db            Primary knowledge DB (for knowledge reads/writes and legacy compat).
+	 * @param serverLocalDb Server-local DB for staging tables (pending_episodes, etc.).
+	 *                      Pass the same `db` for single-machine setups where one SQLite
+	 *                      serves both roles. Pass a separate ServerLocalDB in production.
+	 * @param activation    ActivationEngine (provides shared EmbeddingClient)
+	 * @param readers       Episode readers, one per source.
+	 * @param domainRouter  Optional domain router for multi-store routing.
 	 */
 	constructor(
 		db: IKnowledgeDB,
+		serverLocalDb: IServerLocalDB,
 		activation: ActivationEngine,
 		readers: IEpisodeReader[] = [],
 		domainRouter: DomainRouter | null = null,
 	) {
 		this.db = db;
+		this.serverLocalDb = serverLocalDb;
 		this.activation = activation;
 		this.readers = readers;
 		this.domainRouter = domainRouter;
@@ -122,7 +128,7 @@ export class ConsolidationEngine {
 		pendingSessions: number;
 		lastConsolidatedAt: number;
 	}> {
-		const state = await this.db.getConsolidationState();
+		const state = await this.serverLocalDb.getConsolidationState();
 		let pendingSessions = 0;
 
 		// pending_episodes is self-draining — pass 0 to count all remaining rows.
@@ -157,7 +163,7 @@ export class ConsolidationEngine {
 	 *   (Layer 1) ensures synthesis and consolidation never overlap on the same instance.
 	 */
 	async consolidate(): Promise<ConsolidationResult> {
-		const lockAcquired = await this.db.tryAcquireConsolidationLock();
+		const lockAcquired = await this.serverLocalDb.tryAcquireConsolidationLock();
 		if (!lockAcquired) {
 			logger.log(
 				"[consolidation] Skipping — consolidation lock is already held (another process or concurrent call).",
@@ -177,7 +183,7 @@ export class ConsolidationEngine {
 		try {
 			return await this._consolidate();
 		} finally {
-			await this.db.releaseConsolidationLock();
+			await this.serverLocalDb.releaseConsolidationLock();
 		}
 	}
 
@@ -197,7 +203,7 @@ export class ConsolidationEngine {
 	 */
 	private async _consolidate(): Promise<ConsolidationResult> {
 		const startTime = Date.now();
-		const state = await this.db.getConsolidationState();
+		const state = await this.serverLocalDb.getConsolidationState();
 
 		logger.log(
 			`[consolidation] Starting. Last run: ${state.lastConsolidatedAt ? new Date(state.lastConsolidatedAt).toISOString() : "never"}`,
@@ -252,7 +258,7 @@ export class ConsolidationEngine {
 			}
 		}
 
-		await this.db.updateConsolidationState({
+		await this.serverLocalDb.updateConsolidationState({
 			lastConsolidatedAt: Date.now(),
 			totalSessionsProcessed:
 				state.totalSessionsProcessed + totalSessionsProcessed,
@@ -339,7 +345,7 @@ export class ConsolidationEngine {
 
 		// 2. Load already-processed episode ranges for these sessions (all sources).
 		const processedRanges =
-			await this.db.getProcessedEpisodeRanges(candidateIds);
+			await this.serverLocalDb.getProcessedEpisodeRanges(candidateIds);
 
 		// 3. Segment sessions into episodes, skipping already-processed ranges.
 		//    Wrapped in try/catch so a reader failure (e.g. corrupt JSONL file)
@@ -683,7 +689,7 @@ export class ConsolidationEngine {
 			(chunkCreated + chunkUpdated) / chunk.length,
 		);
 		for (const ep of chunk) {
-			await this.db.recordEpisode(
+			await this.serverLocalDb.recordEpisode(
 				ep.source,
 				ep.sessionId,
 				ep.startMessageId,

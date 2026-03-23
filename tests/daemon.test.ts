@@ -206,7 +206,7 @@ describe("EpisodeUploader.upload", () => {
 			],
 		);
 
-		const uploader = new EpisodeUploader([reader], db, db, "alice");
+		const uploader = new EpisodeUploader([reader], db, "alice");
 		const result = await uploader.upload();
 
 		expect(result.episodesUploaded).toBe(1);
@@ -257,7 +257,7 @@ describe("EpisodeUploader.upload", () => {
 			],
 		);
 
-		const uploader = new EpisodeUploader([reader], db, db, "alice");
+		const uploader = new EpisodeUploader([reader], db, "alice");
 		const result = await uploader.upload();
 
 		// Should not upload again — already in pending_episodes
@@ -301,7 +301,6 @@ describe("EpisodeUploader.upload", () => {
 
 		const uploader = new EpisodeUploader(
 			[failingReader, workingReader],
-			db,
 			db,
 			"alice",
 		);

@@ -971,17 +971,37 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 			await sql`DELETE FROM knowledge_cluster`;
 			await sql`DELETE FROM knowledge_relation`;
 			await sql`DELETE FROM knowledge_entry`;
-			await sql`DELETE FROM consolidated_episode`;
 			await sql`DELETE FROM embedding_metadata`;
-			await sql`
-				UPDATE consolidation_state SET
-					last_consolidated_at = 0,
-					total_sessions_processed = 0,
-					total_entries_created = 0,
-					total_entries_updated = 0
-				WHERE id = 1
-			`;
 		});
+	}
+
+	/**
+	 * Wipe staging/bookkeeping data.
+	 * Postgres stores may hold consolidated_episode and consolidation_state
+	 * in the legacy setup. In the new split architecture this is a no-op —
+	 * those tables live in server.db (ServerLocalDB).
+	 */
+	async reinitializeLocal(): Promise<void> {
+		// In the new split architecture, staging tables live in server.db and are
+		// absent from Postgres knowledge stores. Only clear them if they exist.
+		try {
+			await this.sql.begin(async (sql: TxSql) => {
+				await sql`DELETE FROM consolidated_episode`;
+				await sql`
+					UPDATE consolidation_state SET
+						last_consolidated_at = 0,
+						total_sessions_processed = 0,
+						total_entries_created = 0,
+						total_entries_updated = 0
+					WHERE id = 1
+				`;
+			});
+		} catch (err) {
+			// Postgres error code 42P01 = undefined_table: tables don't exist in
+			// this store (new split architecture). All other errors are re-thrown.
+			const pgCode = (err as { code?: string }).code;
+			if (pgCode !== "42P01") throw err;
+		}
 	}
 
 	// ── Embedding Metadata ──

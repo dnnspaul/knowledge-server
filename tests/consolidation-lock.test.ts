@@ -70,7 +70,7 @@ describe("ConsolidationEngine.consolidate() lock behaviour", () => {
 		tempDir = mkdtempSync(join(tmpdir(), "ks-engine-lock-test-"));
 		db = new KnowledgeDB(join(tempDir, "test.db"));
 		const activation = new ActivationEngine(db);
-		engine = new ConsolidationEngine(db, activation, [], null, "default");
+		engine = new ConsolidationEngine(db, db, activation, [], null);
 	});
 
 	afterEach(async () => {

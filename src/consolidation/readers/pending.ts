@@ -1,4 +1,4 @@
-import type { IKnowledgeDB } from "../../db/interface.js";
+import type { IServerLocalDB } from "../../db/interface.js";
 import type {
 	Episode,
 	IEpisodeReader,
@@ -22,9 +22,9 @@ import type {
 export class PendingEpisodesReader implements IEpisodeReader {
 	readonly source = "pending";
 
-	private readonly db: IKnowledgeDB;
+	private readonly db: IServerLocalDB;
 
-	constructor(db: IKnowledgeDB) {
+	constructor(db: IServerLocalDB) {
 		this.db = db;
 	}
 

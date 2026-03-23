@@ -2,13 +2,17 @@
  * knowledge-daemon entry point.
  *
  * A thin binary that reads local AI tool session files and uploads episodes
- * to the pending_episodes staging table. The knowledge server drains this
- * table during consolidation.
+ * to the server-local pending_episodes staging table.
+ *
+ * The daemon always writes to the server-local DB (server.db on the same
+ * machine as the server). The server consolidates from there and routes
+ * extracted knowledge to the appropriate knowledge store (SQLite or Postgres)
+ * based on domain configuration.
  *
  * This entry point imports ONLY what the daemon needs:
  *   - Episode readers (file parsers for OpenCode, Claude Code, etc.)
  *   - EpisodeUploader (the upload loop)
- *   - DB client (local SQLite + optional remote Postgres target)
+ *   - ServerLocalDB (staging + cursor)
  *   - Config resolution
  *
  * Intentionally does NOT import:
@@ -25,8 +29,8 @@
 
 import { config, validateConfig } from "../config.js";
 import { createEpisodeReaders } from "./readers/index.js";
-import { KnowledgeDB } from "../db/sqlite/index.js";
-import { StoreRegistry } from "../db/store-registry.js";
+import { ServerLocalDB } from "../db/server-local/index.js";
+import { resolveUserId } from "../config-file.js";
 import { EpisodeUploader } from "./uploader.js";
 import { logger } from "../logger.js";
 
@@ -50,20 +54,13 @@ if (errors.length > 0) {
 	process.exit(1);
 }
 
-// Local SQLite DB — always used for daemon cursor storage.
-// Uses the default SQLite path if not configured explicitly.
-const localDb = new KnowledgeDB();
+// Server-local DB — always the local SQLite file (server.db).
+// Holds pending_episodes and daemon_cursor.
+const serverLocalDb = new ServerLocalDB();
 
-// Target DB — where pending_episodes are written.
-// In single-machine setups this is the same DB as the server uses.
-// In remote setups this is a Postgres instance the server also connects to.
-const registry = await StoreRegistry.create();
-const targetDb = registry.writableStore();
+const userId = resolveUserId();
 
-// Resolve user ID from StoreRegistry (KNOWLEDGE_USER_ID → config.jsonc → hostname → "default")
-const userId = registry.userId;
-
-// Episode readers — same set as the consolidation engine uses locally.
+// Episode readers — file parsers for local AI tool session files.
 const readers = createEpisodeReaders();
 
 if (readers.length === 0) {
@@ -73,10 +70,11 @@ if (readers.length === 0) {
 	);
 }
 
-const uploader = new EpisodeUploader(readers, localDb, targetDb, userId);
+const uploader = new EpisodeUploader(readers, serverLocalDb, userId);
 
 if (onceFlag) {
 	// One-shot mode: upload once and exit. Useful for cron / launchd OnDemand.
+	logger.log(`[daemon] Running once. User: ${userId}`);
 	try {
 		const result = await uploader.upload();
 		logger.log(
@@ -84,17 +82,13 @@ if (onceFlag) {
 		);
 	} finally {
 		for (const reader of readers) reader.close();
-		await localDb.close();
-		await registry.close();
+		await serverLocalDb.close();
 	}
 	process.exit(0);
 } else {
 	// Polling mode: run until SIGTERM/SIGINT.
-	// Pass an onShutdown callback so DB connections and readers are properly
-	// closed before process.exit, avoiding SQLite WAL and Postgres pool leaks.
 	await uploader.runPolling(intervalMs, async () => {
 		for (const reader of readers) reader.close();
-		await localDb.close();
-		await registry.close();
+		await serverLocalDb.close();
 	});
 }

@@ -9,8 +9,12 @@ import type { KnowledgeServerConfig, StoreConfig } from "../config-file.js";
 import { DomainRouter } from "../consolidation/domain-router.js";
 import { logger } from "../logger.js";
 import { KnowledgeDB } from "./sqlite/index.js";
-import type { IKnowledgeDB } from "./interface.js";
+import type { IKnowledgeDB, IServerLocalDB } from "./interface.js";
 import { PostgresKnowledgeDB } from "./postgres/index.js";
+import {
+	ServerLocalDB,
+	DEFAULT_SERVER_LOCAL_PATH,
+} from "./server-local/index.js";
 
 /**
  * StoreRegistry — manages a configured set of IKnowledgeDB instances.
@@ -30,7 +34,15 @@ import { PostgresKnowledgeDB } from "./postgres/index.js";
 export class StoreRegistry {
 	private stores: Map<string, IKnowledgeDB>;
 	private writable: IKnowledgeDB;
+	private writableIds: string[];
 	private readable: IKnowledgeDB[];
+	/**
+	 * The server-local SQLite database (server.db).
+	 * Always local to the machine where knowledge-server runs.
+	 * Holds staging tables (pending_episodes, consolidated_episode, etc.)
+	 * independently of the configured knowledge stores.
+	 */
+	readonly serverLocalDb: IServerLocalDB;
 	/** Domain router for consolidation routing. Null when no domains are configured. */
 	readonly domainRouter: DomainRouter | null;
 	/**
@@ -53,6 +65,7 @@ export class StoreRegistry {
 		writableId: string,
 		config: KnowledgeServerConfig,
 		unavailableIds: Set<string>,
+		serverLocalDb: IServerLocalDB,
 	) {
 		this.stores = stores;
 		const writable = stores.get(writableId);
@@ -62,8 +75,12 @@ export class StoreRegistry {
 			);
 		}
 		this.writable = writable;
+		this.writableIds = config.stores
+			.filter((s) => s.writable && !unavailableIds.has(s.id))
+			.map((s) => s.id);
 		this.readable = Array.from(stores.values());
 		this.unavailableStoreIds = unavailableIds;
+		this.serverLocalDb = serverLocalDb;
 		this.domainRouter =
 			config.domains.length > 0
 				? new DomainRouter(config, stores, writable, unavailableIds)
@@ -74,9 +91,20 @@ export class StoreRegistry {
 		this.daemonAutoSpawn = config.daemonAutoSpawn;
 	}
 
-	/** The store that receives consolidation writes. */
+	/** The primary store that receives consolidation writes. */
 	writableStore(): IKnowledgeDB {
 		return this.writable;
+	}
+
+	/**
+	 * All available writable stores with their IDs.
+	 * Used for reinitialize --store targeting.
+	 */
+	writableStoreEntries(): Array<{ id: string; db: IKnowledgeDB }> {
+		return this.writableIds.flatMap((id) => {
+			const db = this.stores.get(id);
+			return db ? [{ id, db }] : [];
+		});
 	}
 
 	/**
@@ -88,9 +116,12 @@ export class StoreRegistry {
 		return [...this.readable];
 	}
 
-	/** Close all store connections. */
+	/** Close all store connections including serverLocalDb. */
 	async close(): Promise<void> {
-		await Promise.all(Array.from(this.stores.values()).map((db) => db.close()));
+		await Promise.all([
+			...Array.from(this.stores.values()).map((db) => db.close()),
+			this.serverLocalDb.close(),
+		]);
 	}
 
 	// ── Factory ─────────────────────────────────────────────────────────────
@@ -167,17 +198,25 @@ export class StoreRegistry {
 		// Use the first available writable store as the primary.
 		const writableId = availableWritableIds[0];
 
+		// Create the server-local DB (server.db) — always a local SQLite file.
+		// Migrate staging tables from knowledge.db if server.db doesn't exist yet.
+		const serverLocalDb = new ServerLocalDB();
+		const legacyKnowledgeDbPath = (
+			stores.get(writableId) as KnowledgeDB | undefined
+		)?.dbPath;
+		if (legacyKnowledgeDbPath) {
+			serverLocalDb.migrateFromKnowledgeDb(legacyKnowledgeDbPath);
+		}
+
 		const registry = new StoreRegistry(
 			stores,
 			writableId,
 			config,
 			unavailableIds,
+			serverLocalDb,
 		);
 
 		// Warn if writable SQLite stores coexist with remote Postgres stores.
-		// In this topology, a remote consolidation server cannot write to local SQLite —
-		// any entries the LLM classifies as belonging to the SQLite domain will be
-		// misrouted to the fallback store instead. This is a configuration smell.
 		warnIfMixedTopology(config);
 
 		return registry;

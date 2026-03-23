@@ -49,7 +49,7 @@ describe("HTTP API", () => {
 			unlock: () => {},
 			close: () => {},
 		} as unknown as ConsolidationEngine;
-		app = createApp(db, activation, consolidation, TEST_ADMIN_TOKEN);
+		app = createApp(db, db, activation, consolidation, TEST_ADMIN_TOKEN);
 	});
 
 	afterEach(async () => {
@@ -260,6 +260,7 @@ describe("HTTP API", () => {
 				close: () => {},
 			} as unknown as ConsolidationEngine;
 			const busyApp = createApp(
+				busyDb,
 				busyDb,
 				busyActivation,
 				busyConsolidation,

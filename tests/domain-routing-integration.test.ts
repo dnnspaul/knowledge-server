@@ -103,6 +103,7 @@ describe("Domain routing via DomainRouter + ConsolidationEngine", () => {
 		const reader = new OpenCodeEpisodeReader(fakeOpenCodeDbPath);
 		const engine = new ConsolidationEngine(
 			personalDb,
+			personalDb,
 			activation,
 			[reader],
 			router,
@@ -176,6 +177,7 @@ describe("Domain routing via DomainRouter + ConsolidationEngine", () => {
 		const reader = new OpenCodeEpisodeReader(fakeOpenCodeDbPath);
 		const engine = new ConsolidationEngine(
 			personalDb,
+			personalDb,
 			activation,
 			[reader],
 			router,
@@ -242,7 +244,9 @@ describe("Domain routing via DomainRouter + ConsolidationEngine", () => {
 		// Single-store mode — no DomainRouter
 		const activation = new ActivationEngine(personalDb);
 		const reader = new OpenCodeEpisodeReader(fakeOpenCodeDbPath);
-		const engine = new ConsolidationEngine(personalDb, activation, [reader]); // no router
+		const engine = new ConsolidationEngine(personalDb, personalDb, activation, [
+			reader,
+		]); // no router
 
 		spyOn(activation.embeddings, "embedBatch").mockResolvedValue([
 			fakeEmbedding("solo entry"),

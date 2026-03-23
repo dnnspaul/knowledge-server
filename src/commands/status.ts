@@ -38,15 +38,17 @@ export async function runStatus(pidPath: string): Promise<void> {
 
 	const registry = await StoreRegistry.create();
 	const db = registry.writableStore();
+	const { serverLocalDb } = registry;
 	try {
 		const stats = await db.getStats();
-		const state = await db.getConsolidationState();
+		const state = await serverLocalDb.getConsolidationState();
 
 		const activation = new ActivationEngine(db, registry.readStores());
 		const consolidation = new ConsolidationEngine(
 			db,
+			serverLocalDb,
 			activation,
-			[new PendingEpisodesReader(db)],
+			[new PendingEpisodesReader(serverLocalDb)],
 			registry.domainRouter,
 		);
 		const { pendingSessions } = await consolidation.checkPending();

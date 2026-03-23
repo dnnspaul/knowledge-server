@@ -35,6 +35,8 @@ import {
  */
 export class KnowledgeDB implements IKnowledgeDB {
 	private db: Database;
+	/** Absolute path to the SQLite file — exposed for migration tooling. */
+	readonly dbPath: string;
 
 	/**
 	 * @param dbPath Path to the SQLite DB file. Defaults to DEFAULT_SQLITE_PATH
@@ -45,6 +47,7 @@ export class KnowledgeDB implements IKnowledgeDB {
 	 */
 	constructor(dbPath?: string) {
 		const path = dbPath ?? DEFAULT_SQLITE_PATH;
+		this.dbPath = path;
 		const dir = dirname(path);
 		if (!existsSync(dir)) {
 			mkdirSync(dir, { recursive: true });
@@ -1136,23 +1139,44 @@ export class KnowledgeDB implements IKnowledgeDB {
 	 * Used during development/iteration to start fresh with improved extraction.
 	 */
 	async reinitialize(): Promise<void> {
-		// All operations must succeed atomically — a crash mid-wipe would leave
-		// entries deleted but cursors not reset (or vice versa).
+		// Wipe only knowledge tables — staging tables live in server.db (ServerLocalDB).
 		this.db.transaction(() => {
 			this.db.exec("DELETE FROM knowledge_cluster_member");
 			this.db.exec("DELETE FROM knowledge_cluster");
 			this.db.exec("DELETE FROM knowledge_relation");
 			this.db.exec("DELETE FROM knowledge_entry");
-			this.db.exec("DELETE FROM consolidated_episode");
 			this.db.exec("DELETE FROM embedding_metadata");
-			this.db.exec(
-				`UPDATE consolidation_state SET
-          last_consolidated_at = 0,
-          total_sessions_processed = 0,
-          total_entries_created = 0,
-          total_entries_updated = 0
-         WHERE id = 1`,
-			);
+		})();
+	}
+
+	/**
+	 * Wipe staging/bookkeeping data from this DB.
+	 * In the new split architecture, staging lives in server.db (ServerLocalDB) and
+	 * this is a no-op. In the legacy single-file setup (KnowledgeDB serves as both),
+	 * this clears consolidated_episode and consolidation_state.
+	 * Always call ServerLocalDB.reinitializeLocal() for a complete reset.
+	 */
+	async reinitializeLocal(): Promise<void> {
+		// Only touch staging tables if they exist in this file.
+		// In the new split architecture, these live in server.db — absent here.
+		const tables = new Set(
+			(
+				this.db
+					.prepare("SELECT name FROM sqlite_master WHERE type='table'")
+					.all() as Array<{ name: string }>
+			).map((r) => r.name),
+		);
+		this.db.transaction(() => {
+			if (tables.has("consolidated_episode")) {
+				this.db.exec("DELETE FROM consolidated_episode");
+			}
+			if (tables.has("consolidation_state")) {
+				this.db.exec(
+					`UPDATE consolidation_state SET
+           last_consolidated_at = 0, total_sessions_processed = 0,
+           total_entries_created = 0, total_entries_updated = 0 WHERE id = 1`,
+				);
+			}
 		})();
 	}
 

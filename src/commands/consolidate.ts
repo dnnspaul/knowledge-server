@@ -15,11 +15,13 @@ export async function runConsolidate(): Promise<void> {
 
 	const registry = await StoreRegistry.create();
 	const db = registry.writableStore();
+	const { serverLocalDb } = registry;
 	const activation = new ActivationEngine(db, registry.readStores());
 	const consolidation = new ConsolidationEngine(
 		db,
+		serverLocalDb,
 		activation,
-		[new PendingEpisodesReader(db)],
+		[new PendingEpisodesReader(serverLocalDb)],
 		registry.domainRouter,
 	);
 
