@@ -1014,6 +1014,16 @@ function setupDaemon(): void {
 	const platform = process.platform;
 	const home = homedir();
 
+	// Warn: the server auto-spawns the daemon by default, so registering it as
+	// a system service without disabling auto-spawn will result in two daemons.
+	console.log(
+		"  Note: knowledge-server auto-spawns the daemon by default.\n" +
+			"  After registering it as a system service, add to your config.jsonc:\n" +
+			'    "daemonAutoSpawn": false\n' +
+			"  or set DAEMON_AUTO_SPAWN=false in your .env to avoid running two daemons.",
+	);
+	console.log("");
+
 	// Resolve daemon binary path
 	let daemonBin: string;
 	if (isSourceInstall()) {
