@@ -136,20 +136,26 @@ export class Reconsolidator {
 		 * into that store rather than this.db. This applies to insert paths only
 		 * (novel entries and "insert distinct" decisions).
 		 *
-		 * Updates and reinforcement of EXISTING entries always use this.db because
-		 * entriesMap is loaded exclusively from this.db.getActiveEntriesWithEmbeddings().
-		 * Routing these to a different store would be a no-op or cross-store corruption.
-		 *
 		 * Defaults to this.db when not supplied (backwards-compatible).
 		 */
 		targetDb?: IKnowledgeStore,
+		/**
+		 * Target database for merge/reinforce operations on EXISTING entries.
+		 *
+		 * During normal consolidation this is always this.db because entriesMap is
+		 * loaded from this.db — existing entries live there. During synthesis, entries
+		 * are loaded from the domain store being synthesised, so mergeEntry and
+		 * reinforceObservation must target that store instead.
+		 *
+		 * Defaults to this.db when not supplied (backwards-compatible).
+		 */
+		mergeDb?: IKnowledgeStore,
 	): Promise<void> {
 		// insertDb: where NEW entries land (domain-routed or default writable store).
 		const insertDb = targetDb ?? this.db;
-		// Updates and reinforcements of EXISTING entries always use this.db directly
-		// (not insertDb) because entriesMap is loaded exclusively from this.db.
-		// targetDb controls insert destination only — do NOT use it for mergeEntry
-		// or reinforceObservation, as the existing entry lives in this.db.
+		// existingDb: where EXISTING entries live — mergeEntry and reinforceObservation
+		// must target the same store entriesMap was loaded from.
+		const existingDb = mergeDb ?? this.db;
 
 		// Embed the extracted entry content (skip if pre-computed by caller)
 		const entryEmbedding =
@@ -220,8 +226,8 @@ export class Reconsolidator {
 				// and resets last_accessed_at so decay restarts from now.
 				// We use reinforceObservation rather than recordAccess — this is not a retrieval
 				// event; it's confirmation that the knowledge is still true.
-				// this.db — nearestEntry lives here, entriesMap loaded from this.db exclusively.
-				await this.db.reinforceObservation(nearestEntry.id);
+			// existingDb — nearestEntry lives in whichever store entriesMap was loaded from.
+			await existingDb.reinforceObservation(nearestEntry.id);
 				logger.log(
 					`[${logPrefix}] Keep existing (reinforced): ${JSON.stringify(nearestEntry.content)}`,
 				);
@@ -251,8 +257,8 @@ export class Reconsolidator {
 						decision.topics ?? [],
 					),
 				);
-				// this.db — nearestEntry lives here, not in insertDb (the domain-routed store).
-				await this.db.mergeEntry(nearestEntry.id, mergeUpdates, freshEmbedding);
+			// existingDb — nearestEntry lives in whichever store entriesMap was loaded from.
+			await existingDb.mergeEntry(nearestEntry.id, mergeUpdates, freshEmbedding);
 				logger.log(
 					`[${logPrefix}] ${decision.action === "update" ? "Updated" : "Replaced"}: ${JSON.stringify(nearestEntry.content)} → ${JSON.stringify(decision.content)}`,
 				);
@@ -626,10 +632,11 @@ export class Reconsolidator {
 								);
 							},
 						},
-						undefined, // no sessionTimestamp — synthesized entries stamped at now
-						synthEmbedding,
-						"synthesis", // logPrefix — keeps synthesis reconsolidation out of [consolidation] logs
-						db, // targetDb — synthesized entries land in the same store being synthesized
+					undefined, // no sessionTimestamp — synthesized entries stamped at now
+					synthEmbedding,
+					"synthesis", // logPrefix — keeps synthesis reconsolidation out of [consolidation] logs
+					db, // targetDb — new synthesized entries land in the store being synthesized
+					db, // mergeDb — existing entries also live in this store (entriesMap loaded from db)
 					);
 				} catch (err) {
 					// Log and skip this result — do NOT rethrow.

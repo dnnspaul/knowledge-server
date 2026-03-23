@@ -808,20 +808,25 @@ export class ConsolidationEngine {
 	 * batches first and then synthesize once — rather than synthesizing after every
 	 * batch, which re-clusters and re-synthesizes an ever-growing KB on each pass.
 	 *
+	 * Runs once per store that received inserts or content-changing updates during
+	 * the most recent consolidate() call (_lastTouchedStores). Falls back to this.db
+	 * if no stores were touched (e.g. no new entries, or called before consolidate()).
+	 * The primary store (this.db) is always included in synthesis even when not
+	 * explicitly touched — ripe clusters from prior runs may need synthesis.
+	 *
 	 * Must be called after ensureEmbeddings() has run (i.e. after consolidate()) so
 	 * all entries have embeddings. Returns the total number of principles synthesized.
-	 *
-	 * NOTE: the `touchedStores` parameter and `_lastTouchedStores` accumulation are
-	 * scaffolding for a follow-up refactor. Synthesis currently always runs on this.db
-	 * only — running on domain stores is unsafe until reconsolidate() is parameterized
-	 * for a mergeDb target (the inner mergeEntry call is hardcoded to this.db, so
-	 * operating on a domain store would silently corrupt or no-op this.db entries).
-	 * TODO: once reconsolidate() supports a mergeDb parameter, iterate over
-	 * touchedStores (falling back to [this.db]) here instead of always using this.db.
 	 */
-	async runSynthesis(_touchedStores?: Set<IKnowledgeStore>): Promise<number> {
-		// TODO: replace with per-store iteration once mergeDb refactor lands.
-		return this.reconsolidator.runKBSynthesis(this.db);
+	async runSynthesis(): Promise<number> {
+		const touched = this._lastTouchedStores;
+		// Always include this.db — ripe clusters from prior runs may need synthesis
+		// even when nothing was written to the primary store this run.
+		const stores = new Set([...touched, this.db]);
+		let total = 0;
+		for (const store of stores) {
+			total += await this.reconsolidator.runKBSynthesis(store);
+		}
+		return total;
 	}
 
 	close(): void {
