@@ -15,7 +15,7 @@ import {
 } from "../activation/format.js";
 import { config, REVIEW_STALE_STRENGTH_THRESHOLD } from "../config.js";
 import type { ConsolidationEngine } from "../consolidation/consolidate.js";
-import type { IKnowledgeDB } from "../db/index.js";
+import type { IKnowledgeStore } from "../db/index.js";
 import { KnowledgeService } from "../services/knowledge-service.js";
 import { logger } from "../logger.js";
 import { activateInputSchema } from "../mcp/index.js";
@@ -54,7 +54,7 @@ import type {
  * deployments, always set KNOWLEDGE_ADMIN_TOKEN so remote MCP clients must authenticate.
  */
 export function createApp(
-	db: IKnowledgeDB,
+	db: IKnowledgeStore,
 	serverLocalDb: import("../db/interface.js").IServerLocalDB,
 	activation: ActivationEngine,
 	consolidation: ConsolidationEngine,
@@ -303,7 +303,7 @@ export function createApp(
 			}
 
 			await db.reinitialize();
-			await serverLocalDb.reinitializeLocal();
+			await serverLocalDb.reinitialize();
 
 			logger.log("[reinitialize] Knowledge DB wiped and cursor reset.");
 			return c.json({

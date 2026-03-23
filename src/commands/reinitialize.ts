@@ -26,7 +26,7 @@ export async function runReinitialize(args: string[]): Promise<void> {
 
 	let targetStores: Array<{
 		id: string;
-		db: import("../db/interface.js").IKnowledgeDB;
+		db: import("../db/interface.js").IKnowledgeStore;
 	}>;
 
 	if (storeId) {
@@ -101,7 +101,7 @@ export async function runReinitialize(args: string[]): Promise<void> {
 
 		if (!storeId) {
 			// Full reset: clear all staging and bookkeeping data.
-			await serverLocalDb.reinitializeLocal();
+			await serverLocalDb.reinitialize();
 			console.log("  ✓ Reset consolidation state and staging tables");
 		} else {
 			// Partial wipe: knowledge entries in the named store are removed.

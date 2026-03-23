@@ -5,7 +5,7 @@ import {
 	formatEmbeddingText,
 } from "../activation/embeddings.js";
 import { config } from "../config.js";
-import type { IKnowledgeDB } from "../db/index.js";
+import type { IKnowledgeStore } from "../db/index.js";
 import { logger } from "../logger.js";
 import { clampKnowledgeType } from "../types.js";
 import type { KnowledgeEntry } from "../types.js";
@@ -49,12 +49,12 @@ const CLUSTER_MIN_MEMBERS = config.consolidation.clusterMinMembers;
  * - If below threshold: insert directly as a novel entry
  */
 export class Reconsolidator {
-	private db: IKnowledgeDB;
+	private db: IKnowledgeStore;
 	private embeddings: EmbeddingClient;
 	private llm: ConsolidationLLM;
 
 	constructor(
-		db: IKnowledgeDB,
+		db: IKnowledgeStore,
 		embeddings: EmbeddingClient,
 		llm: ConsolidationLLM,
 	) {
@@ -142,7 +142,7 @@ export class Reconsolidator {
 		 *
 		 * Defaults to this.db when not supplied (backwards-compatible).
 		 */
-		targetDb?: IKnowledgeDB,
+		targetDb?: IKnowledgeStore,
 	): Promise<void> {
 		// insertDb: where NEW entries land (domain-routed or default writable store).
 		const insertDb = targetDb ?? this.db;
@@ -670,7 +670,7 @@ export class Reconsolidator {
 		sessionIds: string[],
 		embedding?: number[],
 		sessionTimestamp?: number,
-		targetDb?: IKnowledgeDB,
+		targetDb?: IKnowledgeStore,
 	): Promise<KnowledgeEntry & { embedding?: number[] }> {
 		const writeDb = targetDb ?? this.db;
 		const now = Date.now();

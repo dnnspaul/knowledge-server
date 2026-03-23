@@ -66,7 +66,7 @@ describe("DomainRouter.resolve", () => {
 		const config = makeConfig({ domains: [], projects: [] });
 		const router = new DomainRouter(
 			config,
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 
@@ -82,7 +82,7 @@ describe("DomainRouter.resolve", () => {
 	it("matches project path and returns correct domain store", () => {
 		const router = new DomainRouter(
 			makeConfig(),
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 
@@ -96,7 +96,7 @@ describe("DomainRouter.resolve", () => {
 	it("matches subdirectory within project path", () => {
 		const router = new DomainRouter(
 			makeConfig(),
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 
@@ -108,7 +108,7 @@ describe("DomainRouter.resolve", () => {
 	it("matches personal project path", () => {
 		const router = new DomainRouter(
 			makeConfig(),
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 
@@ -121,7 +121,7 @@ describe("DomainRouter.resolve", () => {
 	it("falls back to first domain when no project matches", () => {
 		const router = new DomainRouter(
 			makeConfig(),
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 
@@ -135,7 +135,7 @@ describe("DomainRouter.resolve", () => {
 	it("returns first domain when directory is empty", () => {
 		const router = new DomainRouter(
 			makeConfig(),
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 
@@ -155,7 +155,7 @@ describe("DomainRouter.resolve", () => {
 		});
 		const router = new DomainRouter(
 			config,
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 
@@ -176,7 +176,7 @@ describe("DomainRouter.resolve", () => {
 		});
 		const router = new DomainRouter(
 			config,
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 
@@ -189,7 +189,7 @@ describe("DomainRouter.resolve", () => {
 	it("includes all domains in domainContext", () => {
 		const router = new DomainRouter(
 			makeConfig(),
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 
@@ -205,7 +205,7 @@ describe("DomainRouter.resolve", () => {
 	it("domainContext.defaultDomain reflects the resolved domain", () => {
 		const router = new DomainRouter(
 			makeConfig(),
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 
@@ -242,7 +242,7 @@ describe("DomainRouter.resolveStore", () => {
 	it("returns the correct store for a known domain id", () => {
 		const router = new DomainRouter(
 			makeConfig(),
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 
@@ -253,7 +253,7 @@ describe("DomainRouter.resolveStore", () => {
 	it("returns undefined for unknown domain id", () => {
 		const router = new DomainRouter(
 			makeConfig(),
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 
@@ -263,7 +263,7 @@ describe("DomainRouter.resolveStore", () => {
 	it("returns undefined for undefined input", () => {
 		const router = new DomainRouter(
 			makeConfig(),
-			stores as Map<string, import("../src/db/interface").IKnowledgeDB>,
+			stores as Map<string, import("../src/db/interface").IKnowledgeStore>,
 			personalDb,
 		);
 

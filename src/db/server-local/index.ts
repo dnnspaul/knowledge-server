@@ -517,7 +517,7 @@ export class ServerLocalDB implements IServerLocalDB {
 	 * Wipe all staging data: pending_episodes, consolidated_episode, and reset
 	 * consolidation_state. Called when reinitializing the knowledge store.
 	 */
-	async reinitializeLocal(): Promise<void> {
+	async reinitialize(): Promise<void> {
 		this.db.transaction(() => {
 			this.db.exec("DELETE FROM pending_episodes");
 			this.db.exec("DELETE FROM consolidated_episode");

@@ -117,7 +117,7 @@ export interface IServerLocalDB {
 	 * and reset consolidation_state counters.
 	 * Always called alongside IKnowledgeStore.reinitialize() for a full reset.
 	 */
-	reinitializeLocal(): Promise<void>;
+	reinitialize(): Promise<void>;
 
 	close(): Promise<void>;
 }
@@ -276,11 +276,13 @@ export interface IKnowledgeStore {
 }
 
 /**
- * Combined interface for backwards compatibility and single-machine setups
- * where one SQLite file serves as both the server-local DB and a knowledge store.
+ * @deprecated Alias for IKnowledgeStore. Use IKnowledgeStore directly.
  *
- * @deprecated Prefer IServerLocalDB + IKnowledgeStore separately.
- * Kept so existing test helpers and the KnowledgeDB class don't need to be
- * rewritten immediately.
+ * Previously extended both IServerLocalDB and IKnowledgeStore, forcing knowledge
+ * store implementations (KnowledgeDB, PostgresKnowledgeDB) to implement all
+ * staging/bookkeeping methods. That dual-role coupling has been removed —
+ * staging now lives exclusively in ServerLocalDB.
+ *
+ * Kept as an alias for any code that still imports it by name.
  */
-export interface IKnowledgeDB extends IServerLocalDB, IKnowledgeStore {}
+export type IKnowledgeDB = IKnowledgeStore;

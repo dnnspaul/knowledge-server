@@ -3,16 +3,12 @@ import postgres from "postgres";
 import { logger } from "../../logger.js";
 import { clampKnowledgeType } from "../../types.js";
 import type {
-	ConsolidationState,
-	DaemonCursor,
 	Episode,
 	KnowledgeEntry,
 	KnowledgeRelation,
 	KnowledgeStatus,
-	PendingEpisode,
-	ProcessedRange,
 } from "../../types.js";
-import type { IKnowledgeDB } from "../interface.js";
+import type { IKnowledgeStore } from "../interface.js";
 import { PG_MIGRATIONS } from "./migrations.js";
 import { PG_CREATE_TABLES, SCHEMA_VERSION } from "./schema.js";
 
@@ -83,20 +79,13 @@ function toNum(val: number | string): number {
 /**
  * PostgreSQL database layer for the knowledge graph.
  *
- * Implements the same IKnowledgeDB interface as the SQLite KnowledgeDB class,
+ * Implements the same IKnowledgeStore interface as the SQLite KnowledgeDB class,
  * adapting all queries for PostgreSQL syntax (JSONB, BYTEA, ON CONFLICT, etc.).
  *
  * Used by StoreRegistry for postgres-kind stores.
  */
-export class PostgresKnowledgeDB implements IKnowledgeDB {
+export class PostgresKnowledgeDB implements IKnowledgeStore {
 	private sql: postgres.Sql;
-	/**
-	 * Reserved connection held for the duration of the advisory lock.
-	 * Advisory locks in Postgres are session-scoped — acquire and release must
-	 * use the exact same backend connection. Storing a reserved connection here
-	 * ensures the pool doesn't route the unlock call to a different session.
-	 */
-	private _lockConnection: postgres.ReservedSql | null = null;
 	/**
 	 * Promise-based init lock: null = not started, pending Promise = in-flight,
 	 * resolved Promise = complete. All callers await the same Promise so
@@ -808,117 +797,6 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 		return result;
 	}
 
-	// ── Episode Tracking ──
-
-	async recordEpisode(
-		source: string,
-		sessionId: string,
-		startMessageId: string,
-		endMessageId: string,
-		contentType: "compaction_summary" | "messages" | "document",
-		entriesCreated: number,
-	): Promise<void> {
-		await this.sql`
-			INSERT INTO consolidated_episode
-			(source, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created)
-			VALUES (${source}, ${sessionId}, ${startMessageId}, ${endMessageId}, ${contentType}, ${Date.now()}, ${entriesCreated})
-			ON CONFLICT (source, session_id, start_message_id, end_message_id) DO NOTHING
-		`;
-	}
-
-	async getProcessedEpisodeRanges(
-		sessionIds: string[],
-	): Promise<Map<string, ProcessedRange[]>> {
-		if (sessionIds.length === 0) return new Map();
-
-		const rows = await this.sql`
-			SELECT source, session_id, start_message_id, end_message_id
-			FROM consolidated_episode
-			WHERE session_id = ANY(${sessionIds}::text[])
-		`;
-
-		const result = new Map<string, ProcessedRange[]>();
-		for (const row of rows) {
-			const sid = row.session_id as string;
-			const range: ProcessedRange = {
-				source: row.source as string,
-				startMessageId: row.start_message_id as string,
-				endMessageId: row.end_message_id as string,
-			};
-			const existing = result.get(sid);
-			if (existing) existing.push(range);
-			else result.set(sid, [range]);
-		}
-		return result;
-	}
-
-	// ── Consolidation State ──
-
-	async getConsolidationState(): Promise<ConsolidationState> {
-		const rows = await this.sql`
-			SELECT * FROM consolidation_state WHERE id = 1
-		`;
-
-		if (rows.length === 0) {
-			logger.warn(
-				"[pg-db] consolidation_state row missing — returning zero state",
-			);
-			return {
-				lastConsolidatedAt: 0,
-				totalSessionsProcessed: 0,
-				totalEntriesCreated: 0,
-				totalEntriesUpdated: 0,
-			};
-		}
-
-		return {
-			lastConsolidatedAt: toNum(
-				rows[0].last_consolidated_at as number | string,
-			),
-			totalSessionsProcessed: toNum(
-				rows[0].total_sessions_processed as number | string,
-			),
-			totalEntriesCreated: toNum(
-				rows[0].total_entries_created as number | string,
-			),
-			totalEntriesUpdated: toNum(
-				rows[0].total_entries_updated as number | string,
-			),
-		};
-	}
-
-	async updateConsolidationState(
-		state: Partial<ConsolidationState>,
-	): Promise<void> {
-		const setClauses: string[] = [];
-		const values: unknown[] = [];
-		let idx = 1;
-
-		if (state.lastConsolidatedAt !== undefined) {
-			setClauses.push(`last_consolidated_at = $${idx++}`);
-			values.push(state.lastConsolidatedAt);
-		}
-		if (state.totalSessionsProcessed !== undefined) {
-			setClauses.push(`total_sessions_processed = $${idx++}`);
-			values.push(state.totalSessionsProcessed);
-		}
-		if (state.totalEntriesCreated !== undefined) {
-			setClauses.push(`total_entries_created = $${idx++}`);
-			values.push(state.totalEntriesCreated);
-		}
-		if (state.totalEntriesUpdated !== undefined) {
-			setClauses.push(`total_entries_updated = $${idx++}`);
-			values.push(state.totalEntriesUpdated);
-		}
-
-		if (setClauses.length === 0) return;
-
-		await this.sql.unsafe(
-			`UPDATE consolidation_state SET ${setClauses.join(", ")} WHERE id = 1`,
-			values as postgres.ParameterOrJSON<never>[],
-		);
-	}
-
 	// ── Entry Merge ──
 
 	/**
@@ -973,35 +851,6 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 			await sql`DELETE FROM knowledge_entry`;
 			await sql`DELETE FROM embedding_metadata`;
 		});
-	}
-
-	/**
-	 * Wipe staging/bookkeeping data.
-	 * Postgres stores may hold consolidated_episode and consolidation_state
-	 * in the legacy setup. In the new split architecture this is a no-op —
-	 * those tables live in server.db (ServerLocalDB).
-	 */
-	async reinitializeLocal(): Promise<void> {
-		// In the new split architecture, staging tables live in server.db and are
-		// absent from Postgres knowledge stores. Only clear them if they exist.
-		try {
-			await this.sql.begin(async (sql: TxSql) => {
-				await sql`DELETE FROM consolidated_episode`;
-				await sql`
-					UPDATE consolidation_state SET
-						last_consolidated_at = 0,
-						total_sessions_processed = 0,
-						total_entries_created = 0,
-						total_entries_updated = 0
-					WHERE id = 1
-				`;
-			});
-		} catch (err) {
-			// Postgres error code 42P01 = undefined_table: tables don't exist in
-			// this store (new split architecture). All other errors are re-thrown.
-			const pgCode = (err as { code?: string }).code;
-			if (pgCode !== "42P01") throw err;
-		}
 	}
 
 	// ── Embedding Metadata ──
@@ -1167,176 +1016,7 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 		return result.count;
 	}
 
-	// ── Consolidation lock ────────────────────────────────────────────────────
-
-	/**
-	 * Advisory lock key — the default port number, stable and application-specific.
-	 * Postgres advisory locks are DB-scoped: two processes connecting to the same
-	 * Postgres DB will contend on this key, serialising consolidation runs.
-	 * Using a plain number (fits in int4 range) — pg_try_advisory_lock accepts int8
-	 * but a plain JS number works fine for values this small.
-	 */
-	private static readonly ADVISORY_LOCK_KEY = 3179;
-
-	async tryAcquireConsolidationLock(): Promise<boolean> {
-		// Re-entrancy guard: pg_try_advisory_lock is re-entrant at the session level —
-		// calling it twice on the same session increments a counter, meaning one
-		// releaseConsolidationLock() call would not fully release it.
-		if (this._lockConnection) return false;
-
-		// Reserve a dedicated connection for the lock lifetime.
-		// Advisory locks are session-scoped in Postgres — acquire and release MUST
-		// use the same backend connection, otherwise pg_advisory_unlock is a no-op
-		// on the wrong session and the original lock leaks until the connection closes.
-		//
-		// Use a let/try/catch pattern so the connection is released if *either*
-		// sql.reserve() or the advisory-lock query throws — avoids pool exhaustion.
-		let reserved: postgres.ReservedSql | undefined;
-		try {
-			reserved = await this.sql.reserve();
-			const rows = await reserved<[{ acquired: boolean }]>`
-				SELECT pg_try_advisory_lock(${PostgresKnowledgeDB.ADVISORY_LOCK_KEY}) AS acquired
-			`;
-			const acquired = rows[0]?.acquired === true;
-			if (acquired) {
-				// Keep the reserved connection — releaseConsolidationLock() will use it.
-				this._lockConnection = reserved;
-			} else {
-				// Lock not acquired — release the reserved connection back to the pool.
-				reserved.release();
-			}
-			return acquired;
-		} catch (err) {
-			// reserve() or query failed — return the connection if one was reserved.
-			reserved?.release();
-			throw err;
-		}
-	}
-
-	async releaseConsolidationLock(): Promise<void> {
-		if (!this._lockConnection) return;
-		const conn = this._lockConnection;
-		this._lockConnection = null;
-		try {
-			const rows = await conn<[{ released: boolean }]>`
-				SELECT pg_advisory_unlock(${PostgresKnowledgeDB.ADVISORY_LOCK_KEY}) AS released
-			`;
-			if (rows[0]?.released === false) {
-				logger.warn(
-					"[consolidation] pg_advisory_unlock returned false — lock was not held by this connection. " +
-						"This should not happen with the reserved-connection pattern.",
-				);
-			}
-		} finally {
-			conn.release();
-		}
-	}
-
-	// ── Pending Episodes ─────────────────────────────────────────────────────
-
-	async insertPendingEpisode(episode: PendingEpisode): Promise<void> {
-		await this.sql`
-			INSERT INTO pending_episodes
-			(id, user_id, source, session_id, start_message_id, end_message_id,
-			 session_title, project_name, directory, content, content_type,
-			 session_timestamp, max_message_time, approx_tokens, uploaded_at)
-			VALUES (
-				${episode.id}, ${episode.userId}, ${episode.source},
-				${episode.sessionId}, ${episode.startMessageId}, ${episode.endMessageId},
-				${episode.sessionTitle}, ${episode.projectName}, ${episode.directory},
-				${episode.content}, ${episode.contentType},
-				${episode.timeCreated}, ${episode.maxMessageTime},
-				${episode.approxTokens}, ${episode.uploadedAt}
-			)
-			ON CONFLICT (id) DO NOTHING
-		`;
-	}
-
-	async getPendingEpisodes(
-		afterMaxMessageTime: number,
-		limit = 500,
-	): Promise<PendingEpisode[]> {
-		const rows = await this.sql`
-			SELECT * FROM pending_episodes
-			WHERE max_message_time > ${afterMaxMessageTime}
-			ORDER BY max_message_time ASC
-			LIMIT ${limit}
-		`;
-		return rows.map((r) => ({
-			id: r.id as string,
-			userId: r.user_id as string,
-			source: r.source as string,
-			sessionId: r.session_id as string,
-			startMessageId: r.start_message_id as string,
-			endMessageId: r.end_message_id as string,
-			sessionTitle: r.session_title as string,
-			projectName: r.project_name as string,
-			directory: r.directory as string,
-			content: r.content as string,
-			contentType: r.content_type as Episode["contentType"],
-			timeCreated: Number(r.session_timestamp),
-			maxMessageTime: Number(r.max_message_time),
-			approxTokens: Number(r.approx_tokens),
-			uploadedAt: Number(r.uploaded_at),
-		}));
-	}
-
-	async countPendingSessions(): Promise<number> {
-		// In new-architecture setups pending_episodes lives in server.db — expected to return 0.
-		try {
-			const rows = await this
-				.sql`SELECT COUNT(DISTINCT session_id)::int as n FROM pending_episodes`;
-			return (rows[0]?.n as number) ?? 0;
-		} catch (err) {
-			// Postgres error 42P01 (undefined_table): expected for knowledge-store DBs
-			// that don't hold pending_episodes. Log unexpected errors rather than silencing.
-			const pgCode = (err as { code?: string }).code;
-			if (pgCode !== "42P01") {
-				logger.warn("[db] countPendingSessions unexpected error:", err);
-			}
-			return 0;
-		}
-	}
-
-	async deletePendingEpisodes(ids: string[]): Promise<void> {
-		if (ids.length === 0) return;
-		await this.sql`
-			DELETE FROM pending_episodes WHERE id = ANY(${ids}::text[])
-		`;
-	}
-
-	// ── Daemon Cursor (no-op in Postgres — always local SQLite only) ──────────
-
-	async getDaemonCursor(source: string): Promise<DaemonCursor> {
-		// daemon_cursor is local-only — always return zero cursor in Postgres.
-		// The daemon writes to its local SQLite; this path should never be called
-		// from the server side, but returns safely rather than throwing.
-		return { source, lastMessageTimeCreated: 0, lastUploadedAt: 0 };
-	}
-
-	async updateDaemonCursor(
-		_source: string,
-		_cursor: Partial<Omit<DaemonCursor, "source">>,
-	): Promise<void> {
-		// No-op in Postgres — daemon_cursor lives in local SQLite only.
-	}
-
 	async close(): Promise<void> {
-		// If a lock is held at close time (e.g. shutdown mid-consolidation), run the
-		// full releaseConsolidationLock() to issue pg_advisory_unlock before releasing
-		// the reserved connection. This avoids a window where the connection is returned
-		// to the pool (still holding the session-scoped lock) before sql.end() drains it.
-		if (this._lockConnection) {
-			// Best-effort unlock — catch so a transient PG error doesn't prevent
-			// sql.end() from closing the pool. The lock is session-scoped and will
-			// be dropped by Postgres when the connection closes anyway.
-			await this.releaseConsolidationLock().catch((err) => {
-				logger.warn(
-					"[pg-db] releaseConsolidationLock failed during close:",
-					err,
-				);
-			});
-		}
 		await this.sql.end();
 	}
 }

@@ -1,6 +1,6 @@
 import { cosineSimilarity } from "../activation/embeddings.js";
 import { config } from "../config.js";
-import type { IKnowledgeDB } from "../db/index.js";
+import type { IKnowledgeStore } from "../db/index.js";
 import { logger } from "../logger.js";
 import type { KnowledgeEntry } from "../types.js";
 import type { ConsolidationLLM } from "./llm.js";
@@ -26,10 +26,10 @@ const CONTRADICTION_BATCH_SIZE = 10;
  * - Track which candidates were already resolved this pass to avoid double-processing.
  */
 export class ContradictionScanner {
-	private db: IKnowledgeDB;
+	private db: IKnowledgeStore;
 	private llm: ConsolidationLLM;
 
-	constructor(db: IKnowledgeDB, llm: ConsolidationLLM) {
+	constructor(db: IKnowledgeStore, llm: ConsolidationLLM) {
 		this.db = db;
 		this.llm = llm;
 	}

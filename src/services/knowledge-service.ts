@@ -2,23 +2,23 @@ import {
 	EmbeddingClient,
 	formatEmbeddingText,
 } from "../activation/embeddings.js";
-import type { IKnowledgeDB } from "../db/interface.js";
+import type { IKnowledgeStore } from "../db/interface.js";
 import type { KnowledgeEntry } from "../types.js";
 
 /**
- * KnowledgeService — application-layer wrapper around IKnowledgeDB.
+ * KnowledgeService — application-layer wrapper around IKnowledgeStore.
  *
  * Adds embedding-aware logic that belongs above the storage layer:
  *
  *   updateEntry(id, updates)
- *     Works identically to IKnowledgeDB.updateEntry for non-semantic fields
+ *     Works identically to IKnowledgeStore.updateEntry for non-semantic fields
  *     (status, strength, confidence, scope, isSynthesized, etc.).
  *     When `content` or `topics` are included in the update, it automatically
  *     re-computes and stores the embedding — no caller needs to remember to do
  *     this manually.
  *
  * The service is intentionally narrow — only `updateEntry` and `close` are
- * exposed. All other DB operations go directly through `IKnowledgeDB`.
+ * exposed. All other DB operations go directly through `IKnowledgeStore`.
  *
  * Backward compatibility: no schema changes, no migrations. Users who update
  * the binary automatically get the safer update path.
@@ -33,7 +33,7 @@ export class KnowledgeService {
 	 *                   the same instance and allow test spying.
 	 */
 	constructor(
-		private readonly db: IKnowledgeDB,
+		private readonly db: IKnowledgeStore,
 		embedder?: EmbeddingClient,
 	) {
 		this.embedder = embedder ?? new EmbeddingClient();

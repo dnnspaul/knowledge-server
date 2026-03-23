@@ -20,7 +20,7 @@ import {
 	it,
 } from "bun:test";
 import postgres from "postgres";
-import type { IKnowledgeDB } from "../src/db/interface";
+import type { IKnowledgeStore } from "../src/db/interface";
 import { PostgresKnowledgeDB } from "../src/db/postgres/index";
 
 const PG_URI = process.env.PG_TEST_URI;
@@ -51,7 +51,7 @@ function makeEntry(id: string, overrides: Record<string, unknown> = {}) {
 }
 
 describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
-	let db: IKnowledgeDB;
+	let db: IKnowledgeStore;
 	const uri = PG_URI as string;
 	// Shared truncation client — created once to avoid pool churn on every test.
 	let truncSql: ReturnType<typeof postgres>;
@@ -791,24 +791,13 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 	it("reinitialize clears all data", async () => {
 		await db.insertEntry(makeEntry("ri-1"));
 		await db.setEmbeddingMetadata("test-model", 128);
-		await db.recordEpisode(
-			"opencode",
-			"session-1",
-			"msg-a",
-			"msg-b",
-			"messages",
-			2,
-		);
 
-		// reinitialize() clears knowledge tables; reinitializeLocal() clears staging.
-		// In the legacy combined IKnowledgeDB setup (as used here), call both.
+		// reinitialize() clears knowledge tables only.
+		// Staging lives in server.db (ServerLocalDB), not in the knowledge store.
 		await db.reinitialize();
-		await db.reinitializeLocal();
 
 		expect((await db.getStats()).total).toBe(0);
 		expect(await db.getEmbeddingMetadata()).toBeNull();
-		const ranges = await db.getProcessedEpisodeRanges(["session-1"]);
-		expect(ranges.size).toBe(0);
 	});
 
 	it("reinitialize clears cluster tables", async () => {

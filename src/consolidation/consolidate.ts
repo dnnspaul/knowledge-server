@@ -1,6 +1,6 @@
 import type { ActivationEngine } from "../activation/activate.js";
 import { config } from "../config.js";
-import type { IKnowledgeDB, IServerLocalDB } from "../db/index.js";
+import type { IKnowledgeStore, IServerLocalDB } from "../db/index.js";
 import type { DomainRouter } from "./domain-router.js";
 import { logger } from "../logger.js";
 import type {
@@ -47,7 +47,7 @@ const MAX_CHUNK_TOKENS = 150_000;
  * 7. After all readers: apply decay and generate embeddings
  */
 export class ConsolidationEngine {
-	private db: IKnowledgeDB;
+	private db: IKnowledgeStore;
 	/** Server-local DB for staging tables (pending_episodes, consolidated_episode, etc.) */
 	private serverLocalDb: IServerLocalDB;
 	private activation: ActivationEngine;
@@ -99,7 +99,7 @@ export class ConsolidationEngine {
 	 * @param domainRouter  Optional domain router for multi-store routing.
 	 */
 	constructor(
-		db: IKnowledgeDB,
+		db: IKnowledgeStore,
 		serverLocalDb: IServerLocalDB,
 		activation: ActivationEngine,
 		readers: IEpisodeReader[] = [],

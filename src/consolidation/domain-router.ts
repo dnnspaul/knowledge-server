@@ -5,7 +5,7 @@ import type {
 	KnowledgeServerConfig,
 	ProjectConfig,
 } from "../config-file.js";
-import type { IKnowledgeDB } from "../db/interface.js";
+import type { IKnowledgeStore } from "../db/interface.js";
 import { logger } from "../logger.js";
 
 /**
@@ -15,7 +15,7 @@ export interface DomainResolution {
 	/** The resolved domain id, or undefined if no domains are configured. */
 	domainId: string | undefined;
 	/** The store that should receive writes for this domain. */
-	store: IKnowledgeDB;
+	store: IKnowledgeStore;
 	/**
 	 * Whether the resolved store is currently unavailable (failed to connect at startup).
 	 * When true, the consolidation engine should skip this episode group and leave
@@ -61,16 +61,16 @@ export interface DomainContext {
 export class DomainRouter {
 	private domains: DomainConfig[];
 	private projects: Array<ProjectConfig & { normalizedPath: string }>;
-	private stores: Map<string, IKnowledgeDB>;
-	private fallbackStore: IKnowledgeDB;
+	private stores: Map<string, IKnowledgeStore>;
+	private fallbackStore: IKnowledgeStore;
 	private unavailableStoreIds: ReadonlySet<string>;
 	/** ID of the fallback (primary writable) store — used for unavailability checks. */
 	private fallbackStoreId: string;
 
 	constructor(
 		config: KnowledgeServerConfig,
-		stores: Map<string, IKnowledgeDB>,
-		fallbackStore: IKnowledgeDB,
+		stores: Map<string, IKnowledgeStore>,
+		fallbackStore: IKnowledgeStore,
 		unavailableStoreIds: ReadonlySet<string> = new Set(),
 	) {
 		this.domains = config.domains;
@@ -174,7 +174,7 @@ export class DomainRouter {
 	 * Returns undefined when domainId is undefined or not found —
 	 * callers fall back to the chunk's default resolved store.
 	 */
-	resolveStore(domainId: string | undefined): IKnowledgeDB | undefined {
+	resolveStore(domainId: string | undefined): IKnowledgeStore | undefined {
 		if (!domainId) return undefined;
 		const domain = this.domains.find((d) => d.id === domainId);
 		if (!domain) return undefined;

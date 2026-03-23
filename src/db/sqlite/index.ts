@@ -7,16 +7,12 @@ import { DEFAULT_SQLITE_PATH } from "../../config-file.js";
 import { logger } from "../../logger.js";
 import { clampKnowledgeType } from "../../types.js";
 import type {
-	ConsolidationState,
-	DaemonCursor,
 	Episode,
 	KnowledgeEntry,
 	KnowledgeRelation,
 	KnowledgeStatus,
-	PendingEpisode,
-	ProcessedRange,
 } from "../../types.js";
-import type { IKnowledgeDB } from "../interface.js";
+import type { IKnowledgeStore } from "../interface.js";
 import { MIGRATIONS } from "./migrations.js";
 import {
 	CREATE_TABLES,
@@ -31,9 +27,9 @@ import {
  * CRUD for entries/relations, embedding storage/retrieval,
  * and consolidation state management.
  *
- * Implements IKnowledgeDB — used by StoreRegistry for sqlite-kind stores.
+ * Implements IKnowledgeStore — used by StoreRegistry for sqlite-kind stores.
  */
-export class KnowledgeDB implements IKnowledgeDB {
+export class KnowledgeDB implements IKnowledgeStore {
 	private db: Database;
 	/** Absolute path to the SQLite file — exposed for migration tooling. */
 	readonly dbPath: string;
@@ -890,157 +886,6 @@ export class KnowledgeDB implements IKnowledgeDB {
 		return result;
 	}
 
-	// ── Episode Tracking ──
-
-	/**
-	 * Record a processed episode by its stable message ID range.
-	 * Called after the LLM call and DB writes for that episode succeed.
-	 * Uses INSERT OR IGNORE to be idempotent on retry.
-	 *
-	 * @param source  Reader source name (e.g. "opencode", "claude-code").
-	 */
-	async recordEpisode(
-		source: string,
-		sessionId: string,
-		startMessageId: string,
-		endMessageId: string,
-		contentType: "compaction_summary" | "messages" | "document",
-		entriesCreated: number,
-	): Promise<void> {
-		this.db
-			.prepare(
-				`INSERT OR IGNORE INTO consolidated_episode
-         (source, session_id, start_message_id, end_message_id, content_type, processed_at, entries_created)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.run(
-				source,
-				sessionId,
-				startMessageId,
-				endMessageId,
-				contentType,
-				Date.now(),
-				entriesCreated,
-			);
-	}
-
-	/**
-	 * Load already-processed message ID ranges for a set of session IDs from a specific source.
-	 * Returns a Map<sessionId, ProcessedRange[]> for O(1) lookup during segmentation.
-	 *
-	 * The source filter ensures episodes from one reader don't mask episodes from another
-	 * when session IDs happen to collide (both OpenCode and Claude Code use UUIDs, so
-	 * collisions are astronomically unlikely, but the source column is the authoritative
-	 * namespace boundary).
-	 *
-	 * Uses json_each() to pass IDs as a single JSON array parameter, avoiding the
-	 * SQLite SQLITE_MAX_VARIABLE_NUMBER limit (999) that a spread IN(?,?,...) would hit.
-	 *
-	 * @param source      Reader source name (e.g. "opencode", "claude-code").
-	 * @param sessionIds  Session IDs to look up.
-	 */
-	async getProcessedEpisodeRanges(
-		sessionIds: string[],
-	): Promise<Map<string, ProcessedRange[]>> {
-		if (sessionIds.length === 0) return new Map();
-
-		const rows = this.db
-			.prepare(
-				`SELECT source, session_id, start_message_id, end_message_id
-         FROM consolidated_episode
-         WHERE session_id IN (SELECT value FROM json_each(?))`,
-			)
-			.all(JSON.stringify(sessionIds)) as Array<{
-			source: string;
-			session_id: string;
-			start_message_id: string;
-			end_message_id: string;
-		}>;
-
-		const result = new Map<string, ProcessedRange[]>();
-		for (const row of rows) {
-			const existing = result.get(row.session_id);
-			const range: ProcessedRange = {
-				source: row.source,
-				startMessageId: row.start_message_id,
-				endMessageId: row.end_message_id,
-			};
-			if (existing) {
-				existing.push(range);
-			} else {
-				result.set(row.session_id, [range]);
-			}
-		}
-		return result;
-	}
-
-	// ── Consolidation State ──
-
-	async getConsolidationState(): Promise<ConsolidationState> {
-		const row = this.db
-			.prepare("SELECT * FROM consolidation_state WHERE id = 1")
-			.get() as {
-			last_consolidated_at: number;
-			total_sessions_processed: number;
-			total_entries_created: number;
-			total_entries_updated: number;
-		} | null;
-
-		// The singleton row is seeded by CREATE_TABLES (INSERT OR IGNORE).
-		// If it's somehow missing (e.g. manual DB surgery), return safe zero state
-		// rather than throwing a TypeError on property access.
-		if (!row) {
-			logger.warn(
-				"[db] consolidation_state row missing — returning zero state",
-			);
-			return {
-				lastConsolidatedAt: 0,
-				totalSessionsProcessed: 0,
-				totalEntriesCreated: 0,
-				totalEntriesUpdated: 0,
-			};
-		}
-
-		return {
-			lastConsolidatedAt: row.last_consolidated_at,
-			totalSessionsProcessed: row.total_sessions_processed,
-			totalEntriesCreated: row.total_entries_created,
-			totalEntriesUpdated: row.total_entries_updated,
-		};
-	}
-
-	async updateConsolidationState(
-		state: Partial<ConsolidationState>,
-	): Promise<void> {
-		const fields: string[] = [];
-		const values: SQLQueryBindings[] = [];
-
-		if (state.lastConsolidatedAt !== undefined) {
-			fields.push("last_consolidated_at = ?");
-			values.push(state.lastConsolidatedAt);
-		}
-		if (state.totalSessionsProcessed !== undefined) {
-			fields.push("total_sessions_processed = ?");
-			values.push(state.totalSessionsProcessed);
-		}
-		if (state.totalEntriesCreated !== undefined) {
-			fields.push("total_entries_created = ?");
-			values.push(state.totalEntriesCreated);
-		}
-		if (state.totalEntriesUpdated !== undefined) {
-			fields.push("total_entries_updated = ?");
-			values.push(state.totalEntriesUpdated);
-		}
-
-		if (fields.length === 0) return;
-
-		this.db
-			.prepare(
-				`UPDATE consolidation_state SET ${fields.join(", ")} WHERE id = 1`,
-			)
-			.run(...values);
-	}
-
 	// ── Helpers ──
 
 	private rowToEntry(row: RawEntryRow): KnowledgeEntry {
@@ -1146,37 +991,6 @@ export class KnowledgeDB implements IKnowledgeDB {
 			this.db.exec("DELETE FROM knowledge_relation");
 			this.db.exec("DELETE FROM knowledge_entry");
 			this.db.exec("DELETE FROM embedding_metadata");
-		})();
-	}
-
-	/**
-	 * Wipe staging/bookkeeping data from this DB.
-	 * In the new split architecture, staging lives in server.db (ServerLocalDB) and
-	 * this is a no-op. In the legacy single-file setup (KnowledgeDB serves as both),
-	 * this clears consolidated_episode and consolidation_state.
-	 * Always call ServerLocalDB.reinitializeLocal() for a complete reset.
-	 */
-	async reinitializeLocal(): Promise<void> {
-		// Only touch staging tables if they exist in this file.
-		// In the new split architecture, these live in server.db — absent here.
-		const tables = new Set(
-			(
-				this.db
-					.prepare("SELECT name FROM sqlite_master WHERE type='table'")
-					.all() as Array<{ name: string }>
-			).map((r) => r.name),
-		);
-		this.db.transaction(() => {
-			if (tables.has("consolidated_episode")) {
-				this.db.exec("DELETE FROM consolidated_episode");
-			}
-			if (tables.has("consolidation_state")) {
-				this.db.exec(
-					`UPDATE consolidation_state SET
-           last_consolidated_at = 0, total_sessions_processed = 0,
-           total_entries_created = 0, total_entries_updated = 0 WHERE id = 1`,
-				);
-			}
 		})();
 	}
 
@@ -1399,160 +1213,6 @@ export class KnowledgeDB implements IKnowledgeDB {
 			)
 			.run();
 		return result.changes;
-	}
-
-	// ── Consolidation lock ────────────────────────────────────────────────────
-
-	/**
-	 * In-process flag. Prevents re-entrant consolidation on the same SQLite instance
-	 * (e.g. HTTP trigger fires while the polling loop is already running).
-	 * Does NOT prevent two separate processes sharing the same SQLite file from
-	 * consolidating simultaneously — that scenario is out of scope for SQLite.
-	 */
-	private _consolidationLockHeld = false;
-
-	async tryAcquireConsolidationLock(): Promise<boolean> {
-		if (this._consolidationLockHeld) return false;
-		this._consolidationLockHeld = true;
-		return true;
-	}
-
-	async releaseConsolidationLock(): Promise<void> {
-		this._consolidationLockHeld = false;
-	}
-
-	// ── Pending Episodes ─────────────────────────────────────────────────────
-
-	async insertPendingEpisode(episode: PendingEpisode): Promise<void> {
-		this.db
-			.prepare(
-				`INSERT OR IGNORE INTO pending_episodes
-         (id, user_id, source, session_id, start_message_id, end_message_id,
-          session_title, project_name, directory, content, content_type,
-          session_timestamp, max_message_time, approx_tokens, uploaded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.run(
-				episode.id,
-				episode.userId,
-				episode.source,
-				episode.sessionId,
-				episode.startMessageId,
-				episode.endMessageId,
-				episode.sessionTitle,
-				episode.projectName,
-				episode.directory,
-				episode.content,
-				episode.contentType,
-				episode.timeCreated,
-				episode.maxMessageTime,
-				episode.approxTokens,
-				episode.uploadedAt,
-			);
-	}
-
-	async getPendingEpisodes(
-		afterMaxMessageTime: number,
-		limit = 500,
-	): Promise<PendingEpisode[]> {
-		const rows = this.db
-			.prepare(
-				`SELECT * FROM pending_episodes
-         WHERE max_message_time > ?
-         ORDER BY max_message_time ASC
-         LIMIT ?`,
-			)
-			.all(afterMaxMessageTime, limit) as Array<{
-			id: string;
-			user_id: string;
-			source: string;
-			session_id: string;
-			start_message_id: string;
-			end_message_id: string;
-			session_title: string;
-			project_name: string;
-			directory: string;
-			content: string;
-			content_type: string;
-			session_timestamp: number;
-			max_message_time: number;
-			approx_tokens: number;
-			uploaded_at: number;
-		}>;
-
-		return rows.map((r) => ({
-			id: r.id,
-			userId: r.user_id,
-			source: r.source,
-			sessionId: r.session_id,
-			startMessageId: r.start_message_id,
-			endMessageId: r.end_message_id,
-			sessionTitle: r.session_title,
-			projectName: r.project_name,
-			directory: r.directory,
-			content: r.content,
-			contentType: r.content_type as Episode["contentType"],
-			timeCreated: r.session_timestamp,
-			maxMessageTime: r.max_message_time,
-			approxTokens: r.approx_tokens,
-			uploadedAt: r.uploaded_at,
-		}));
-	}
-
-	async countPendingSessions(): Promise<number> {
-		// In new-architecture setups this table lives in server.db — returns 0 here.
-		// In legacy single-file setups the table may exist.
-		const row = this.db
-			.prepare("SELECT COUNT(DISTINCT session_id) as n FROM pending_episodes")
-			.get() as { n: number } | null;
-		return row?.n ?? 0;
-	}
-
-	async deletePendingEpisodes(ids: string[]): Promise<void> {
-		if (ids.length === 0) return;
-		this.db
-			.prepare(
-				"DELETE FROM pending_episodes WHERE id IN (SELECT value FROM json_each(?))",
-			)
-			.run(JSON.stringify(ids));
-	}
-
-	// ── Daemon Cursor ─────────────────────────────────────────────────────────
-
-	async getDaemonCursor(source: string): Promise<DaemonCursor> {
-		const row = this.db
-			.prepare(
-				"SELECT last_message_time_created, last_uploaded_at FROM daemon_cursor WHERE source = ?",
-			)
-			.get(source) as {
-			last_message_time_created: number;
-			last_uploaded_at: number;
-		} | null;
-
-		if (!row) {
-			return { source, lastMessageTimeCreated: 0, lastUploadedAt: 0 };
-		}
-		return {
-			source,
-			lastMessageTimeCreated: row.last_message_time_created,
-			lastUploadedAt: row.last_uploaded_at,
-		};
-	}
-
-	async updateDaemonCursor(
-		source: string,
-		cursor: Partial<Omit<DaemonCursor, "source">>,
-	): Promise<void> {
-		const current = await this.getDaemonCursor(source);
-		const newLastMessageTime =
-			cursor.lastMessageTimeCreated ?? current.lastMessageTimeCreated;
-		const newLastUploaded = cursor.lastUploadedAt ?? current.lastUploadedAt;
-		this.db
-			.prepare(
-				`INSERT OR REPLACE INTO daemon_cursor (source, last_message_time_created, last_uploaded_at)
-         VALUES (?, ?, ?)`,
-			)
-			.run(source, newLastMessageTime, newLastUploaded);
 	}
 
 	async close(): Promise<void> {

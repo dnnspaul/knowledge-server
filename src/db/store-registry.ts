@@ -9,7 +9,7 @@ import type { KnowledgeServerConfig, StoreConfig } from "../config-file.js";
 import { DomainRouter } from "../consolidation/domain-router.js";
 import { logger } from "../logger.js";
 import { KnowledgeDB } from "./sqlite/index.js";
-import type { IKnowledgeDB, IServerLocalDB } from "./interface.js";
+import type { IKnowledgeStore, IServerLocalDB } from "./interface.js";
 import { PostgresKnowledgeDB } from "./postgres/index.js";
 import {
 	ServerLocalDB,
@@ -17,7 +17,7 @@ import {
 } from "./server-local/index.js";
 
 /**
- * StoreRegistry — manages a configured set of IKnowledgeDB instances.
+ * StoreRegistry — manages a configured set of IKnowledgeStore instances.
  *
  * Replaces the old createKnowledgeDB() factory. Instead of a single DB,
  * the registry holds 1..N stores:
@@ -32,10 +32,10 @@ import {
  * If no config file exists, a single default SQLite store is used (zero-config).
  */
 export class StoreRegistry {
-	private stores: Map<string, IKnowledgeDB>;
-	private writable: IKnowledgeDB;
+	private stores: Map<string, IKnowledgeStore>;
+	private writable: IKnowledgeStore;
 	private writableIds: string[];
-	private readable: IKnowledgeDB[];
+	private readable: IKnowledgeStore[];
 	/**
 	 * The server-local SQLite database (server.db).
 	 * Always local to the machine where knowledge-server runs.
@@ -61,7 +61,7 @@ export class StoreRegistry {
 	readonly daemonAutoSpawn: boolean;
 
 	private constructor(
-		stores: Map<string, IKnowledgeDB>,
+		stores: Map<string, IKnowledgeStore>,
 		writableId: string,
 		config: KnowledgeServerConfig,
 		unavailableIds: Set<string>,
@@ -92,7 +92,7 @@ export class StoreRegistry {
 	}
 
 	/** The primary store that receives consolidation writes. */
-	writableStore(): IKnowledgeDB {
+	writableStore(): IKnowledgeStore {
 		return this.writable;
 	}
 
@@ -100,7 +100,7 @@ export class StoreRegistry {
 	 * All available writable stores with their IDs.
 	 * Used for reinitialize --store targeting.
 	 */
-	writableStoreEntries(): Array<{ id: string; db: IKnowledgeDB }> {
+	writableStoreEntries(): Array<{ id: string; db: IKnowledgeStore }> {
 		return this.writableIds.flatMap((id) => {
 			const db = this.stores.get(id);
 			return db ? [{ id, db }] : [];
@@ -112,7 +112,7 @@ export class StoreRegistry {
 	 * Includes the writable store — activation draws from the full corpus.
 	 * Returns a shallow copy — callers cannot mutate the registry's internal list.
 	 */
-	readStores(): IKnowledgeDB[] {
+	readStores(): IKnowledgeStore[] {
 		return [...this.readable];
 	}
 
@@ -171,10 +171,10 @@ export class StoreRegistry {
 			}
 		}
 
-		const stores = new Map<string, IKnowledgeDB>(
+		const stores = new Map<string, IKnowledgeStore>(
 			results
 				.filter(
-					(r): r is { id: string; db: IKnowledgeDB; error: undefined } =>
+					(r): r is { id: string; db: IKnowledgeStore; error: undefined } =>
 						r.db !== null,
 				)
 				.map(({ id, db }) => [id, db]),
@@ -232,7 +232,7 @@ export class StoreRegistry {
  */
 async function tryInitStore(
 	storeConfig: StoreConfig,
-): Promise<{ id: string; db: IKnowledgeDB | null; error?: string }> {
+): Promise<{ id: string; db: IKnowledgeStore | null; error?: string }> {
 	try {
 		const db = await initStore(storeConfig);
 		return { id: storeConfig.id, db };
@@ -245,7 +245,7 @@ async function tryInitStore(
 	}
 }
 
-async function initStore(storeConfig: StoreConfig): Promise<IKnowledgeDB> {
+async function initStore(storeConfig: StoreConfig): Promise<IKnowledgeStore> {
 	if (storeConfig.kind === "sqlite") {
 		const path = resolveSqlitePath(storeConfig);
 		logger.log(`[db] Store "${storeConfig.id}": SQLite at ${path}`);

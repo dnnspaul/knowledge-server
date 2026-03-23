@@ -1,6 +1,6 @@
 import { config } from "../config.js";
 import { computeStrength } from "../consolidation/decay.js";
-import type { IKnowledgeDB } from "../db/index.js";
+import type { IKnowledgeStore } from "../db/index.js";
 import { logger } from "../logger.js";
 import type {
 	ActivationResult,
@@ -56,13 +56,13 @@ export class ActivationEngine {
 	 * The writable (primary) store — used for write operations:
 	 * recordAccess, ensureEmbeddings, checkAndReEmbed, embedding metadata.
 	 */
-	private db: IKnowledgeDB;
+	private db: IKnowledgeStore;
 	/**
 	 * All stores to read from during activation (includes the writable store).
 	 * Fan-out: each activation query runs against all read stores and results
 	 * are merged and re-ranked by similarity score.
 	 */
-	private readDbs: IKnowledgeDB[];
+	private readDbs: IKnowledgeStore[];
 	readonly embeddings: EmbeddingClient;
 
 	/**
@@ -70,7 +70,7 @@ export class ActivationEngine {
 	 * @param readDbs     All stores to fan out activation reads across.
 	 *                    If omitted, defaults to [writableDb] (single-store mode).
 	 */
-	constructor(writableDb: IKnowledgeDB, readDbs?: IKnowledgeDB[]) {
+	constructor(writableDb: IKnowledgeStore, readDbs?: IKnowledgeStore[]) {
 		this.db = writableDb;
 		this.readDbs = readDbs ?? [writableDb];
 		this.embeddings = new EmbeddingClient();
