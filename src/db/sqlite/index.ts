@@ -7,7 +7,6 @@ import { DEFAULT_SQLITE_PATH } from "../../config-file.js";
 import { logger } from "../../logger.js";
 import { clampKnowledgeType } from "../../types.js";
 import type {
-	Episode,
 	KnowledgeEntry,
 	KnowledgeRelation,
 	KnowledgeStatus,

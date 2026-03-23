@@ -3,7 +3,6 @@ import postgres from "postgres";
 import { logger } from "../../logger.js";
 import { clampKnowledgeType } from "../../types.js";
 import type {
-	Episode,
 	KnowledgeEntry,
 	KnowledgeRelation,
 	KnowledgeStatus,
@@ -210,6 +209,11 @@ export class PostgresKnowledgeDB implements IKnowledgeStore {
 			if (migratedTo < SCHEMA_VERSION) {
 				logger.warn(
 					`[pg-db] Schema still at v${migratedTo} after migrations, code expects v${SCHEMA_VERSION}. Dropping and recreating all tables. All existing knowledge data has been cleared.`,
+				);
+				logger.warn(
+					"[pg-db] Destructive reset: consolidated_episode will be dropped — " +
+						"all processed episode records are lost. Previously consolidated sessions " +
+						"will be re-processed on next run and may produce duplicate knowledge entries.",
 				);
 				// Wrap the entire drop+recreate in a transaction so a crash mid-way
 				// leaves the DB at the last committed migration version (re-runnable

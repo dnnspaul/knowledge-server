@@ -19,9 +19,13 @@ import {
 	expect,
 	it,
 } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import postgres from "postgres";
 import type { IKnowledgeStore } from "../src/db/interface";
 import { PostgresKnowledgeDB } from "../src/db/postgres/index";
+import { ServerLocalDB } from "../src/db/server-local/index";
 
 const PG_URI = process.env.PG_TEST_URI;
 
@@ -52,33 +56,39 @@ function makeEntry(id: string, overrides: Record<string, unknown> = {}) {
 
 describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 	let db: IKnowledgeStore;
+	let serverLocalDb: ServerLocalDB;
 	const uri = PG_URI as string;
 	// Shared truncation client — created once to avoid pool churn on every test.
 	let truncSql: ReturnType<typeof postgres>;
+	let tempDir: string;
 
 	beforeAll(async () => {
+		tempDir = mkdtempSync(join(tmpdir(), "ks-pg-test-"));
 		truncSql = postgres(uri, { max: 1 });
 		db = new PostgresKnowledgeDB(uri);
 		await (db as PostgresKnowledgeDB).initialize();
 	});
 
 	beforeEach(async () => {
-		// Wipe data between tests for isolation. knowledge_cluster must be listed
-		// explicitly — it has no FK back to knowledge_entry so it is not reached
-		// by CASCADE. knowledge_relation and knowledge_cluster_member are covered
-		// by CASCADE: knowledge_relation via source_id/target_id → knowledge_entry,
-		// knowledge_cluster_member via entry_id → knowledge_entry and
-		// cluster_id → knowledge_cluster.
-		await truncSql`TRUNCATE knowledge_entry, knowledge_cluster, consolidated_episode, consolidation_state, embedding_metadata, schema_version CASCADE`;
+		// Wipe knowledge data between tests for isolation.
+		// knowledge_cluster must be listed explicitly — it has no FK back to
+		// knowledge_entry so it is not reached by CASCADE.
+		// consolidated_episode and consolidation_state are NOT truncated here —
+		// they now live in server.db (ServerLocalDB), not in Postgres.
+		await truncSql`TRUNCATE knowledge_entry, knowledge_cluster, embedding_metadata, schema_version CASCADE`;
 		// Re-initialize to re-stamp schema_version (truncated above).
 		// Clear initPromise (private field) so initialize() re-runs on next call.
 		(db as unknown as { initPromise: null }).initPromise = null;
 		await (db as PostgresKnowledgeDB).initialize();
+		// Fresh ServerLocalDB for each test — staging methods now live here.
+		serverLocalDb?.close().catch(() => {});
+		serverLocalDb = new ServerLocalDB(join(tempDir, `server-${Date.now()}.db`));
 	});
 
 	afterAll(async () => {
 		// Run in parallel — independent connections, no ordering dependency.
-		await Promise.all([db.close(), truncSql.end()]);
+		await Promise.all([db.close(), serverLocalDb?.close(), truncSql.end()]);
+		rmSync(tempDir, { recursive: true, force: true });
 	});
 
 	// ── Schema & Init ──
@@ -324,28 +334,30 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 	});
 
 	// ── Consolidation State ──
+	// These methods now live on IServerLocalDB (ServerLocalDB), not IKnowledgeStore.
 
 	it("manages consolidation state", async () => {
-		const state = await db.getConsolidationState();
+		const state = await serverLocalDb.getConsolidationState();
 		expect(state.lastConsolidatedAt).toBe(0);
 		expect(state.totalSessionsProcessed).toBe(0);
 
-		await db.updateConsolidationState({
+		await serverLocalDb.updateConsolidationState({
 			lastConsolidatedAt: 1000000,
 			totalSessionsProcessed: 50,
 			totalEntriesCreated: 25,
 		});
 
-		const updated = await db.getConsolidationState();
+		const updated = await serverLocalDb.getConsolidationState();
 		expect(updated.lastConsolidatedAt).toBe(1000000);
 		expect(updated.totalSessionsProcessed).toBe(50);
 		expect(updated.totalEntriesCreated).toBe(25);
 	});
 
 	// ── Episode Tracking ──
+	// These methods now live on IServerLocalDB (ServerLocalDB), not IKnowledgeStore.
 
 	it("records and retrieves episode ranges", async () => {
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-start-1",
@@ -353,7 +365,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			"messages",
 			3,
 		);
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-start-2",
@@ -361,7 +373,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			"compaction_summary",
 			1,
 		);
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"opencode",
 			"session-2",
 			"msg-start-3",
@@ -370,7 +382,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			0,
 		);
 
-		const ranges = await db.getProcessedEpisodeRanges([
+		const ranges = await serverLocalDb.getProcessedEpisodeRanges([
 			"session-1",
 			"session-2",
 		]);
@@ -401,7 +413,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 	});
 
 	it("recordEpisode is idempotent", async () => {
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-a",
@@ -409,7 +421,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			"messages",
 			2,
 		);
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-a",
@@ -418,12 +430,12 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			2,
 		);
 
-		const ranges = await db.getProcessedEpisodeRanges(["session-1"]);
+		const ranges = await serverLocalDb.getProcessedEpisodeRanges(["session-1"]);
 		expect(ranges.get("session-1")).toHaveLength(1);
 	});
 
 	it("episodes from different sources for the same session are both returned", async () => {
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-a",
@@ -431,7 +443,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			"messages",
 			2,
 		);
-		await db.recordEpisode(
+		await serverLocalDb.recordEpisode(
 			"claude-code",
 			"session-1",
 			"msg-a",
@@ -440,12 +452,14 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			2,
 		);
 
-		const ranges = await db.getProcessedEpisodeRanges(["session-1"]);
+		const ranges = await serverLocalDb.getProcessedEpisodeRanges(["session-1"]);
 		expect(ranges.get("session-1")).toHaveLength(2);
 	});
 
 	it("getProcessedEpisodeRanges returns empty map for unknown session", async () => {
-		const ranges = await db.getProcessedEpisodeRanges(["no-such-session"]);
+		const ranges = await serverLocalDb.getProcessedEpisodeRanges([
+			"no-such-session",
+		]);
 		expect(ranges.size).toBe(0);
 	});
 

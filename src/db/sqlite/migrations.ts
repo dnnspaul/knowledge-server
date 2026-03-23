@@ -226,6 +226,14 @@ export const MIGRATIONS: Array<{
 			// pending_episodes is self-draining; consolidated_episode handles idempotency.
 			db.exec("DROP TABLE IF EXISTS source_cursor");
 
+			// NOTE: After v13, consolidated_episode belongs in server.db (ServerLocalDB),
+			// not in knowledge.db. This migration preserves the existing table to allow
+			// ServerLocalDB.migrateFromKnowledgeDb() to copy the rows on first startup.
+			// After migration, the table in knowledge.db becomes orphaned (never read or
+			// written again) but is intentionally NOT dropped here — dropping before
+			// migrateFromKnowledgeDb() copies rows would silently destroy the idempotency
+			// history, causing all previously-consolidated episodes to be re-processed.
+
 			// Rebuild consolidated_episode without user_id.
 			// Guard: skip if table doesn't exist yet (fresh DB gets correct schema from CREATE_TABLES).
 			const episodeCols = (

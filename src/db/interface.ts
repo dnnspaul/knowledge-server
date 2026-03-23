@@ -113,8 +113,12 @@ export interface IServerLocalDB {
 	): Promise<void>;
 
 	/**
-	 * Wipe all staging/bookkeeping data: pending_episodes, consolidated_episode,
-	 * and reset consolidation_state counters.
+	 * Wipe staging data: pending_episodes, consolidated_episode, and reset
+	 * consolidation_state counters.
+	 *
+	 * daemon_cursor is intentionally NOT reset — resetting it would cause the
+	 * daemon to re-upload all past episodes, producing duplicates on next run.
+	 *
 	 * Always called alongside IKnowledgeStore.reinitialize() for a full reset.
 	 */
 	reinitialize(): Promise<void>;
