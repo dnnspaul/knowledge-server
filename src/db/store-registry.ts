@@ -151,6 +151,17 @@ export class StoreRegistry {
 			logger.log("[db] No config.jsonc found — using default SQLite store.");
 		}
 
+		// Create and populate server.db BEFORE initialising knowledge stores.
+		// This ensures that migrateFromKnowledgeDb() copies consolidated_episode
+		// rows from legacy knowledge.db into server.db before any Postgres store
+		// runs migrations that drop those tables (schema v14+).
+		const serverLocalDb = new ServerLocalDB();
+		const legacySqliteConfig = config.stores.find((s) => s.kind === "sqlite");
+		if (legacySqliteConfig) {
+			const legacyPath = resolveSqlitePath(legacySqliteConfig);
+			serverLocalDb.migrateFromKnowledgeDb(legacyPath);
+		}
+
 		// Initialise all stores in parallel.
 		// Unreachable stores produce a warning and are excluded — not a hard error.
 		// This lets the server start in degraded mode (e.g. team Postgres is down
@@ -197,16 +208,6 @@ export class StoreRegistry {
 
 		// Use the first available writable store as the primary.
 		const writableId = availableWritableIds[0];
-
-		// Create the server-local DB (server.db) — always a local SQLite file.
-		// Migrate staging tables from knowledge.db if server.db doesn't exist yet.
-		const serverLocalDb = new ServerLocalDB();
-		const legacyKnowledgeDbPath = (
-			stores.get(writableId) as KnowledgeDB | undefined
-		)?.dbPath;
-		if (legacyKnowledgeDbPath) {
-			serverLocalDb.migrateFromKnowledgeDb(legacyKnowledgeDbPath);
-		}
 
 		const registry = new StoreRegistry(
 			stores,
