@@ -424,7 +424,7 @@ Run \`knowledge-server help-advanced\` for additional commands.
 		// automatically using the same version as the running server.
 		if (!isSourceRun && !existsSync(daemonBinPath)) {
 			logger.log(
-				"[daemon] knowledge-daemon not found — downloading it automatically...",
+				`[daemon] knowledge-daemon not found at ${daemonBinPath} — downloading v${pkg.version}...`,
 			);
 			try {
 				await downloadAndInstallDaemon(`v${pkg.version}`, daemonBinPath);

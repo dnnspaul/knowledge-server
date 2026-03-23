@@ -221,7 +221,8 @@ export async function downloadAndInstallDaemon(
 	const asset = `knowledge-daemon-${platform}`;
 	const url = `${GITHUB_RELEASES}/${targetVersion}/${asset}.gz`;
 
-	// silent=true: suppress the \r progress display — caller logs via structured logger
+	// silent=true: suppress the \r progress display — the server startup caller
+	// logs progress via its own structured logger before and after this call.
 	const tmpPath = await downloadBinary(url, destPath, asset, true);
 	// Note: downloadBinary and installBinary each clean up tmpPath on their own
 	// failure paths. The only gap is a checksum mismatch after a successful
