@@ -1091,9 +1091,11 @@ ${programArgs}
 			console.log(
 				`    Log:   ${join(home, ".local", "share", "knowledge-server", "daemon.log")}`,
 			);
-			console.log("");
-			console.log(autoSpawnNote);
 		}
+		// Print regardless of load success — plist is on disk and will activate
+		// on the next reboot or manual retry, so the warning is always relevant.
+		console.log("");
+		console.log(autoSpawnNote);
 	} else if (platform === "linux") {
 		// Linux systemd user service
 		const serviceDir = join(home, ".config", "systemd", "user");
@@ -1134,9 +1136,11 @@ WantedBy=default.target
 			console.log(
 				`    Log:     ${join(home, ".local", "share", "knowledge-server", "daemon.log")}`,
 			);
-			console.log("");
-			console.log(autoSpawnNote);
 		}
+		// Print regardless of enable success — service file is on disk and will
+		// activate on retry or reboot, so the warning is always relevant.
+		console.log("");
+		console.log(autoSpawnNote);
 	} else {
 		console.error(
 			`  ✗ Unsupported platform: ${platform}. Automatic service registration is only supported on macOS and Linux.`,
