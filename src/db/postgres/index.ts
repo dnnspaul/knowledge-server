@@ -1282,12 +1282,18 @@ export class PostgresKnowledgeDB implements IKnowledgeDB {
 	}
 
 	async countPendingSessions(): Promise<number> {
-		// In new-architecture setups this table lives in server.db — returns 0 here.
+		// In new-architecture setups pending_episodes lives in server.db — expected to return 0.
 		try {
 			const rows = await this
 				.sql`SELECT COUNT(DISTINCT session_id)::int as n FROM pending_episodes`;
 			return (rows[0]?.n as number) ?? 0;
-		} catch {
+		} catch (err) {
+			// Postgres error 42P01 (undefined_table): expected for knowledge-store DBs
+			// that don't hold pending_episodes. Log unexpected errors rather than silencing.
+			const pgCode = (err as { code?: string }).code;
+			if (pgCode !== "42P01") {
+				logger.warn("[db] countPendingSessions unexpected error:", err);
+			}
 			return 0;
 		}
 	}
