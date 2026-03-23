@@ -323,11 +323,13 @@ export const config = {
 			2,
 		),
 		// Polling interval for background auto-consolidation while the server is running.
-		// 0 (default) disables polling — consolidation only runs on startup and via API.
-		// Example: 1800000 = 30 minutes. Only triggers when pending sessions exist.
+		// Default: 8 hours (28_800_000 ms). Only triggers when pending sessions exist,
+		// so a quiet period costs nothing. Matches the sleep-consolidation metaphor —
+		// once per day / overnight is the natural cadence.
+		// Override with CONSOLIDATION_POLL_INTERVAL_MS; set to 0 to disable.
 		pollIntervalMs: parseIntEnv(
 			process.env.CONSOLIDATION_POLL_INTERVAL_MS,
-			0,
+			28_800_000, // 8 hours
 			0,
 		),
 	},

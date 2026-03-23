@@ -211,39 +211,46 @@ else
   # users can uncomment these lines and the shell will expand $HOME at runtime.
   # Use $HOME rather than ~ — tilde is not expanded in sourced variable assignments.
   cat > "$ENV_FILE" << 'EOF'
-# knowledge-server configuration
-#
-# OPTION A — Direct provider credentials (recommended)
-# Set the key for the provider(s) you use.
+# knowledge-server credentials
+# Set ONE of the following options, then start with: knowledge-server
+
+# ── Option A: Direct API key (most common) ────────────────────────────────────
+# Uncomment the key for the provider you use.
 #
 # ANTHROPIC_API_KEY=sk-ant-...
 # OPENAI_API_KEY=sk-...
 # GOOGLE_API_KEY=...
-#
-# OPTION B — Unified proxy endpoint (if you have one)
-#
-LLM_API_KEY=your-api-key-here
-LLM_BASE_ENDPOINT=https://your-llm-endpoint.example.com
 
-# Optional — uncomment to override defaults
+# ── Option B: Unified proxy endpoint ─────────────────────────────────────────
+# If you use a proxy that fronts multiple providers (e.g. OpenRouter, LiteLLM).
+#
+# LLM_API_KEY=your-api-key-here
+# LLM_BASE_ENDPOINT=https://your-llm-endpoint.example.com
+
+# ── Optional overrides ────────────────────────────────────────────────────────
+# Model selection (defaults shown):
 # LLM_EXTRACTION_MODEL=anthropic/claude-sonnet-4-6
 # LLM_MERGE_MODEL=anthropic/claude-haiku-4-5
-# LLM_CONTRADICTION_MODEL=anthropic/claude-sonnet-4-6
-# LLM_SYNTHESIS_MODEL=anthropic/claude-sonnet-4-6     # cross-session synthesis (defaults to LLM_EXTRACTION_MODEL)
+
+# Embeddings (defaults to OpenAI text-embedding-3-large):
 # EMBEDDING_MODEL=text-embedding-3-large
 # EMBEDDING_DIMENSIONS=3072
-# Example: local Ollama embeddings
+# Local embeddings via Ollama:
 # EMBEDDING_BASE_URL=http://localhost:11434/v1
 # EMBEDDING_MODEL=nomic-embed-text
+
+# Server:
 # KNOWLEDGE_PORT=3179
-# KNOWLEDGE_HOST=127.0.0.1
-# Use $HOME rather than ~ — tilde is not expanded in sourced variable assignments
-# KNOWLEDGE_DB_PATH=$HOME/.local/share/knowledge-server/knowledge.db
+# KNOWLEDGE_ADMIN_TOKEN=your-stable-token-here   # fixes the token across restarts
+
+# Source paths (auto-detected by default — only set if your tool is in a non-standard location):
 # OPENCODE_DB_PATH=$HOME/.local/share/opencode/opencode.db
-# KNOWLEDGE_ADMIN_TOKEN=your-stable-token-here
+
+# Store config (SQLite by default) — for Postgres or custom paths use config.jsonc instead:
+# knowledge-server migrate-config   ← run this once if upgrading from v2
 EOF
   echo "  ✓ Created $ENV_FILE"
-  echo "  ⚠ Edit it before starting the server — set LLM credentials (ANTHROPIC_API_KEY, OPENAI_API_KEY, or LLM_BASE_ENDPOINT+LLM_API_KEY)"
+  echo "  ⚠ Edit it and set your API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or LLM_BASE_ENDPOINT+LLM_API_KEY)"
 fi
 
 # ── Generate launcher wrapper for the HTTP server ─────────────────────────────
@@ -432,26 +439,19 @@ fi
 # The MCP subcommand is built into the main binary — no separate process needed.
 # LLM credentials stay in the knowledge server's .env, not the MCP process.
 echo "  $STEP. Run the setup command for your tool(s):"
-echo "     knowledge-server setup-tool opencode"
-echo "     knowledge-server setup-tool claude-code"
-echo "     knowledge-server setup-tool cursor"
-echo "     knowledge-server setup-tool codex"
-echo ""
-echo "     Or add manually to your tool's MCP config:"
-echo '     "command": ["'"$INSTALL_DIR/libexec/knowledge-server"'", "mcp"]'
-echo ""
-STEP=$((STEP + 1))
-
-echo "  $STEP. (Claude Code) Register the MCP server and hook:"
-echo "     knowledge-server setup-tool claude-code"
+echo "     knowledge-server setup-tool opencode     # OpenCode"
+echo "     knowledge-server setup-tool claude-code  # Claude Code (MCP + hook + commands)"
+echo "     knowledge-server setup-tool cursor       # Cursor"
+echo "     knowledge-server setup-tool codex        # Codex CLI"
+echo "     knowledge-server setup-tool vscode       # VSCode / GitHub Copilot"
 echo ""
 STEP=$((STEP + 1))
 
 if [ "$PATH_OK" = true ]; then
-  echo "  $STEP. Start the HTTP server:"
+  echo "  $STEP. Start the server:"
   echo "     knowledge-server"
 else
-  echo "  $STEP. Start the HTTP server:"
+  echo "  $STEP. Start the server:"
   echo "     $BIN_DIR/knowledge-server"
   echo ""
   if [ -n "$SHELL_RC" ]; then
@@ -460,6 +460,9 @@ else
     echo "       . $SHELL_RC"
   fi
 fi
+echo ""
+echo "     The episode collector (knowledge-daemon) starts automatically alongside"
+echo "     the server — no separate setup needed for single-machine use."
 echo ""
 STEP=$((STEP + 1))
 

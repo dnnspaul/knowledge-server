@@ -568,11 +568,15 @@ Run \`knowledge-server help-advanced\` for additional commands.
 		activeLoops.push(runConsolidationDrain("startup consolidation"));
 	}
 
-	// Polling loop (opt-in)
+	// Polling loop — default 8h, skips silently when no sessions are pending.
 	const pollIntervalMs = config.consolidation.pollIntervalMs;
 	if (pollIntervalMs > 0) {
+		const intervalLabel =
+			pollIntervalMs >= 3_600_000
+				? `${pollIntervalMs / 3_600_000}h`
+				: `${pollIntervalMs / 60_000}m`;
 		logger.log(
-			`✓ Auto-consolidation polling enabled (every ${pollIntervalMs / 1000}s).`,
+			`✓ Auto-consolidation polling enabled (every ${intervalLabel}). Set CONSOLIDATION_POLL_INTERVAL_MS=0 to disable.`,
 		);
 		activeLoops.push(
 			(async () => {

@@ -1,8 +1,12 @@
 # knowledge-server
 
-Persistent semantic memory for [OpenCode](https://opencode.ai), [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), [Cursor](https://cursor.com), [Codex CLI](https://github.com/openai/codex), and [VSCode](https://code.visualstudio.com) (GitHub Copilot) — fully local, no external service required.
+A persistent memory layer for AI coding agents. Reads your session history, extracts what's worth keeping, and injects relevant entries into new conversations automatically.
 
-Reads your session history, extracts what's worth keeping into a knowledge store (SQLite by default, or PostgreSQL for shared/hosted deployments), and injects relevant entries into new conversations automatically.
+Works with [OpenCode](https://opencode.ai), [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), [Cursor](https://cursor.com), [Codex CLI](https://github.com/openai/codex), and [VSCode](https://code.visualstudio.com) (GitHub Copilot). Fully local — no external service required beyond an LLM API key you already have.
+
+**In practice:** if you spent a session working out how your auth system works, the next time you ask an auth-related question in a new session, the relevant conclusions from that previous session are silently included as context before the LLM sees your message. The agent has access to what was established before, without you having to re-explain it.
+
+It doesn't always work. The extraction quality depends on your LLM and what was said. Most sessions produce nothing — the bar is intentionally high. But when it does work, it removes a real friction point.
 
 ## Install
 
@@ -12,20 +16,22 @@ Supports **Linux x64** and **macOS arm64** (Apple Silicon). No Bun or Node.js re
 curl -fsSL https://raw.githubusercontent.com/MAnders333/knowledge-server/main/scripts/install.sh | bash
 ```
 
-This downloads the server binary into `~/.local/share/knowledge-server/` and generates a `.env` template at `~/.config/knowledge-server/.env`.
-
 **After running:**
 
-1. Edit `~/.config/knowledge-server/.env` — set your LLM credentials (e.g. `ANTHROPIC_API_KEY`)
-2. Run the setup command for your tool(s):
-   - `knowledge-server setup-tool opencode` — symlinks the plugin and commands, registers the MCP server in `opencode.jsonc`
-   - `knowledge-server setup-tool claude-code` — registers the MCP server, `UserPromptSubmit` hook, and slash commands
-   - `knowledge-server setup-tool cursor` — registers the MCP server in `~/.cursor/mcp.json`
-   - `knowledge-server setup-tool codex` — registers the MCP server in `~/.codex/config.toml`
-   - `knowledge-server setup-tool vscode` — registers the MCP server via `code --add-mcp`
+1. Edit `~/.config/knowledge-server/.env` — set your LLM API key (e.g. `ANTHROPIC_API_KEY=sk-ant-...`)
+2. Register with your tool(s):
+   ```bash
+   knowledge-server setup-tool opencode     # OpenCode
+   knowledge-server setup-tool claude-code  # Claude Code
+   knowledge-server setup-tool cursor       # Cursor
+   knowledge-server setup-tool codex        # Codex CLI
+   knowledge-server setup-tool vscode       # VSCode / GitHub Copilot
+   ```
 3. Start the server: `knowledge-server`
 
-**To update later:**
+That's it. The server auto-starts the episode collector alongside itself — nothing else to configure for single-machine use.
+
+**To update:**
 
 ```bash
 knowledge-server update
@@ -33,29 +39,91 @@ knowledge-server update
 
 ### From source
 
-**Prerequisites:** [Bun](https://bun.sh) and at least one supported tool with an active session history.
+**Prerequisites:** [Bun](https://bun.sh) ≥ 1.2
 
 ```bash
 git clone https://github.com/MAnders333/knowledge-server
 cd knowledge-server
 cp .env.template .env
-# Edit .env — set your LLM credentials (e.g. ANTHROPIC_API_KEY)
-bun run setup
-bun run start
+# Edit .env — set ANTHROPIC_API_KEY or OPENAI_API_KEY
+bun run setup   # installs deps, registers OpenCode MCP server
+bun run start   # starts both server and daemon
 ```
 
-`bun run setup` installs dependencies, creates the data directory, and runs `setup-tool opencode` (symlinks the plugin and commands into `~/.config/opencode/`, registers the MCP server in `opencode.jsonc`).
-
-For other tools, run the corresponding setup step:
+For other tools, run the corresponding setup command after `bun run start`:
 
 ```bash
-bun run start setup-tool claude-code  # MCP server + hook + slash commands
-bun run start setup-tool cursor       # MCP server in ~/.cursor/mcp.json
-bun run start setup-tool codex        # MCP server in ~/.codex/config.toml
-bun run start setup-tool vscode       # MCP server via `code --add-mcp`
+bun run start setup-tool claude-code  # Claude Code
+bun run start setup-tool cursor       # Cursor
+bun run start setup-tool codex        # Codex CLI
+bun run start setup-tool vscode       # VSCode
 ```
 
 All setup steps are idempotent — re-running is safe.
+
+## How it works
+
+Once running, three things happen automatically and passively:
+
+1. **Episode collection** — `knowledge-daemon` (started alongside the server) reads your AI tool session files in the background and uploads new conversations to a staging table.
+2. **Consolidation** — every 8 hours, the server reads staged conversations and asks an LLM: *what from this session is worth remembering long-term?* Most sessions produce nothing. High bar.
+3. **Activation** — on every new message, the query is embedded and matched against stored entries. Only semantically relevant entries activate, injected silently as context before the LLM sees your message.
+
+There is no manual step. Knowledge accumulates in the background.
+
+## Design
+
+The core problem with agent memory is that naive approaches store everything and retrieve too much. Context windows fill with loosely-related facts, and the store grows without bound.
+
+The design is loosely inspired by how human memory consolidates experience. Three properties follow from this:
+
+**High extraction bar.** The LLM reads session transcripts and asks whether each thing learned would still be useful months from now. Most sessions produce nothing. The store only grows when something genuinely new was established — a confirmed fact, a decision made, a procedure that worked.
+
+**Reconsolidation instead of accumulation.** Before a new entry is inserted, it's embedded and compared to the nearest existing entry. If similarity ≥ 0.82, a focused LLM call decides whether to keep, update, replace, or insert both. Entries in the 0.4–0.82 band (related but not near-duplicate) get a contradiction scan: if two entries make mutually exclusive claims, the system resolves it. The store updates rather than appends.
+
+**Cue-dependent activation.** Nothing is retrieved proactively. When a new message arrives, its text is embedded and matched against all stored entries. Only semantically similar entries activate. The query is the retrieval cue — entries that have no bearing on the current conversation stay silent.
+
+Entries have a strength score that decays with time and inactivity, and increases with repeated access. Entries that fall below the archive threshold are eventually removed. There is no manual pruning.
+
+## Architecture
+
+```
+  ┌─────── knowledge-daemon (local, lightweight) ───────────────────────────┐
+  │                                                                          │
+  │  OpenCode  Claude Code  Cursor  Codex CLI  VSCode  Local Files          │
+  │  (SQLite)    (JSONL)  (SQLite)   (JSONL)   (JSON)  (Markdown)           │
+  │      └──────────┴─────────┴──────────┴──────────┴──────────┘           │
+  │                           EpisodeReaders                                 │
+  │                           (reads session files, tracks cursor)           │
+  │                                  │                                       │
+  │                           EpisodeUploader                                │
+  └──────────────────────────────────┼───────────────────────────────────────┘
+                                     │ writes pending_episodes
+                    ┌────────────────▼────────────────────────────┐
+                    │          KnowledgeDB (SQLite / Postgres)     │
+                    │             pending_episodes table           │
+                    └────────────────┬────────────────────────────┘
+                                     │ drains every 8h
+  ┌─────── knowledge-server ─────────▼───────────────────────────────────────┐
+  │                                                                           │
+  │   PendingEpisodesReader → ConsolidationLLM → Reconsolidation             │
+  │                           (extractionModel)   (mergeModel)               │
+  │                                │                                         │
+  │                           ContradictionScanner → KnowledgeDB             │
+  │                           (contradictionModel)   (entries, embeddings)   │
+  │                                │                                         │
+  │                           Synthesis pass → KnowledgeDB                  │
+  │                           (synthesisModel)   (higher-order principles)   │
+  │                                │                                         │
+  │                           ActivationEngine                               │
+  │                                │                                         │
+  │                    ┌───────────┴───────────┐                            │
+  │                  HTTP API             MCP stdio proxy                    │
+  │               (/activate, /mcp)     (knowledge-server mcp)              │
+  └──────────────────────────────────────────────────────────────────────────┘
+```
+
+The daemon and server share the same database. In single-machine setups this is a local SQLite file. In team setups, both point at a shared Postgres instance.
 
 ## Supported session sources
 
@@ -66,315 +134,205 @@ All setup steps are idempotent — re-running is safe.
 | **Codex CLI** | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (JSONL rollout logs) | macOS, Linux |
 | **Cursor** | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (SQLite) | macOS |
 | **Cursor** | `~/.config/Cursor/User/globalStorage/state.vscdb` (SQLite) | Linux |
-| **VSCode** | `~/Library/Application Support/Code/User/workspaceStorage/*/chatSessions/*.json` (JSON) | macOS |
-| **VSCode** | `~/.config/Code/User/workspaceStorage/*/chatSessions/*.json` (JSON) | Linux |
+| **VSCode** | `~/Library/Application Support/Code/User/workspaceStorage/*/chatSessions/*.json` | macOS |
+| **VSCode** | `~/.config/Code/User/workspaceStorage/*/chatSessions/*.json` | Linux |
 | **Local files** | `~/knowledge/*.md` (Markdown) | macOS, Linux |
 
-All sources are enabled by default and auto-detected on startup. Disable any with `OPENCODE_ENABLED=false`, `CLAUDE_ENABLED=false`, `CODEX_ENABLED=false`, `CURSOR_ENABLED=false`, `VSCODE_ENABLED=false`, or `LOCAL_FILES_ENABLED=false`. Override a path with `OPENCODE_DB_PATH`, `CLAUDE_DB_PATH`, `CODEX_SESSIONS_DIR`, `CURSOR_DB_PATH`, `VSCODE_DATA_DIR`, or `LOCAL_FILES_DIR`.
+All sources are auto-detected. Disable any with `OPENCODE_ENABLED=false`, etc. Override a path with `OPENCODE_DB_PATH`, etc.
 
-The local-files source is opt-in by directory presence: if `~/knowledge/` does not exist it is silently skipped. Create the directory and drop `.md` files in it to start ingesting them.
-
-## How it works
-
-Once running, three things happen automatically:
-
-1. **On startup** — the server reads any sessions you've had since it last ran and extracts knowledge entries worth keeping. Most sessions produce nothing; the LLM applies a high bar.
-2. **On each new message** — the query is embedded and matched against stored entries. Semantically relevant entries are injected into the conversation as background context before the LLM sees your message.
-3. **Over time** — entries that haven't been accessed decay and are eventually archived. The store updates rather than accumulates.
-
-There is also an MCP `activate` tool for agents that want to deliberately recall knowledge mid-task.
-
-## Design
-
-The basic problem with agent memory is that naive approaches store everything and retrieve too much — the context window fills with loosely-related facts, and the store grows without bound.
-
-The design is loosely inspired by how human memory handles the same problem. Episodic memory (what happened in a session) and semantic memory (what you actually know) are distinct. The brain doesn't store episodes wholesale — it consolidates them, extracting what's worth encoding into long-term memory and discarding the rest. Retrieval is also cue-dependent: memories don't surface proactively, they activate in response to context.
-
-That's the rough model here. Three properties follow from it:
-
-**High extraction bar.** The LLM reads session transcripts and asks whether each thing learned would still be useful months from now. Most sessions produce nothing. The store only grows when something genuinely new was established — a confirmed fact, a decision made, a procedure that worked.
-
-**Reconsolidation instead of accumulation.** Before a new entry is inserted, it's embedded and compared to the nearest existing entry. If similarity ≥ 0.82, a focused LLM call decides whether to keep the existing entry, update it, replace it, or insert both as distinct entries. Entries in the 0.4–0.82 band (related but not near-duplicate) get a contradiction scan: if two entries make mutually exclusive claims, the system resolves it — newer supersedes older, they merge, or the conflict is flagged for human review. The store updates rather than appends.
-
-**Cue-dependent activation.** Nothing is retrieved proactively. When a new message arrives, its text is embedded and matched against all stored entries. Only semantically similar entries activate. The query is the retrieval cue — entries that have no bearing on the current conversation stay silent.
-
-Entries have a strength score that decays with time and inactivity, and increases with repeated access. Entries that fall below the archive threshold are eventually removed. There is no manual pruning.
-
-The similarity thresholds (0.82 for reconsolidation, 0.4 for the contradiction scan band) were calibrated against `text-embedding-3-large`. Run `knowledge-server calibrate` to find the right values for a different embedding model. Extraction quality depends on the LLM — cheaper models tend to over-extract or miss nuance.
-
-## Architecture
-
-```
-OpenCode    Claude Code    Cursor    Codex CLI    VSCode    Local Files
-(SQLite)      (JSONL)    (SQLite)    (JSONL)     (JSON)    (Markdown)
-    │             │          │          │           │           │
-    └─────────────┴──────────┴──────────┴───────────┴───────────┘
-                            ▼
-                   EpisodeReader          reads new sessions since cursor (per source)
-                        │
-                        ▼
-              ConsolidationLLM       extracts knowledge entries (high bar: most sessions → [])
-              [extractionModel]
-                        │
-                        ▼
-              Reconsolidation        embed → nearest-neighbor → LLM merge decision
-              [mergeModel]           (sim ≥ 0.82 → keep/update/replace/insert)
-                        │
-                        ▼
-              Contradiction scan     topic overlap → mid-band similarity filter → LLM resolution
-              [contradictionModel]   (0.4 ≤ sim < 0.82 → supersede/merge/flag)
-                        │
-                        ▼
-              KnowledgeDB            persistent graph with embeddings, strength, decay, relations
-                                     (SQLite default · PostgreSQL when POSTGRES_CONNECTION_URI is set)
-                        │
-                        ▼
-              Synthesis pass         KB-wide cluster synthesis → higher-order principles
-              [synthesisModel]       (fires when cluster membership changed since last synthesis)
-                        │
-                        ▼
-              ActivationEngine       cosine similarity search; auto-re-embeds all entries
-                                     on startup if EMBEDDING_MODEL has changed
-                        │
-                   ┌────┴────┐
-                    ▼         ▼
-                HTTP API    MCP stdio proxy (`knowledge-server mcp` → GET /activate)
-                    │
-                  /mcp      MCP streamable-http (built into HTTP server)
-                   │
-                   ▼
-         OpenCode plugin (passive injection on every user message)
-         Claude Code hook (passive injection via UserPromptSubmit)
-```
+The local-files source is opt-in by directory presence: if `~/knowledge/` does not exist it is silently skipped.
 
 ## Components
 
+### knowledge-daemon (`src/daemon/`)
+
+A lightweight background process (~250 KB binary) that reads local session files and uploads new episodes to the `pending_episodes` staging table. Keeps its own upload cursor in local SQLite (`daemon_cursor`), independent from consolidation progress.
+
+**Started automatically** alongside the server for single-machine setups (set `DAEMON_AUTO_SPAWN=false` to opt out). For multi-machine or remote setups, run it separately:
+
+```bash
+knowledge-daemon --interval=300     # poll every 5 minutes
+knowledge-server setup-tool daemon  # or register as a system service (launchd / systemd)
+```
+
+### knowledge-server (`src/index.ts`)
+
+The main HTTP server. Drains `pending_episodes` via the consolidation engine, exposes knowledge via `/activate` and MCP, and serves the HTTP API.
+
 ### HTTP API (`src/api/server.ts`)
 
-Hono-based HTTP server. Starts on `127.0.0.1:3179` by default.
+Hono-based HTTP server. Binds to `127.0.0.1:3179` by default.
 
 | Endpoint | Method | Auth | Description |
 |---|---|---|---|
 | `/activate?q=...` | GET | — | Activate knowledge entries by query |
 | `/consolidate` | POST | admin | Run a consolidation batch |
-| `/reinitialize?confirm=yes` | POST | admin | Wipe all entries and reset cursor |
-| `/status` | GET | — (config block requires admin) | Health check and stats. Always returns entry counts, uptime, and embedding metadata (`model`, `dimensions`, `recordedAt`). Admin token additionally exposes the `config` block (model names, port). |
+| `/reinitialize?confirm=yes` | POST | admin | Wipe all entries and reset state |
+| `/status` | GET | — (config requires admin) | Health check and stats |
 | `/entries` | GET | — | List entries (filter by `status`, `type`, `scope`) |
 | `/entries/:id` | GET | — | Get a specific entry with relations |
-| `/entries/:id` | PATCH | admin | Update content, topics, confidence, status, scope. Content/topic edits re-compute the embedding immediately. |
+| `/entries/:id` | PATCH | admin | Update content, topics, confidence, status, scope |
 | `/entries/:id/resolve` | POST | admin | Resolve a conflicted entry pair |
 | `/entries/:id` | DELETE | admin | Hard-delete an entry |
 | `/review` | GET | — | Surface conflicted, stale, and team-relevant entries |
 | `/hooks/claude-code/user-prompt` | POST | — | Claude Code `UserPromptSubmit` hook endpoint |
-| `/mcp` | ALL | — (admin token if `KNOWLEDGE_ADMIN_TOKEN` is set) | MCP streamable-http endpoint — connect MCP clients directly via HTTP |
+| `/mcp` | ALL | — / admin | MCP streamable-http endpoint |
 
 ### MCP server
 
-Exposes a single tool: `activate`. Agents use this for deliberate recall — when they want to pull knowledge about a specific topic mid-task.
+Exposes a single tool: `activate`. Agents use this for deliberate recall mid-task.
 
-There are two ways to connect an MCP client:
+Two connection modes:
 
-**stdio (local)** — `knowledge-server mcp` starts a lightweight stdio proxy that forwards `activate` calls to the already-running HTTP server via `GET /activate`. It does not open the database or call any LLM directly. Only `KNOWLEDGE_HOST` and `KNOWLEDGE_PORT` are required; no LLM credentials are needed. The `setup-tool` commands register this automatically.
+**stdio** — `knowledge-server mcp` starts a lightweight stdio proxy. Registered automatically by `setup-tool`. Only `KNOWLEDGE_HOST`/`KNOWLEDGE_PORT` needed; no LLM credentials required.
 
-**streamable-http (local or hosted)** — the main HTTP server also exposes `ALL /mcp` as a stateless MCP endpoint. MCP clients can connect directly at `http://127.0.0.1:3179/mcp` without a separate subprocess. When `KNOWLEDGE_ADMIN_TOKEN` is set, the `/mcp` endpoint requires a `Authorization: Bearer <token>` header — suitable for hosted deployments. When unset (random per-process token), `/mcp` is unauthenticated since the server already binds to `127.0.0.1`.
-
-**OpenCode** — registered automatically by `knowledge-server setup-tool opencode` (or `bun run setup` from source). Writes the `mcp.knowledge` entry directly into `~/.config/opencode/opencode.jsonc`.
-
-**Claude Code** — registered automatically by `knowledge-server setup-tool claude-code` (or `bun run start setup-tool claude-code` from source). Uses `claude mcp add-json` to write to `~/.claude.json`.
-
-**Cursor** — registered automatically by `knowledge-server setup-tool cursor`. Writes the `knowledge` entry into `~/.cursor/mcp.json`.
-
-**Codex CLI** — registered automatically by `knowledge-server setup-tool codex`. Registers `[mcp_servers.knowledge]` in `~/.codex/config.toml`.
-
-**VSCode** — registered automatically by `knowledge-server setup-tool vscode`. Uses `code --add-mcp` to register the `knowledge` server in the active profile's `mcp.json`.
-
-### OpenCode plugin (`plugin/knowledge.ts`)
-
-Passive injection. Fires on every user message via the `chat.message` hook, before the LLM sees it. Queries `/activate` and injects matching knowledge as a synthetic message part. The LLM sees it as additional context on turn 1.
-
-Design principle: **never throws**. All errors are caught and silently swallowed. A broken plugin must never affect OpenCode's core functionality.
-
-Install by symlinking to `~/.config/opencode/plugins/knowledge.ts` (the installer does this automatically).
-
-### Claude Code hook (`~/.claude/settings.json`)
-
-Passive injection for Claude Code. A `UserPromptSubmit` HTTP hook calls `POST /hooks/claude-code/user-prompt` before each prompt is processed. The server queries `/activate` and prepends matching knowledge as a system reminder injected into the hook response.
-
-Registered automatically by `setup-tool claude-code`.
+**streamable-http** — `ALL /mcp` on the main HTTP server. MCP clients connect directly at `http://127.0.0.1:3179/mcp`. When `KNOWLEDGE_ADMIN_TOKEN` is set, requires `Authorization: Bearer <token>` — suitable for hosted setups.
 
 ### Consolidation engine (`src/consolidation/`)
 
-- `readers/opencode.ts` — reads OpenCode's SQLite session DB, segments long sessions, respects compaction summaries
-- `readers/claude-code.ts` — reads Claude Code JSONL session files, handles compacted sessions, correlates tool call results
-- `readers/cursor.ts` — reads Cursor's SQLite state DB (`state.vscdb`), handles both inline (Format A) and bubble-per-KV (Format B) conversation layouts
-- `readers/codex.ts` — reads Codex CLI JSONL rollout files, two-pass parse for stable session IDs, skips injected context blocks
-- `readers/vscode.ts` — reads VSCode / GitHub Copilot Chat session JSON files from per-workspace `chatSessions/` directories, extracts user messages and assistant text responses
-- `consolidate.ts` — orchestrates the full cycle: read → extract → reconsolidate → contradiction scan → decay (once after all sources) → embed → seed embedding metadata (if absent) → KB-wide synthesis pass → advance cursor
-- `llm.ts` — four LLM calls across four model slots: `extractKnowledge` (extraction model), `decideMerge` (merge model — cheaper), `detectAndResolveContradiction` (contradiction model), `synthesizePrinciple` (synthesis model — fires rarely on ripe clusters whose membership changed)
-- `decay.ts` — forgetting curve with type-specific half-lives (facts decay faster than procedures)
-
-## Setup
-
-### OpenCode
-
-```bash
-knowledge-server setup-tool opencode    # binary install
-bun run start setup-tool opencode       # source install
-```
-
-This symlinks the plugin and commands into `~/.config/opencode/` and registers the MCP server directly in `~/.config/opencode/opencode.jsonc`. All steps are idempotent — re-running is safe.
-
-### Claude Code
-
-```bash
-knowledge-server setup-tool claude-code    # binary install
-bun run start setup-tool claude-code       # source install
-```
-
-This:
-1. Registers the `knowledge` MCP server in `~/.claude.json` via `claude mcp add-json` (user scope)
-2. Adds a `UserPromptSubmit` hook to `~/.claude/settings.json` pointing at the knowledge server
-3. Symlinks slash commands (`consolidate.md`, `knowledge-review.md`) into `~/.claude/commands/`
-
-All three steps are idempotent — re-running is safe.
-
-### Cursor
-
-```bash
-knowledge-server setup-tool cursor    # binary install
-bun run start setup-tool cursor       # source install
-```
-
-Registers the `knowledge` MCP server in `~/.cursor/mcp.json`. Idempotent — re-running is safe. Cursor does not support user-defined slash commands, so no command symlinks are created.
-
-### Codex CLI
-
-```bash
-knowledge-server setup-tool codex    # binary install
-bun run start setup-tool codex       # source install
-```
-
-Registers the `[mcp_servers.knowledge]` block in `~/.codex/config.toml`. Idempotent — re-running is safe. Codex CLI has no user-defined slash command directory, so no command symlinks are created.
-
-### VSCode
-
-```bash
-knowledge-server setup-tool vscode    # binary install
-bun run start setup-tool vscode       # source install
-```
-
-Registers the `knowledge` MCP server via `code --add-mcp`, which writes to the active VSCode profile's `mcp.json`. Requires the `code` CLI to be on PATH (install via VSCode: Cmd+Shift+P → "Shell Command: Install 'code' command in PATH").
-
-VSCode reads GitHub Copilot Chat session files from per-workspace `chatSessions/` directories. No additional hooks or plugins are needed — VSCode natively supports MCP tools through its chat interface.
+- `readers/pending.ts` — drains `pending_episodes` uploaded by the daemon
+- `consolidate.ts` — full cycle: read → extract → reconsolidate → contradiction scan → decay → embed → synthesis → delete processed rows
+- `llm.ts` — four LLM calls: `extractKnowledge` (extraction model), `decideMerge` (merge model), `detectAndResolveContradiction` (contradiction model), `synthesizePrinciple` (synthesis model, fires rarely on ripe clusters)
+- `decay.ts` — forgetting curve with type-specific half-lives
 
 ## Configuration
 
-All config is via environment variables, loaded from `.env` at startup. The `.env` file is searched in priority order:
+Configuration is split across two files:
 
-1. `$KNOWLEDGE_CONFIG_HOME/.env` — explicit override
-2. `$XDG_CONFIG_HOME/knowledge-server/.env` — XDG standard (default: `~/.config/knowledge-server/.env`)
-3. `~/.local/share/knowledge-server/.env` — legacy location (still supported for existing installs)
+**`~/.config/knowledge-server/.env`** — credentials and tuning parameters (API keys, model names, thresholds). Loaded by the launcher wrapper at startup.
 
-New installs create the file at `~/.config/knowledge-server/.env`. Defaults are sensible for local use.
+**`~/.config/knowledge-server/config.jsonc`** — store topology (which databases to use and where). Created automatically on first run (default: local SQLite). Edit this for Postgres or multi-store setups.
 
-### LLM credentials
+### Store configuration (`config.jsonc`)
 
-Two options — set one or the other (or both; per-provider credentials take precedence):
+The default `config.jsonc` uses a single local SQLite store — no editing needed for single-machine use.
 
-**Option A — Direct provider credentials (recommended)**
+For Postgres or team setups, edit `~/.config/knowledge-server/config.jsonc`:
 
-| Variable | Description |
-|---|---|
-| `ANTHROPIC_API_KEY` | Anthropic API key. Routes all `anthropic/` model prefixes directly to `api.anthropic.com`. |
-| `OPENAI_API_KEY` | OpenAI API key. Routes all `openai/` model prefixes and embedding calls directly to `api.openai.com`. |
-| `GOOGLE_API_KEY` | Google API key. Routes all `google/` model prefixes directly to the Gemini API. |
-| `ANTHROPIC_BASE_URL` | Override the Anthropic base URL (e.g. for Azure or a custom proxy). |
-| `OPENAI_BASE_URL` | Override the OpenAI base URL. Also used as the embedding endpoint fallback when `EMBEDDING_BASE_URL` is not set. |
-| `GOOGLE_BASE_URL` | Override the Google base URL. |
+```jsonc
+{
+  "stores": [
+    {
+      "id": "main",
+      "kind": "postgres",
+      "uri": "postgres://user:pass@host:5432/knowledge",
+      "writable": true
+    }
+  ]
+}
+```
 
-**Option B — Unified proxy (backwards compatible)**
+Or use an environment variable instead of embedding credentials in the file:
+```jsonc
+{ "stores": [{ "id": "main", "kind": "postgres", "writable": true }] }
+```
+```bash
+export STORE_MAIN_URI="postgres://user:pass@host:5432/knowledge"
+```
 
-| Variable | Description |
-|---|---|
-| `LLM_API_KEY` | API key for the unified proxy endpoint. |
-| `LLM_BASE_ENDPOINT` | Base URL for a proxy that serves multiple providers. Provider-specific paths are appended automatically: `anthropic/` → `/anthropic/v1`, `google/` → `/gemini/v1beta`, everything else → `/openai/v1`. |
+**Migrating from v2:** If you had `POSTGRES_CONNECTION_URI` or `KNOWLEDGE_DB_PATH` set, run once:
+```bash
+knowledge-server migrate-config
+```
+
+### LLM credentials (`.env`)
+
+**Option A — Direct API key (most common):**
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...   # Anthropic models
+OPENAI_API_KEY=sk-...          # OpenAI models + embeddings
+GOOGLE_API_KEY=...             # Google models
+```
+
+**Option B — Unified proxy (OpenRouter, LiteLLM, etc.):**
+
+```bash
+LLM_API_KEY=your-key
+LLM_BASE_ENDPOINT=https://your-proxy.example.com
+```
+
+Provider-specific credentials take precedence over the unified endpoint.
 
 ### LLM models
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLM_EXTRACTION_MODEL` | `anthropic/claude-sonnet-4-6` | Model for episode → knowledge extraction. Prefix routes the provider: `anthropic/`, `google/`, `openai/`. |
-| `LLM_MERGE_MODEL` | `anthropic/claude-haiku-4-5` | Model for near-duplicate merge decisions (cheaper — essentially a classification call). |
-| `LLM_CONTRADICTION_MODEL` | `anthropic/claude-sonnet-4-6` | Model for contradiction detection and resolution (nuanced — fires rarely). |
-| `LLM_SYNTHESIS_MODEL` | (inherits `LLM_EXTRACTION_MODEL`) | Model for cross-session principle synthesis. Runs during each consolidation pass when entry clusters are ripe (new or membership-changed). Defaults to `LLM_EXTRACTION_MODEL`, then `claude-sonnet-4-6`. |
-| `LLM_TIMEOUT_MS` | `300000` (5 min) | Per-call LLM timeout in ms. Applied per attempt, not across all retries. |
-| `LLM_MAX_RETRIES` | `2` | Number of additional retry attempts on timeout or transient error. `0` disables retries. |
-| `LLM_RETRY_BASE_DELAY_MS` | `3000` | Base delay for exponential backoff between retries (capped at 60s). |
+| `LLM_EXTRACTION_MODEL` | `anthropic/claude-sonnet-4-6` | Episode → knowledge extraction |
+| `LLM_MERGE_MODEL` | `anthropic/claude-haiku-4-5` | Near-duplicate merge decisions (cheaper) |
+| `LLM_CONTRADICTION_MODEL` | `anthropic/claude-sonnet-4-6` | Contradiction detection and resolution |
+| `LLM_SYNTHESIS_MODEL` | *(inherits `LLM_EXTRACTION_MODEL`)* | Cross-session principle synthesis |
+| `LLM_TIMEOUT_MS` | `300000` | Per-call LLM timeout in ms |
+| `LLM_MAX_RETRIES` | `2` | Retry attempts on timeout/error |
 
-### Embedding
+### Embeddings
 
 | Variable | Default | Description |
 |---|---|---|
-| `EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model (OpenAI-compatible `/v1/embeddings` API). **Changing this value triggers automatic re-embedding of all entries on next startup or consolidation run.** |
-| `EMBEDDING_DIMENSIONS` | *(model default)* | Truncated output dimensions. Only valid for `text-embedding-3-*` models (which support Matryoshka truncation); omit for all other models. |
-| `EMBEDDING_BASE_URL` | *(see priority below)* | Dedicated embedding endpoint. Priority: `EMBEDDING_BASE_URL` → `OPENAI_BASE_URL` → `LLM_BASE_ENDPOINT/openai/v1`. Use this to point at a local model (e.g. Ollama) while using a cloud LLM for extraction. |
-| `EMBEDDING_API_KEY` | *(see priority below)* | API key for the embedding endpoint. Falls back to `OPENAI_API_KEY` then `LLM_API_KEY`. Local endpoints (Ollama, llama.cpp) work without a key. |
+| `EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model. **Changing this re-embeds all entries on next startup.** |
+| `EMBEDDING_DIMENSIONS` | *(model default)* | Truncated output dimensions (only valid for `text-embedding-3-*`) |
+| `EMBEDDING_BASE_URL` | *(see below)* | Dedicated embedding endpoint. Priority: `EMBEDDING_BASE_URL` → `OPENAI_BASE_URL` → `LLM_BASE_ENDPOINT/openai/v1` |
+| `EMBEDDING_API_KEY` | *(see below)* | Falls back to `OPENAI_API_KEY` then `LLM_API_KEY` |
+
+For local embeddings via Ollama:
+```bash
+EMBEDDING_BASE_URL=http://localhost:11434/v1
+EMBEDDING_MODEL=nomic-embed-text
+```
 
 ### Server
 
 | Variable | Default | Description |
 |---|---|---|
-| `KNOWLEDGE_PORT` | `3179` | HTTP port. |
-| `KNOWLEDGE_HOST` | `127.0.0.1` | HTTP bind address. Must be a loopback address. |
-| `KNOWLEDGE_ADMIN_TOKEN` | *(random)* | Fixed admin token (≥16 chars) for scripted use. If unset, a random token is generated per process and printed at startup. |
-| `POSTGRES_CONNECTION_URI` | *(empty)* | PostgreSQL connection URI (e.g. `postgres://user:pass@host:5432/knowledge`). When set, PostgreSQL is used instead of SQLite. |
-| `KNOWLEDGE_DB_PATH` | `~/.local/share/knowledge-server/knowledge.db` | SQLite database path. Ignored when `POSTGRES_CONNECTION_URI` is set. |
-| `KNOWLEDGE_LOG_PATH` | `~/.local/share/knowledge-server/server.log` | Log file path. Set to `""` to disable file logging. |
-| `KNOWLEDGE_PID_PATH` | `~/.local/share/knowledge-server/server.pid` | PID file path. Used by `knowledge-server stop`. Set to `""` to disable. |
-| `KNOWLEDGE_CONFIG_HOME` | *(see .env search order above)* | Explicit override for the directory containing `.env`. |
+| `KNOWLEDGE_PORT` | `3179` | HTTP port |
+| `KNOWLEDGE_HOST` | `127.0.0.1` | HTTP bind address (loopback only) |
+| `KNOWLEDGE_ADMIN_TOKEN` | *(random per process)* | Fixed admin token for scripted use (≥16 chars) |
+| `KNOWLEDGE_LOG_PATH` | `~/.local/share/knowledge-server/server.log` | Log file. Set to `""` to disable. |
+| `DAEMON_AUTO_SPAWN` | `true` | Set to `false` to manage the daemon yourself |
 
 ### Session sources
 
+All sources are auto-detected. Override paths or disable sources via environment variables:
+
 | Variable | Default | Description |
 |---|---|---|
-| `OPENCODE_DB_PATH` | `~/.local/share/opencode/opencode.db` | OpenCode session database (read-only). |
-| `OPENCODE_ENABLED` | `true` | Set to `false` to disable OpenCode session reading. |
-| `CLAUDE_DB_PATH` | `~/.claude` | Root directory for Claude Code JSONL session files. Falls back to `CLAUDE_CONFIG_DIR` if set (the env var Claude Code itself uses). |
-| `CLAUDE_ENABLED` | `true` | Set to `false` to disable Claude Code session reading. |
-| `CODEX_SESSIONS_DIR` | *(auto-detected)* | Root directory for Codex CLI JSONL rollout files. Auto-detected at `~/.codex/sessions` or `$CODEX_HOME/sessions`. |
-| `CODEX_ENABLED` | `true` | Set to `false` to disable Codex CLI session reading. |
-| `CURSOR_DB_PATH` | *(auto-detected)* | Path to Cursor's `state.vscdb`. Auto-detected per platform (macOS: `~/Library/Application Support/Cursor/…`, Linux: `~/.config/Cursor/…`). |
-| `CURSOR_ENABLED` | `true` | Set to `false` to disable Cursor session reading. |
-| `VSCODE_DATA_DIR` | *(auto-detected)* | Path to VSCode's data directory. Auto-detected per platform (macOS: `~/Library/Application Support/Code`, Linux: `~/.config/Code`). |
-| `VSCODE_ENABLED` | `true` | Set to `false` to disable VSCode session reading. |
-| `LOCAL_FILES_DIR` | `~/knowledge` | Directory containing `.md` files to ingest. Source is silently skipped if the directory does not exist. |
-| `LOCAL_FILES_ENABLED` | `true` | Set to `false` to hard-disable local file ingestion. |
+| `OPENCODE_DB_PATH` | `~/.local/share/opencode/opencode.db` | OpenCode SQLite DB |
+| `OPENCODE_ENABLED` | `true` | Set to `false` to disable |
+| `CLAUDE_DB_PATH` | `~/.claude` | Claude Code JSONL root dir |
+| `CLAUDE_ENABLED` | `true` | Set to `false` to disable |
+| `CODEX_SESSIONS_DIR` | *(auto-detected)* | Codex CLI sessions root |
+| `CODEX_ENABLED` | `true` | Set to `false` to disable |
+| `CURSOR_DB_PATH` | *(auto-detected)* | Cursor `state.vscdb` path |
+| `CURSOR_ENABLED` | `true` | Set to `false` to disable |
+| `VSCODE_DATA_DIR` | *(auto-detected)* | VSCode data directory |
+| `VSCODE_ENABLED` | `true` | Set to `false` to disable |
+| `LOCAL_FILES_DIR` | `~/knowledge` | Markdown files to ingest |
+| `LOCAL_FILES_ENABLED` | `true` | Set to `false` to disable |
 
 ### Consolidation
 
 | Variable | Default | Description |
 |---|---|---|
-| `CONSOLIDATION_MAX_SESSIONS` | `50` | Sessions per consolidation batch. |
-| `CONSOLIDATION_CHUNK_SIZE` | `10` | Episodes per LLM extraction call. |
-| `CONSOLIDATION_MIN_MESSAGES` | `4` | Minimum messages a session must have to be eligible for consolidation. |
-| `CONSOLIDATION_POLL_INTERVAL_MS` | `0` (disabled) | Auto-consolidation polling interval in ms while the server runs. `0` = disabled; e.g. `1800000` = every 30 min. |
-| `CONSOLIDATION_INCLUDE_TOOL_OUTPUTS` | *(empty)* | Comma-separated tool names whose completed outputs are included in knowledge extraction (e.g. `atlassian_confluence_get_page`). Empty by default — most tool outputs are not worth encoding. |
-| `RECONSOLIDATION_SIMILARITY_THRESHOLD` | `0.82` | Cosine similarity above which two entries are considered near-duplicates and routed to an LLM merge decision. Also the exclusive upper bound of the contradiction scan band. Run `knowledge-server calibrate` to find the right value for your embedding model. |
-| `CONTRADICTION_MIN_SIMILARITY` | `0.4` | Lower bound of the contradiction scan similarity band. Must be strictly below `RECONSOLIDATION_SIMILARITY_THRESHOLD`. |
+| `CONSOLIDATION_POLL_INTERVAL_MS` | `28800000` (8h) | Auto-consolidation interval. Set to `0` to disable. |
+| `CONSOLIDATION_MAX_SESSIONS` | `50` | Sessions per consolidation batch |
+| `CONSOLIDATION_CHUNK_SIZE` | `10` | Episodes per LLM extraction call |
+| `CONSOLIDATION_MIN_MESSAGES` | `4` | Minimum messages for a session to be eligible |
+| `RECONSOLIDATION_SIMILARITY_THRESHOLD` | `0.82` | Near-duplicate merge cutoff |
+| `CONTRADICTION_MIN_SIMILARITY` | `0.4` | Lower bound of the contradiction scan band |
 
 ### Decay
 
 | Variable | Default | Description |
 |---|---|---|
-| `DECAY_ARCHIVE_THRESHOLD` | `0.15` | Strength below which an entry is archived. |
-| `DECAY_TOMBSTONE_DAYS` | `180` | Days after archiving before an entry is permanently deleted. |
+| `DECAY_ARCHIVE_THRESHOLD` | `0.15` | Strength below which an entry is archived |
+| `DECAY_TOMBSTONE_DAYS` | `180` | Days after archiving before permanent deletion |
 
 ### Activation
 
 | Variable | Default | Description |
 |---|---|---|
-| `ACTIVATION_MAX_RESULTS` | `10` | Max entries returned by activation. |
-| `ACTIVATION_SIMILARITY_THRESHOLD` | `0.3` | Minimum cosine similarity to activate an entry. |
+| `ACTIVATION_MAX_RESULTS` | `10` | Max entries returned per activation |
+| `ACTIVATION_SIMILARITY_THRESHOLD` | `0.3` | Minimum cosine similarity to activate |
 
 ## Usage
 
@@ -385,7 +343,7 @@ knowledge-server        # binary install
 bun run start           # source install
 ```
 
-On startup, the server counts pending sessions across all sources and runs background consolidation if any are found. The HTTP API is available immediately while consolidation runs behind it.
+The daemon starts automatically. The server runs background consolidation on startup if pending sessions exist, then polls every 8 hours.
 
 ### Stop the server
 
@@ -399,20 +357,14 @@ knowledge-server stop
 knowledge-server status
 ```
 
-Shows whether the server is running, entry counts, last consolidation time, and pending sessions — without needing the HTTP server to be up.
+Shows whether the server is running, entry counts, last consolidation time, and pending sessions.
 
 ### Trigger consolidation manually
 
-Via CLI (no server required, no admin token needed):
-
 ```bash
-knowledge-server consolidate
-```
-
-Or via the HTTP API (requires admin token printed at startup):
-
-```bash
-curl -X POST -H "Authorization: Bearer <token>" http://127.0.0.1:3179/consolidate
+knowledge-server consolidate                         # CLI (no server needed)
+curl -X POST -H "Authorization: Bearer <token>" \
+  http://127.0.0.1:3179/consolidate                 # HTTP API
 ```
 
 ### Test knowledge activation
@@ -421,7 +373,7 @@ curl -X POST -H "Authorization: Bearer <token>" http://127.0.0.1:3179/consolidat
 knowledge-server activate "how do we handle authentication"
 ```
 
-Shows which knowledge entries would be injected into a conversation for a given query, with similarity scores.
+Shows which entries would be injected for a given query, with similarity scores.
 
 ### Calibrate similarity thresholds
 
@@ -429,46 +381,45 @@ Shows which knowledge entries would be injected into a conversation for a given 
 knowledge-server calibrate
 ```
 
-Embeds a set of pre-defined calibration pairs (near-duplicates, topically related, unrelated) using the active embedding model and derives recommended values for `RECONSOLIDATION_SIMILARITY_THRESHOLD`, `CONTRADICTION_MIN_SIMILARITY`, and `ACTIVATION_SIMILARITY_THRESHOLD`. Outputs ready-to-paste `.env` lines when any value differs from the current config.
+Derives recommended threshold values for your embedding model. Run this when switching models.
 
-Run this when switching to a different embedding model — different models produce different similarity distributions, and the default thresholds (calibrated for `text-embedding-3-large`) may not be appropriate.
-
-### Reinitialize the knowledge store
-
-```bash
-knowledge-server reinitialize           # preview (shows entry count, no changes)
-knowledge-server reinitialize --dry-run # same
-knowledge-server reinitialize --confirm # wipe all entries and reset cursor
-```
-
-Or via the HTTP API (requires admin token):
-
-```bash
-curl -X POST -H "Authorization: Bearer <token>" 'http://127.0.0.1:3179/reinitialize?confirm=yes'
-```
-
-### Query knowledge via HTTP
-
-```bash
-curl "http://127.0.0.1:3179/activate?q=how+do+we+handle+auth"
-```
-
-### Review and resolve knowledge entries
+### Review knowledge entries
 
 ```bash
 curl http://127.0.0.1:3179/review
 ```
 
-Returns:
-- **conflicted** — entries flagged as `irresolvable` by the contradiction scan, needing human resolution
-- **stale** — active entries with low strength (haven't been accessed recently)
-- **team-relevant** — high-confidence `team`-scoped entries that may warrant external documentation
+Returns conflicted, stale, and team-relevant entries. OpenCode and Claude Code users also have a `/knowledge-review` slash command (installed by `setup-tool`).
 
-OpenCode and Claude Code users also have a `/knowledge-review` slash command (installed by `setup-tool opencode` and `setup-tool claude-code` respectively) for an interactive review workflow inside the TUI. Cursor, Codex CLI, and VSCode do not support user-defined slash commands.
+### Reinitialize the knowledge store
+
+```bash
+knowledge-server reinitialize --confirm   # wipe all entries
+```
+
+## Multi-machine / team setup
+
+For a team where multiple developers want to share a knowledge base, or where the consolidation server runs on a separate machine (e.g. a home server):
+
+**Each local machine:**
+1. Install `knowledge-daemon` only (or full install with `DAEMON_AUTO_SPAWN=false` on the remote server)
+2. Point `config.jsonc` at the shared Postgres:
+   ```jsonc
+   { "stores": [{ "id": "main", "kind": "postgres", "uri": "postgres://...", "writable": true }] }
+   ```
+3. Run the daemon: `knowledge-daemon` or `knowledge-server setup-tool daemon`
+
+**Remote server:**
+1. Install `knowledge-server`
+2. Point `config.jsonc` at the same Postgres
+3. Set `DAEMON_AUTO_SPAWN=false`
+4. Start: `knowledge-server`
+
+The daemon uploads episodes directly to Postgres. The server consolidates from there. All machines' knowledge accumulates in one place.
 
 ## Knowledge entry types
 
-| Type | Description | Example half-life |
+| Type | Description | Approximate half-life |
 |---|---|---|
 | `fact` | A confirmed factual statement | ~30 days |
 | `pattern` | A recurring pattern or observation | ~90 days |
@@ -476,49 +427,23 @@ OpenCode and Claude Code users also have a `/knowledge-review` slash command (in
 | `principle` | A guiding principle or preference | ~180 days |
 | `procedure` | A step-by-step process or workflow | ~365 days |
 
-Entries decay based on age and access frequency. Strength drops below 0.15 → archived. Archived for 180+ days → tombstoned.
-
 ## Security
 
-### Admin token
+**Admin token** — Mutation endpoints require an admin token. A random token is generated at startup and printed to stdout. Set `KNOWLEDGE_ADMIN_TOKEN` in `.env` (≥16 chars) for a stable token across restarts.
 
-Mutation endpoints (`POST /consolidate`, `POST /reinitialize`, `PATCH /entries/:id`, `POST /entries/:id/resolve`, `DELETE /entries/:id`) require an admin token. A random token is generated at startup and printed to the console:
+**Localhost only** — The server binds to `127.0.0.1` by default and refuses to start if `KNOWLEDGE_HOST` is set to a non-loopback address. No TLS — not designed for network exposure.
 
-```
-Admin token: a3f9c2e1b4d7...
-```
+**Prompt injection** — Session content is sent to an LLM for extraction. Adversarial text in your sessions (code you pasted, web content you discussed) could influence what gets consolidated. The extraction prompt is hardened, and any injected entry must still pass similarity checks. The extraction bar (most sessions → nothing) significantly limits attack surface.
 
-By default the token is not persisted — it changes every time the server restarts. Set `KNOWLEDGE_ADMIN_TOKEN` in `.env` (minimum 16 characters) to use a stable token instead (useful for scripted/automated use). This guards against browser-based CSRF attacks: a malicious web page has no way to learn the token, so it cannot forge a valid `Authorization` header.
-
-The `GET /status` config block (model names, port) is also gated behind the admin token. Unauthenticated callers receive health stats but not configuration details.
-
-### Localhost only
-
-The server binds to `127.0.0.1` by default and will exit at startup if `KNOWLEDGE_HOST` is set to a non-loopback address. There is no TLS — this server is not designed to be exposed on a network.
-
-### Prompt injection
-
-The system has two prompt injection surfaces:
-
-**Consolidation pipeline:** Raw session content is sent to an LLM for knowledge extraction. The more realistic risk is not a dedicated attacker — it's adversarial text that ended up in your own sessions: code you pasted, web content you discussed, or documentation that contained prompt-like instructions. Such content could in principle influence what gets consolidated into the knowledge graph. The extraction prompt is hardened against this, and any injected entry would still need to pass the similarity threshold and reconsolidation check — but no instruction-following model is fully immune. Be aware of this if you regularly paste large amounts of external content into your coding sessions.
-
-**Plugin injection:** Activated knowledge entries are injected verbatim into the LLM context of new sessions. An entry whose content contains instruction-like text could subtly influence agent behaviour. The plugin labels injected entries as "background context, not instructions", which helps but does not fully prevent a well-crafted entry from being followed. Entries that appear suspicious can be reviewed and deleted via `GET /review` and `DELETE /entries/:id`. The extraction bar (most sessions produce no entries) and the reconsolidation deduplication step significantly limit what can reach the store, but no LLM-based system is fully immune to injection.
-
-### Rate limiting
-
-The `/activate` endpoint makes a paid embedding API call per request. There is no rate limiting — this is intentional for a personal local tool where the call volume is naturally bounded by typing speed. If you expose the server to other processes, consider adding a rate limit.
-
-### Binary integrity
-
-Release binaries are distributed as gzip-compressed assets (`.gz`) and verified with SHA-256 checksums on the uncompressed binary. The installer decompresses the binary on the fly (streaming — never buffered in full), then verifies the SHA-256 against `SHA256SUMS-<platform>` from the release before moving it into place. `knowledge-server update` performs the same streaming decompress + checksum check before replacing the running binary.
+**Binary integrity** — Binaries are SHA-256 verified before install. The installer decompresses and verifies before moving files into place. `knowledge-server update` does the same.
 
 ## Development
 
 ```bash
-bun run dev          # Watch mode
-bun test             # Run tests
-bun run lint         # Biome lint
-bun run format       # Biome format
+bun run dev     # Watch mode
+bun test        # Run tests
+bun run lint    # Biome lint
+bun run format  # Biome format
 ```
 
 Data directory: `~/.local/share/knowledge-server/`
