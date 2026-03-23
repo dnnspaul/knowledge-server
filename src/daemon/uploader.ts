@@ -128,7 +128,7 @@ export class EpisodeUploader {
 		const alreadyPending = await this.targetDb.getPendingEpisodes(
 			cursor.lastMessageTimeCreated,
 		);
-		// Filter to this source only — getPendingEpisodes now returns all sources.
+		// Filter to this reader's source — getPendingEpisodes returns all sources.
 		const pendingSet = new Set(
 			alreadyPending
 				.filter((ep) => ep.source === reader.source)

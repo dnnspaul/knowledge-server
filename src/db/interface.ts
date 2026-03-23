@@ -281,8 +281,8 @@ export interface IKnowledgeDB {
 	insertPendingEpisode(episode: PendingEpisode): Promise<void>;
 
 	/**
-	 * Fetch all pending episodes for a given source, ordered by max_message_time ASC.
-	 * Drains episodes from all users — user_id is provenance metadata only.
+	 * Fetch pending episodes from all sources and users, ordered by max_message_time ASC.
+	 * Drains everything in the staging table — source and user_id are provenance metadata only.
 	 * Used by PendingEpisodesReader to get new episodes for consolidation.
 	 */
 	getPendingEpisodes(
