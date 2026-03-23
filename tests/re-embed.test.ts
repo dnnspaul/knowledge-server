@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ActivationEngine } from "../src/activation/activate";
 import { config } from "../src/config";
-import { KnowledgeDB } from "../src/db/database";
+import { KnowledgeDB } from "../src/db/sqlite/index";
 import { fakeEmbedding, makeEntry } from "./fixtures";
 
 describe("checkAndReEmbed", () => {
@@ -106,8 +106,12 @@ describe("checkAndReEmbed", () => {
 		const newEmb = fakeEmbedding("new");
 
 		// Insert entries with "old model" embeddings
-		await db.insertEntry(makeEntry({ id: "e1", content: "Entry one", embedding: oldEmb }));
-		await db.insertEntry(makeEntry({ id: "e2", content: "Entry two", embedding: oldEmb }));
+		await db.insertEntry(
+			makeEntry({ id: "e1", content: "Entry one", embedding: oldEmb }),
+		);
+		await db.insertEntry(
+			makeEntry({ id: "e2", content: "Entry two", embedding: oldEmb }),
+		);
 
 		// Record metadata for the old model
 		await db.setEmbeddingMetadata("old-model", oldEmb.length);
@@ -143,8 +147,12 @@ describe("checkAndReEmbed", () => {
 	it("old embeddings remain intact when embedBatch fails (no NULL gap)", async () => {
 		const oldEmb = fakeEmbedding("old");
 
-		await db.insertEntry(makeEntry({ id: "e1", content: "Entry one", embedding: oldEmb }));
-		await db.insertEntry(makeEntry({ id: "e2", content: "Entry two", embedding: oldEmb }));
+		await db.insertEntry(
+			makeEntry({ id: "e1", content: "Entry one", embedding: oldEmb }),
+		);
+		await db.insertEntry(
+			makeEntry({ id: "e2", content: "Entry two", embedding: oldEmb }),
+		);
 		await db.setEmbeddingMetadata("old-model", oldEmb.length);
 
 		config.embedding.model = "new-model";
@@ -210,7 +218,9 @@ describe("checkAndReEmbed", () => {
 		const newEmb = fakeEmbedding("new");
 
 		// Active entry — should be re-embedded
-		await db.insertEntry(makeEntry({ id: "e1", status: "active", embedding: oldEmb }));
+		await db.insertEntry(
+			makeEntry({ id: "e1", status: "active", embedding: oldEmb }),
+		);
 		// Superseded entry — should NOT be re-embedded
 		await db.insertEntry(
 			makeEntry({
@@ -242,7 +252,9 @@ describe("checkAndReEmbed", () => {
 		const oldEmb = fakeEmbedding("old");
 		const newEmb = fakeEmbedding("new");
 
-		await db.insertEntry(makeEntry({ id: "e1", status: "active", embedding: oldEmb }));
+		await db.insertEntry(
+			makeEntry({ id: "e1", status: "active", embedding: oldEmb }),
+		);
 		await db.insertEntry(
 			makeEntry({ id: "e2", status: "conflicted", embedding: oldEmb }),
 		);

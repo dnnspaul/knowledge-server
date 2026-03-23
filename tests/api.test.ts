@@ -7,8 +7,8 @@ import pkg from "../package.json" with { type: "json" };
 import { ActivationEngine } from "../src/activation/activate";
 import { createApp } from "../src/api/server";
 import type { ConsolidationEngine } from "../src/consolidation/consolidate";
-import type { KnowledgeDB } from "../src/db/database";
-import { KnowledgeDB as KnowledgeDBImpl } from "../src/db/database";
+import type { KnowledgeDB } from "../src/db/sqlite/index";
+import { KnowledgeDB as KnowledgeDBImpl } from "../src/db/sqlite/index";
 
 // Intentionally static string — production uses a random token generated at startup.
 const TEST_ADMIN_TOKEN = "test-admin-token-abc123";
@@ -28,9 +28,7 @@ describe("HTTP API", () => {
 		);
 		activation = new ActivationEngine(db);
 		embedSpy = spyOn(activation.embeddings, "embed").mockResolvedValue([
-			0.11,
-			0.22,
-			0.33,
+			0.11, 0.22, 0.33,
 		]);
 		// We pass a mock consolidation engine — not testing consolidation via API here
 		const consolidation = {
@@ -383,11 +381,7 @@ describe("HTTP API", () => {
 			embedding: [0.9, 0.8, 0.7],
 		});
 
-		embedSpy.mockResolvedValue([
-			0.44,
-			0.55,
-			0.66,
-		]);
+		embedSpy.mockResolvedValue([0.44, 0.55, 0.66]);
 
 		const res = await app.request("/entries/patch-topics", {
 			method: "PATCH",
@@ -399,7 +393,9 @@ describe("HTTP API", () => {
 		});
 		expect(res.status).toBe(200);
 		expect(embedSpy).toHaveBeenCalled();
-		expect((await db.getEntry("patch-topics"))?.embedding?.[0]).toBeCloseTo(0.44);
+		expect((await db.getEntry("patch-topics"))?.embedding?.[0]).toBeCloseTo(
+			0.44,
+		);
 	});
 
 	it("PATCH /entries/:id should return 400 with no valid fields", async () => {

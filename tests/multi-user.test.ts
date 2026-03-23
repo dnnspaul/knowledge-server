@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 import { resolveUserId } from "../src/config-file";
-import { KnowledgeDB } from "../src/db/database";
+import { KnowledgeDB } from "../src/db/sqlite/index";
 
 describe("resolveUserId", () => {
 	const envKey = "KNOWLEDGE_USER_ID";

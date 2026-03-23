@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ActivationEngine } from "../src/activation/activate";
 import { ConsolidationEngine } from "../src/consolidation/consolidate";
-import { KnowledgeDB } from "../src/db/database";
+import { KnowledgeDB } from "../src/db/sqlite/index";
 
 // ── SQLite lock ───────────────────────────────────────────────────────────────
 

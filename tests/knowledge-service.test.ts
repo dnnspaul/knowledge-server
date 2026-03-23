@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EmbeddingClient } from "../src/activation/embeddings";
-import { KnowledgeDB } from "../src/db/database";
+import { KnowledgeDB } from "../src/db/sqlite/index";
 import { KnowledgeService } from "../src/services/knowledge-service";
 import { makeEntry } from "./fixtures";
 
@@ -86,7 +86,12 @@ describe("KnowledgeService.updateEntry", () => {
 
 	it("propagates embed errors without writing to DB", async () => {
 		await db.insertEntry(
-			makeEntry({ id: "e5", content: "original", topics: ["original-topic"], embedding: [0.9, 0.9, 0.9] }),
+			makeEntry({
+				id: "e5",
+				content: "original",
+				topics: ["original-topic"],
+				embedding: [0.9, 0.9, 0.9],
+			}),
 		);
 
 		embedSpy.mockRejectedValueOnce(new Error("API quota exceeded"));
@@ -94,7 +99,10 @@ describe("KnowledgeService.updateEntry", () => {
 		// Update both content AND topics so the rollback assertion for topics is
 		// meaningful — if the DB were partially written, topics would be "changed-topic".
 		await expect(
-			service.updateEntry("e5", { content: "updated", topics: ["changed-topic"] }),
+			service.updateEntry("e5", {
+				content: "updated",
+				topics: ["changed-topic"],
+			}),
 		).rejects.toThrow("API quota exceeded");
 
 		// DB should be unchanged — no partial write (content, topics, embedding all intact)
@@ -107,6 +115,8 @@ describe("KnowledgeService.updateEntry", () => {
 	it("throws when entry does not exist", async () => {
 		await expect(
 			service.updateEntry("nonexistent", { content: "x" }),
-		).rejects.toThrow("KnowledgeService.updateEntry: entry not found: nonexistent");
+		).rejects.toThrow(
+			"KnowledgeService.updateEntry: entry not found: nonexistent",
+		);
 	});
 });

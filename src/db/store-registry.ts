@@ -8,9 +8,9 @@ import {
 import type { KnowledgeServerConfig, StoreConfig } from "../config-file.js";
 import { DomainRouter } from "../consolidation/domain-router.js";
 import { logger } from "../logger.js";
-import { KnowledgeDB } from "./database.js";
+import { KnowledgeDB } from "./sqlite/index.js";
 import type { IKnowledgeDB } from "./interface.js";
-import { PostgresKnowledgeDB } from "./pg-database.js";
+import { PostgresKnowledgeDB } from "./postgres/index.js";
 
 /**
  * StoreRegistry — manages a configured set of IKnowledgeDB instances.

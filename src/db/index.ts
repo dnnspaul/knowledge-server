@@ -7,5 +7,5 @@
  */
 
 export type { IKnowledgeDB } from "./interface.js";
-export { KnowledgeDB } from "./database.js";
-export { PostgresKnowledgeDB } from "./pg-database.js";
+export { KnowledgeDB } from "./sqlite/index.js";
+export { PostgresKnowledgeDB } from "./postgres/index.js";

@@ -22,7 +22,7 @@ import { config } from "../src/config";
 import { ConsolidationEngine } from "../src/consolidation/consolidate";
 import { ConsolidationLLM } from "../src/consolidation/llm";
 import { OpenCodeEpisodeReader } from "../src/daemon/readers/opencode";
-import { KnowledgeDB } from "../src/db/database";
+import { KnowledgeDB } from "../src/db/sqlite/index";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 

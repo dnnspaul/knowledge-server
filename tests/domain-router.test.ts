@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { KnowledgeServerConfig } from "../src/config-file";
-import { KnowledgeDB } from "../src/db/database";
+import { KnowledgeDB } from "../src/db/sqlite/index";
 import { DomainRouter } from "../src/consolidation/domain-router";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

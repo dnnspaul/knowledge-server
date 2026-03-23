@@ -21,7 +21,7 @@ import {
 } from "bun:test";
 import postgres from "postgres";
 import type { IKnowledgeDB } from "../src/db/interface";
-import { PostgresKnowledgeDB } from "../src/db/pg-database";
+import { PostgresKnowledgeDB } from "../src/db/postgres/index";
 
 const PG_URI = process.env.PG_TEST_URI;
 

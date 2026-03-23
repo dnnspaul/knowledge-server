@@ -25,7 +25,7 @@
 
 import { config, validateConfig } from "../config.js";
 import { createEpisodeReaders } from "./readers/index.js";
-import { KnowledgeDB } from "../db/database.js";
+import { KnowledgeDB } from "../db/sqlite/index.js";
 import { StoreRegistry } from "../db/store-registry.js";
 import { EpisodeUploader } from "./uploader.js";
 import { logger } from "../logger.js";

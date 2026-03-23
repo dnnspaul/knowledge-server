@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EpisodeUploader } from "../src/daemon/uploader";
-import { KnowledgeDB } from "../src/db/database";
+import { KnowledgeDB } from "../src/db/sqlite/index";
 import { PendingEpisodesReader } from "../src/consolidation/readers/pending";
 import type { IEpisodeReader, PendingEpisode } from "../src/types";
 

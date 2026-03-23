@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { KnowledgeDB } from "../src/db/database";
-import { CREATE_TABLES, EXPECTED_TABLE_COLUMNS } from "../src/db/schema";
+import { KnowledgeDB } from "../src/db/sqlite/index";
+import { CREATE_TABLES, EXPECTED_TABLE_COLUMNS } from "../src/db/sqlite/schema";
 
 describe("KnowledgeDB", () => {
 	let db: KnowledgeDB;

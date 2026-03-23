@@ -28,7 +28,7 @@ import type { KnowledgeServerConfig } from "../src/config-file";
 import { ConsolidationEngine } from "../src/consolidation/consolidate";
 import { ConsolidationLLM } from "../src/consolidation/llm";
 import { OpenCodeEpisodeReader } from "../src/daemon/readers/opencode";
-import { KnowledgeDB } from "../src/db/database";
+import { KnowledgeDB } from "../src/db/sqlite/index";
 import { DomainRouter } from "../src/consolidation/domain-router";
 import { fakeEmbedding } from "./fixtures";
 
