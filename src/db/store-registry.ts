@@ -9,12 +9,9 @@ import type { KnowledgeServerConfig, StoreConfig } from "../config-file.js";
 import { DomainRouter } from "../consolidation/domain-router.js";
 import { logger } from "../logger.js";
 import { KnowledgeDB } from "./sqlite/index.js";
-import type { IKnowledgeStore, IServerLocalDB } from "./interface.js";
+import type { IKnowledgeStore, IServerStateDB } from "./interface.js";
 import { PostgresKnowledgeDB } from "./postgres/index.js";
-import {
-	ServerLocalDB,
-	DEFAULT_SERVER_LOCAL_PATH,
-} from "./server-local/index.js";
+import { ServerStateDB } from "./state/index.js";
 
 /**
  * StoreRegistry — manages a configured set of IKnowledgeStore instances.
@@ -37,12 +34,12 @@ export class StoreRegistry {
 	private writableIds: string[];
 	private readable: IKnowledgeStore[];
 	/**
-	 * The server-local SQLite database (server.db).
+	 * The server-local SQLite database (state.db).
 	 * Always local to the machine where knowledge-server runs.
 	 * Holds staging tables (pending_episodes, consolidated_episode, etc.)
 	 * independently of the configured knowledge stores.
 	 */
-	readonly serverLocalDb: IServerLocalDB;
+	readonly serverStateDb: IServerStateDB;
 	/** Domain router for consolidation routing. Null when no domains are configured. */
 	readonly domainRouter: DomainRouter | null;
 	/**
@@ -65,7 +62,7 @@ export class StoreRegistry {
 		writableId: string,
 		config: KnowledgeServerConfig,
 		unavailableIds: Set<string>,
-		serverLocalDb: IServerLocalDB,
+		serverStateDb: IServerStateDB,
 	) {
 		this.stores = stores;
 		const writable = stores.get(writableId);
@@ -80,7 +77,7 @@ export class StoreRegistry {
 			.map((s) => s.id);
 		this.readable = Array.from(stores.values());
 		this.unavailableStoreIds = unavailableIds;
-		this.serverLocalDb = serverLocalDb;
+		this.serverStateDb = serverStateDb;
 		this.domainRouter =
 			config.domains.length > 0
 				? new DomainRouter(config, stores, writable, unavailableIds)
@@ -116,11 +113,11 @@ export class StoreRegistry {
 		return [...this.readable];
 	}
 
-	/** Close all store connections including serverLocalDb. */
+	/** Close all store connections including serverStateDb. */
 	async close(): Promise<void> {
 		await Promise.all([
 			...Array.from(this.stores.values()).map((db) => db.close()),
-			this.serverLocalDb.close(),
+			this.serverStateDb.close(),
 		]);
 	}
 
@@ -151,15 +148,17 @@ export class StoreRegistry {
 			logger.log("[db] No config.jsonc found — using default SQLite store.");
 		}
 
-		// Create and populate server.db BEFORE initialising knowledge stores.
-		// This ensures that migrateFromKnowledgeDb() copies consolidated_episode
-		// rows from legacy knowledge.db into server.db before any Postgres store
-		// runs migrations that drop those tables (schema v14+).
-		const serverLocalDb = new ServerLocalDB();
-		const legacySqliteConfig = config.stores.find((s) => s.kind === "sqlite");
-		if (legacySqliteConfig) {
-			const legacyPath = resolveSqlitePath(legacySqliteConfig);
-			serverLocalDb.migrateFromKnowledgeDb(legacyPath);
+		// Create ServerStateDB — runs schema init and any pending data migrations
+		// (e.g. one-time copy of staging tables from legacy knowledge.db).
+		// Must run BEFORE knowledge stores initialize: schema v14 drops staging
+		// tables from Postgres, and the migration must copy them first.
+		let serverStateDb: ServerStateDB;
+		try {
+			serverStateDb = new ServerStateDB();
+		} catch (e) {
+			throw new Error(
+				`Failed to initialise server state database: ${e instanceof Error ? e.message : String(e)}`,
+			);
 		}
 
 		// Initialise all stores in parallel.
@@ -214,7 +213,7 @@ export class StoreRegistry {
 			writableId,
 			config,
 			unavailableIds,
-			serverLocalDb,
+			serverStateDb,
 		);
 
 		// Warn if writable SQLite stores coexist with remote Postgres stores.

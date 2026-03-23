@@ -25,7 +25,7 @@ import { join } from "node:path";
 import postgres from "postgres";
 import type { IKnowledgeStore } from "../src/db/interface";
 import { PostgresKnowledgeDB } from "../src/db/postgres/index";
-import { ServerLocalDB } from "../src/db/server-local/index";
+import { ServerStateDB } from "../src/db/state/index";
 
 const PG_URI = process.env.PG_TEST_URI;
 
@@ -56,7 +56,7 @@ function makeEntry(id: string, overrides: Record<string, unknown> = {}) {
 
 describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 	let db: IKnowledgeStore;
-	let serverLocalDb: ServerLocalDB;
+	let serverStateDb: ServerStateDB;
 	let pgTestSeq = 0;
 	const uri = PG_URI as string;
 	// Shared truncation client — created once to avoid pool churn on every test.
@@ -75,27 +75,27 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		// knowledge_cluster must be listed explicitly — it has no FK back to
 		// knowledge_entry so it is not reached by CASCADE.
 		// consolidated_episode and consolidation_state are NOT truncated here —
-		// they now live in server.db (ServerLocalDB), not in Postgres.
+		// they now live in state.db (ServerStateDB), not in Postgres.
 		await truncSql`TRUNCATE knowledge_entry, knowledge_cluster, embedding_metadata, schema_version CASCADE`;
 		// Re-initialize to re-stamp schema_version (truncated above).
 		// Clear initPromise (private field) so initialize() re-runs on next call.
 		(db as unknown as { initPromise: null }).initPromise = null;
 		await (db as PostgresKnowledgeDB).initialize();
-		// Fresh ServerLocalDB for each test — staging methods now live here.
+		// Fresh ServerStateDB for each test — staging methods now live here.
 		// Use a counter rather than Date.now() to avoid filename collisions on fast machines.
-		await serverLocalDb
+		await serverStateDb
 			?.close()
 			.catch((e: unknown) =>
-				console.error("[test] serverLocalDb close error:", e),
+				console.error("[test] serverStateDb close error:", e),
 			);
-		serverLocalDb = new ServerLocalDB(
+		serverStateDb = new ServerStateDB(
 			join(tempDir, `server-${++pgTestSeq}.db`),
 		);
 	});
 
 	afterAll(async () => {
 		// Run in parallel — independent connections, no ordering dependency.
-		await Promise.all([db.close(), serverLocalDb?.close(), truncSql.end()]);
+		await Promise.all([db.close(), serverStateDb?.close(), truncSql.end()]);
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
@@ -342,30 +342,30 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 	});
 
 	// ── Consolidation State ──
-	// These methods now live on IServerLocalDB (ServerLocalDB), not IKnowledgeStore.
+	// These methods now live on IServerStateDB (ServerStateDB), not IKnowledgeStore.
 
 	it("manages consolidation state", async () => {
-		const state = await serverLocalDb.getConsolidationState();
+		const state = await serverStateDb.getConsolidationState();
 		expect(state.lastConsolidatedAt).toBe(0);
 		expect(state.totalSessionsProcessed).toBe(0);
 
-		await serverLocalDb.updateConsolidationState({
+		await serverStateDb.updateConsolidationState({
 			lastConsolidatedAt: 1000000,
 			totalSessionsProcessed: 50,
 			totalEntriesCreated: 25,
 		});
 
-		const updated = await serverLocalDb.getConsolidationState();
+		const updated = await serverStateDb.getConsolidationState();
 		expect(updated.lastConsolidatedAt).toBe(1000000);
 		expect(updated.totalSessionsProcessed).toBe(50);
 		expect(updated.totalEntriesCreated).toBe(25);
 	});
 
 	// ── Episode Tracking ──
-	// These methods now live on IServerLocalDB (ServerLocalDB), not IKnowledgeStore.
+	// These methods now live on IServerStateDB (ServerStateDB), not IKnowledgeStore.
 
 	it("records and retrieves episode ranges", async () => {
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-start-1",
@@ -373,7 +373,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			"messages",
 			3,
 		);
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-start-2",
@@ -381,7 +381,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			"compaction_summary",
 			1,
 		);
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"opencode",
 			"session-2",
 			"msg-start-3",
@@ -390,7 +390,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			0,
 		);
 
-		const ranges = await serverLocalDb.getProcessedEpisodeRanges([
+		const ranges = await serverStateDb.getProcessedEpisodeRanges([
 			"session-1",
 			"session-2",
 		]);
@@ -421,7 +421,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 	});
 
 	it("recordEpisode is idempotent", async () => {
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-a",
@@ -429,7 +429,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			"messages",
 			2,
 		);
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-a",
@@ -438,12 +438,12 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			2,
 		);
 
-		const ranges = await serverLocalDb.getProcessedEpisodeRanges(["session-1"]);
+		const ranges = await serverStateDb.getProcessedEpisodeRanges(["session-1"]);
 		expect(ranges.get("session-1")).toHaveLength(1);
 	});
 
 	it("episodes from different sources for the same session are both returned", async () => {
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-a",
@@ -451,7 +451,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			"messages",
 			2,
 		);
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"claude-code",
 			"session-1",
 			"msg-a",
@@ -460,12 +460,12 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 			2,
 		);
 
-		const ranges = await serverLocalDb.getProcessedEpisodeRanges(["session-1"]);
+		const ranges = await serverStateDb.getProcessedEpisodeRanges(["session-1"]);
 		expect(ranges.get("session-1")).toHaveLength(2);
 	});
 
 	it("getProcessedEpisodeRanges returns empty map for unknown session", async () => {
-		const ranges = await serverLocalDb.getProcessedEpisodeRanges([
+		const ranges = await serverStateDb.getProcessedEpisodeRanges([
 			"no-such-session",
 		]);
 		expect(ranges.size).toBe(0);
@@ -815,7 +815,7 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		await db.setEmbeddingMetadata("test-model", 128);
 
 		// reinitialize() clears knowledge tables only.
-		// Staging lives in server.db (ServerLocalDB), not in the knowledge store.
+		// Staging lives in state.db (ServerStateDB), not in the knowledge store.
 		await db.reinitialize();
 
 		expect((await db.getStats()).total).toBe(0);

@@ -29,7 +29,7 @@ import { ConsolidationEngine } from "../src/consolidation/consolidate";
 import { ConsolidationLLM } from "../src/consolidation/llm";
 import { OpenCodeEpisodeReader } from "../src/daemon/readers/opencode";
 import { KnowledgeDB } from "../src/db/sqlite/index";
-import { ServerLocalDB } from "../src/db/server-local/index";
+import { ServerStateDB } from "../src/db/state/index";
 import { DomainRouter } from "../src/consolidation/domain-router";
 import { fakeEmbedding } from "./fixtures";
 
@@ -78,7 +78,7 @@ describe("Domain routing via DomainRouter + ConsolidationEngine", () => {
 	let workDb: KnowledgeDB;
 	let fakeOpenCodeDbPath: string;
 
-	let serverLocalDb: ServerLocalDB;
+	let serverStateDb: ServerStateDB;
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "ks-domain-integration-test-"));
@@ -86,14 +86,14 @@ describe("Domain routing via DomainRouter + ConsolidationEngine", () => {
 		writeFileSync(fakeOpenCodeDbPath, "");
 		personalDb = new KnowledgeDB(join(tempDir, "personal.db"));
 		workDb = new KnowledgeDB(join(tempDir, "work.db"));
-		serverLocalDb = new ServerLocalDB(join(tempDir, "server.db"));
+		serverStateDb = new ServerStateDB(join(tempDir, "state.db"));
 	});
 
 	afterEach(async () => {
 		mock.restore();
 		await personalDb.close();
 		await workDb.close();
-		await serverLocalDb.close();
+		await serverStateDb.close();
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 	it("routes entries to the work store when session directory matches work project", async () => {
@@ -108,7 +108,7 @@ describe("Domain routing via DomainRouter + ConsolidationEngine", () => {
 		const reader = new OpenCodeEpisodeReader(fakeOpenCodeDbPath);
 		const engine = new ConsolidationEngine(
 			personalDb,
-			serverLocalDb,
+			serverStateDb,
 			activation,
 			[reader],
 			router,
@@ -182,7 +182,7 @@ describe("Domain routing via DomainRouter + ConsolidationEngine", () => {
 		const reader = new OpenCodeEpisodeReader(fakeOpenCodeDbPath);
 		const engine = new ConsolidationEngine(
 			personalDb,
-			serverLocalDb,
+			serverStateDb,
 			activation,
 			[reader],
 			router,
@@ -251,7 +251,7 @@ describe("Domain routing via DomainRouter + ConsolidationEngine", () => {
 		const reader = new OpenCodeEpisodeReader(fakeOpenCodeDbPath);
 		const engine = new ConsolidationEngine(
 			personalDb,
-			serverLocalDb,
+			serverStateDb,
 			activation,
 			[reader],
 		); // no router

@@ -35,16 +35,16 @@ export async function runStatus(pidPath: string): Promise<void> {
 
 	const registry = await StoreRegistry.create();
 	const db = registry.writableStore();
-	const { serverLocalDb } = registry;
+	const { serverStateDb } = registry;
 	try {
 		const stats = await db.getStats();
-		const state = await serverLocalDb.getConsolidationState();
+		const state = await serverStateDb.getConsolidationState();
 
-		// Count pending sessions directly from server.db — avoids constructing
+		// Count pending sessions directly from state.db — avoids constructing
 		// a full ConsolidationEngine (which costs LLM/embedding client setup)
 		// and avoids the stale-1 bug from PendingEpisodesReader.countNewSessions()
 		// when prepare() has not been called.
-		const pendingSessions = await serverLocalDb.countPendingSessions();
+		const pendingSessions = await serverStateDb.countPendingSessions();
 
 		console.log("Knowledge Server Status");
 		console.log("───────────────────────────────────────");

@@ -9,7 +9,7 @@ import { createApp } from "../src/api/server";
 import type { ConsolidationEngine } from "../src/consolidation/consolidate";
 import type { KnowledgeDB } from "../src/db/sqlite/index";
 import { KnowledgeDB as KnowledgeDBImpl } from "../src/db/sqlite/index";
-import { ServerLocalDB } from "../src/db/server-local/index";
+import { ServerStateDB } from "../src/db/state/index";
 
 // Intentionally static string — production uses a random token generated at startup.
 const TEST_ADMIN_TOKEN = "test-admin-token-abc123";
@@ -21,7 +21,7 @@ describe("HTTP API", () => {
 	let activation: ActivationEngine;
 	let embedSpy: ReturnType<typeof spyOn>;
 
-	let serverLocalDb: ServerLocalDB;
+	let serverStateDb: ServerStateDB;
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "knowledge-api-test-"));
@@ -29,7 +29,7 @@ describe("HTTP API", () => {
 			join(tempDir, "test.db"),
 			join(tempDir, "opencode-fake.db"),
 		);
-		serverLocalDb = new ServerLocalDB(join(tempDir, "server.db"));
+		serverStateDb = new ServerStateDB(join(tempDir, "state.db"));
 		activation = new ActivationEngine(db);
 		embedSpy = spyOn(activation.embeddings, "embed").mockResolvedValue([
 			0.11, 0.22, 0.33,
@@ -55,7 +55,7 @@ describe("HTTP API", () => {
 		} as unknown as ConsolidationEngine;
 		app = createApp(
 			db,
-			serverLocalDb,
+			serverStateDb,
 			activation,
 			consolidation,
 			TEST_ADMIN_TOKEN,
@@ -64,7 +64,7 @@ describe("HTTP API", () => {
 
 	afterEach(async () => {
 		await db.close();
-		await serverLocalDb.close();
+		await serverStateDb.close();
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
@@ -259,9 +259,7 @@ describe("HTTP API", () => {
 			join(tempDir, "busy.db"),
 			join(tempDir, "opencode-fake.db"),
 		);
-		const busyServerLocalDb = new ServerLocalDB(
-			join(tempDir, "busy-server.db"),
-		);
+		const busyServerLocalDb = new ServerStateDB(join(tempDir, "busy-state.db"));
 		try {
 			const busyActivation = new ActivationEngine(busyDb);
 			const busyConsolidation = {

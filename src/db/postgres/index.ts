@@ -220,7 +220,7 @@ export class PostgresKnowledgeDB implements IKnowledgeStore {
 					await sql`DROP TABLE IF EXISTS knowledge_entry CASCADE`;
 					await sql`DROP TABLE IF EXISTS embedding_metadata CASCADE`;
 					// Drop staging tables that may exist from pre-v14 Postgres schemas.
-					// These now live in server.db (ServerLocalDB) — safe to drop here
+					// These now live in state.db (ServerStateDB) — safe to drop here
 					// since migrateFromKnowledgeDb() would have already copied them.
 					await sql`DROP TABLE IF EXISTS pending_episodes CASCADE`;
 					await sql`DROP TABLE IF EXISTS consolidated_episode CASCADE`;

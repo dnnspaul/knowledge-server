@@ -19,7 +19,7 @@ export async function runReinitialize(args: string[]): Promise<void> {
 	const flag = remaining[0];
 
 	const registry = await StoreRegistry.create();
-	const { serverLocalDb } = registry;
+	const { serverStateDb } = registry;
 
 	// Resolve target stores
 	const writableStoreEntries = registry.writableStoreEntries();
@@ -101,7 +101,7 @@ export async function runReinitialize(args: string[]): Promise<void> {
 
 		if (!storeId) {
 			// Full reset: clear all staging and bookkeeping data.
-			await serverLocalDb.reinitialize();
+			await serverStateDb.reinitialize();
 			console.log("  ✓ Reset consolidation state and staging tables");
 		} else {
 			// Partial wipe: knowledge entries in the named store are removed.
@@ -110,7 +110,7 @@ export async function runReinitialize(args: string[]): Promise<void> {
 			// without knowing the source→store mapping. Run without --store for a
 			// full reset including staging tables.
 			console.log(
-				"  Note: server.db staging tables (consolidated_episode, pending_episodes,\n" +
+				"  Note: state.db staging tables (consolidated_episode, pending_episodes,\n" +
 					"  daemon_cursor, consolidation_state) were not cleared — they are shared\n" +
 					"  across all stores. Run without --store for a full reset including staging.",
 			);

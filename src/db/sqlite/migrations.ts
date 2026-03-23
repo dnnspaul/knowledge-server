@@ -226,9 +226,9 @@ export const MIGRATIONS: Array<{
 			// pending_episodes is self-draining; consolidated_episode handles idempotency.
 			db.exec("DROP TABLE IF EXISTS source_cursor");
 
-			// NOTE: After v13, consolidated_episode belongs in server.db (ServerLocalDB),
+			// NOTE: After v13, consolidated_episode belongs in state.db (ServerStateDB),
 			// not in knowledge.db. This migration preserves the existing table to allow
-			// ServerLocalDB.migrateFromKnowledgeDb() to copy the rows on first startup.
+			// ServerStateDB.migrateFromKnowledgeDb() to copy the rows on first startup.
 			// After migration, the table in knowledge.db becomes orphaned (never read or
 			// written again) but is intentionally NOT dropped here — dropping before
 			// migrateFromKnowledgeDb() copies rows would silently destroy the idempotency
@@ -274,11 +274,11 @@ export const MIGRATIONS: Array<{
 	},
 	{
 		version: 14,
-		label: "staging tables moved to server.db — no-op for knowledge.db (SQLite)",
+		label: "staging tables moved to state.db — no-op for knowledge.db (SQLite)",
 		up: (_db) => {
 			// SQLite knowledge.db: staging tables (consolidated_episode, consolidation_state,
 			// pending_episodes) were already handled in v13 and remain as orphaned legacy
-			// tables until migrateFromKnowledgeDb() copies them to server.db.
+			// tables until migrateFromKnowledgeDb() copies them to state.db.
 			// No DDL changes needed for SQLite knowledge stores.
 		},
 	},

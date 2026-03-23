@@ -80,7 +80,7 @@
 /**
  * v14: Drop staging tables from Postgres knowledge stores.
  * - consolidated_episode, consolidation_state, pending_episodes now live
- *   exclusively in server.db (ServerLocalDB local SQLite).
+ *   exclusively in state.db (ServerStateDB local SQLite).
  * - These tables are dropped from Postgres on migration.
  * - SQLite knowledge.db: no change — these tables were already handled in v13.
  */
@@ -130,7 +130,7 @@ export const EXPECTED_TABLE_COLUMNS: Readonly<
 	knowledge_cluster_member: ["cluster_id", "entry_id", "joined_at"],
 	embedding_metadata: ["id", "model", "dimensions", "recorded_at"],
 	// Note: consolidation_state, consolidated_episode, pending_episodes, daemon_cursor
-	// have moved to server.db (ServerLocalDB) in v13+. They are no longer created
+	// have moved to state.db (ServerStateDB) in v13+. They are no longer created
 	// in knowledge.db — omitting them here prevents false-positive drift warnings
 	// on new-architecture installs where these tables are absent from knowledge.db.
 };
@@ -230,5 +230,5 @@ export const CREATE_TABLES = `
 
   -- Note: pending_episodes, daemon_cursor, consolidated_episode, and
   -- consolidation_state are NOT created here. As of v13, these staging and
-  -- bookkeeping tables live in server.db (ServerLocalDB), not in knowledge.db.
+  -- bookkeeping tables live in state.db (ServerStateDB), not in knowledge.db.
 `;

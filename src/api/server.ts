@@ -55,7 +55,7 @@ import type {
  */
 export function createApp(
 	db: IKnowledgeStore,
-	serverLocalDb: import("../db/interface.js").IServerLocalDB,
+	serverStateDb: import("../db/interface.js").IServerStateDB,
 	activation: ActivationEngine,
 	consolidation: ConsolidationEngine,
 	adminToken: string,
@@ -303,7 +303,7 @@ export function createApp(
 			}
 
 			await db.reinitialize();
-			await serverLocalDb.reinitialize();
+			await serverStateDb.reinitialize();
 
 			logger.log("[reinitialize] Knowledge DB wiped and cursor reset.");
 			return c.json({
@@ -349,7 +349,7 @@ export function createApp(
 
 	app.get("/status", async (c) => {
 		const stats = await db.getStats();
-		const consolidationState = await serverLocalDb.getConsolidationState();
+		const consolidationState = await serverStateDb.getConsolidationState();
 
 		// No per-source cursors in daemon-only mode — pending_episodes is self-draining.
 

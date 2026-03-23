@@ -4,7 +4,7 @@
  * A thin binary that reads local AI tool session files and uploads episodes
  * to the server-local pending_episodes staging table.
  *
- * The daemon always writes to the server-local DB (server.db on the same
+ * The daemon always writes to the server-local DB (state.db on the same
  * machine as the server). The server consolidates from there and routes
  * extracted knowledge to the appropriate knowledge store (SQLite or Postgres)
  * based on domain configuration.
@@ -12,7 +12,7 @@
  * This entry point imports ONLY what the daemon needs:
  *   - Episode readers (file parsers for OpenCode, Claude Code, etc.)
  *   - EpisodeUploader (the upload loop)
- *   - ServerLocalDB (staging + cursor)
+ *   - ServerStateDB (staging + cursor)
  *   - Config resolution
  *
  * Intentionally does NOT import:
@@ -29,7 +29,7 @@
 
 import { config, validateConfig } from "../config.js";
 import { createEpisodeReaders } from "./readers/index.js";
-import { ServerLocalDB } from "../db/server-local/index.js";
+import { ServerStateDB } from "../db/state/index.js";
 import { resolveUserId } from "../config-file.js";
 import { EpisodeUploader } from "./uploader.js";
 import { logger } from "../logger.js";
@@ -54,9 +54,9 @@ if (errors.length > 0) {
 	process.exit(1);
 }
 
-// Server-local DB — always the local SQLite file (server.db).
+// Server-local DB — always the local SQLite file (state.db).
 // Holds pending_episodes and daemon_cursor.
-const serverLocalDb = new ServerLocalDB();
+const serverStateDb = new ServerStateDB();
 
 const userId = resolveUserId();
 
@@ -70,7 +70,7 @@ if (readers.length === 0) {
 	);
 }
 
-const uploader = new EpisodeUploader(readers, serverLocalDb, userId);
+const uploader = new EpisodeUploader(readers, serverStateDb, userId);
 
 if (onceFlag) {
 	// One-shot mode: upload once and exit. Useful for cron / launchd OnDemand.
@@ -82,13 +82,13 @@ if (onceFlag) {
 		);
 	} finally {
 		for (const reader of readers) reader.close();
-		await serverLocalDb.close();
+		await serverStateDb.close();
 	}
 	process.exit(0);
 } else {
 	// Polling mode: run until SIGTERM/SIGINT.
 	await uploader.runPolling(intervalMs, async () => {
 		for (const reader of readers) reader.close();
-		await serverLocalDb.close();
+		await serverStateDb.close();
 	});
 }

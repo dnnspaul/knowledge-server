@@ -11,7 +11,7 @@ import type {
 /**
  * Server-local database interface — staging and bookkeeping tables.
  *
- * Always backed by a local SQLite file (server.db) on the machine where
+ * Always backed by a local SQLite file (state.db) on the machine where
  * knowledge-server runs. Never lives in a remote Postgres instance.
  *
  * Holds:
@@ -23,7 +23,7 @@ import type {
  * The knowledge stores (IKnowledgeStore) are separate — they hold the actual
  * extracted knowledge and can live anywhere (local SQLite or remote Postgres).
  */
-export interface IServerLocalDB {
+export interface IServerStateDB {
 	// ── Pending Episodes (daemon → server staging) ────────────────────────────
 
 	/**
@@ -133,7 +133,7 @@ export interface IServerLocalDB {
  * A knowledge server can have multiple stores (e.g. one SQLite for "work",
  * one Postgres for "personal"), each holding their own knowledge_entry rows.
  *
- * Does NOT hold staging or bookkeeping tables — those live in IServerLocalDB.
+ * Does NOT hold staging or bookkeeping tables — those live in IServerStateDB.
  */
 export interface IKnowledgeStore {
 	// ── Entry CRUD ──
@@ -234,7 +234,7 @@ export interface IKnowledgeStore {
 
 	/**
 	 * Wipe all knowledge entries, relations, clusters, and embeddings.
-	 * Does NOT touch staging/bookkeeping tables (those are in IServerLocalDB).
+	 * Does NOT touch staging/bookkeeping tables (those are in IServerStateDB).
 	 */
 	reinitialize(): Promise<void>;
 
@@ -278,15 +278,3 @@ export interface IKnowledgeStore {
 
 	close(): Promise<void>;
 }
-
-/**
- * @deprecated Alias for IKnowledgeStore. Use IKnowledgeStore directly.
- *
- * Previously extended both IServerLocalDB and IKnowledgeStore, forcing knowledge
- * store implementations (KnowledgeDB, PostgresKnowledgeDB) to implement all
- * staging/bookkeeping methods. That dual-role coupling has been removed —
- * staging now lives exclusively in ServerLocalDB.
- *
- * Kept as an alias for any code that still imports it by name.
- */
-export type IKnowledgeDB = IKnowledgeStore;

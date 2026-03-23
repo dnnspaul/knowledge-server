@@ -4,23 +4,23 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KnowledgeDB } from "../src/db/sqlite/index";
-import { ServerLocalDB } from "../src/db/server-local/index";
+import { ServerStateDB } from "../src/db/state/index";
 import { CREATE_TABLES, EXPECTED_TABLE_COLUMNS } from "../src/db/sqlite/schema";
 
 describe("KnowledgeDB", () => {
 	let db: KnowledgeDB;
-	let serverLocalDb: ServerLocalDB;
+	let serverStateDb: ServerStateDB;
 	let tempDir: string;
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "knowledge-test-"));
 		db = new KnowledgeDB(join(tempDir, "test.db"));
-		serverLocalDb = new ServerLocalDB(join(tempDir, "server.db"));
+		serverStateDb = new ServerStateDB(join(tempDir, "state.db"));
 	});
 
 	afterEach(async () => {
 		await db.close();
-		await serverLocalDb.close();
+		await serverStateDb.close();
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
@@ -191,24 +191,24 @@ describe("KnowledgeDB", () => {
 	});
 
 	it("should manage consolidation state", async () => {
-		const state = await serverLocalDb.getConsolidationState();
+		const state = await serverStateDb.getConsolidationState();
 		expect(state.lastConsolidatedAt).toBe(0);
 		expect(state.totalSessionsProcessed).toBe(0);
 
-		await serverLocalDb.updateConsolidationState({
+		await serverStateDb.updateConsolidationState({
 			lastConsolidatedAt: 1000000,
 			totalSessionsProcessed: 50,
 			totalEntriesCreated: 25,
 		});
 
-		const updated = await serverLocalDb.getConsolidationState();
+		const updated = await serverStateDb.getConsolidationState();
 		expect(updated.lastConsolidatedAt).toBe(1000000);
 		expect(updated.totalSessionsProcessed).toBe(50);
 		expect(updated.totalEntriesCreated).toBe(25);
 	});
 
 	it("should record and retrieve episode ranges", async () => {
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-start-1",
@@ -216,7 +216,7 @@ describe("KnowledgeDB", () => {
 			"messages",
 			3,
 		);
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-start-2",
@@ -224,7 +224,7 @@ describe("KnowledgeDB", () => {
 			"compaction_summary",
 			1,
 		);
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"opencode",
 			"session-2",
 			"msg-start-3",
@@ -233,7 +233,7 @@ describe("KnowledgeDB", () => {
 			0,
 		);
 
-		const ranges = await serverLocalDb.getProcessedEpisodeRanges([
+		const ranges = await serverStateDb.getProcessedEpisodeRanges([
 			"session-1",
 			"session-2",
 		]);
@@ -267,7 +267,7 @@ describe("KnowledgeDB", () => {
 	});
 
 	it("episodes from different sources for the same session are both returned", async () => {
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-a",
@@ -275,7 +275,7 @@ describe("KnowledgeDB", () => {
 			"messages",
 			2,
 		);
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"claude-code",
 			"session-1",
 			"msg-a",
@@ -284,13 +284,13 @@ describe("KnowledgeDB", () => {
 			2,
 		);
 
-		const ranges = await serverLocalDb.getProcessedEpisodeRanges(["session-1"]);
+		const ranges = await serverStateDb.getProcessedEpisodeRanges(["session-1"]);
 		// Both source entries are returned — idempotency is per (source, session, start, end)
 		expect(ranges.get("session-1")).toHaveLength(2);
 	});
 
 	it("recordEpisode is idempotent — duplicate inserts are ignored", async () => {
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-a",
@@ -298,7 +298,7 @@ describe("KnowledgeDB", () => {
 			"messages",
 			2,
 		);
-		await serverLocalDb.recordEpisode(
+		await serverStateDb.recordEpisode(
 			"opencode",
 			"session-1",
 			"msg-a",
@@ -307,12 +307,12 @@ describe("KnowledgeDB", () => {
 			2,
 		);
 
-		const ranges = await serverLocalDb.getProcessedEpisodeRanges(["session-1"]);
+		const ranges = await serverStateDb.getProcessedEpisodeRanges(["session-1"]);
 		expect(ranges.get("session-1")).toHaveLength(1);
 	});
 
 	it("getProcessedEpisodeRanges returns empty map for unknown session", async () => {
-		const ranges = await serverLocalDb.getProcessedEpisodeRanges([
+		const ranges = await serverStateDb.getProcessedEpisodeRanges([
 			"no-such-session",
 		]);
 		expect(ranges.size).toBe(0);

@@ -209,19 +209,19 @@ Run \`knowledge-server help-advanced\` for additional commands.
 	// Initialize store registry and components
 	const registry = await StoreRegistry.create();
 	const db = registry.writableStore();
-	const { serverLocalDb } = registry;
+	const { serverStateDb } = registry;
 	const activation = new ActivationEngine(db, registry.readStores());
 	const consolidation = new ConsolidationEngine(
 		db,
-		serverLocalDb,
+		serverStateDb,
 		activation,
-		[new PendingEpisodesReader(serverLocalDb)],
+		[new PendingEpisodesReader(serverStateDb)],
 		registry.domainRouter,
 	);
 
 	// Check if this is a first run (no knowledge yet, but episodes exist)
 	const stats = await db.getStats();
-	const consolidationState = await serverLocalDb.getConsolidationState();
+	const consolidationState = await serverStateDb.getConsolidationState();
 
 	logger.log(
 		`Knowledge graph: ${stats.total || 0} entries (${stats.active || 0} active)`,
@@ -313,7 +313,7 @@ Run \`knowledge-server help-advanced\` for additional commands.
 	// Create HTTP app
 	const app = createApp(
 		db,
-		serverLocalDb,
+		serverStateDb,
 		activation,
 		consolidation,
 		adminToken,

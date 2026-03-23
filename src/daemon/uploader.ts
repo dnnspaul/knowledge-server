@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../config.js";
-import type { IServerLocalDB } from "../db/interface.js";
+import type { IServerStateDB } from "../db/interface.js";
 import { logger } from "../logger.js";
 import type { Episode, IEpisodeReader, PendingEpisode } from "../types.js";
 
@@ -14,7 +14,7 @@ import type { Episode, IEpisodeReader, PendingEpisode } from "../types.js";
  *   4. Writes each episode to the pending_episodes staging table
  *   5. Advances the daemon cursor
  *
- * The daemon writes pending_episodes to the server-local DB (server.db), which
+ * The daemon writes pending_episodes to the server-local DB (state.db), which
  * is always co-located with the knowledge-server. The consolidation engine reads
  * from there, extracts knowledge via LLM, and routes entries to the appropriate
  * knowledge store (local SQLite or remote Postgres) based on domain configuration.
@@ -24,22 +24,22 @@ import type { Episode, IEpisodeReader, PendingEpisode } from "../types.js";
  */
 export class EpisodeUploader {
 	private readonly readers: IEpisodeReader[];
-	private readonly serverLocalDb: IServerLocalDB;
+	private readonly serverStateDb: IServerStateDB;
 	private readonly userId: string;
 
 	/**
 	 * @param readers       Episode readers — one per AI tool source.
-	 * @param serverLocalDb The server-local DB — holds pending_episodes and daemon_cursor.
+	 * @param serverStateDb The server-local DB — holds pending_episodes and daemon_cursor.
 	 *                      This is always the DB on the same machine as the server.
 	 * @param userId        Stable user identifier (KNOWLEDGE_USER_ID or hostname).
 	 */
 	constructor(
 		readers: IEpisodeReader[],
-		serverLocalDb: IServerLocalDB,
+		serverStateDb: IServerStateDB,
 		userId: string,
 	) {
 		this.readers = readers;
-		this.serverLocalDb = serverLocalDb;
+		this.serverStateDb = serverStateDb;
 		this.userId = userId;
 	}
 
@@ -99,7 +99,7 @@ export class EpisodeUploader {
 		reader: IEpisodeReader,
 	): Promise<{ episodes: number; sessions: number }> {
 		// Daemon cursor and pending_episodes both live in the server-local DB.
-		const cursor = await this.serverLocalDb.getDaemonCursor(reader.source);
+		const cursor = await this.serverStateDb.getDaemonCursor(reader.source);
 
 		const candidateSessions = reader.getCandidateSessions(
 			cursor.lastMessageTimeCreated,
@@ -114,10 +114,10 @@ export class EpisodeUploader {
 
 		// Load already-uploaded/consolidated episodes to avoid re-uploading.
 		const processedRanges =
-			await this.serverLocalDb.getProcessedEpisodeRanges(candidateIds);
+			await this.serverStateDb.getProcessedEpisodeRanges(candidateIds);
 
 		// Also check what's already pending (uploaded but not yet consolidated).
-		const alreadyPending = await this.serverLocalDb.getPendingEpisodes(
+		const alreadyPending = await this.serverStateDb.getPendingEpisodes(
 			cursor.lastMessageTimeCreated,
 		);
 		const pendingSet = new Set(
@@ -167,7 +167,7 @@ export class EpisodeUploader {
 				uploadedAt: Date.now(),
 			};
 			try {
-				await this.serverLocalDb.insertPendingEpisode(pending);
+				await this.serverStateDb.insertPendingEpisode(pending);
 				uploadedCount++;
 				uploadedSessionIds.add(ep.sessionId);
 				lastSuccessMaxTime = Math.max(lastSuccessMaxTime, ep.maxMessageTime);
@@ -201,7 +201,7 @@ export class EpisodeUploader {
 
 		newCursor = Math.max(newCursor, cursor.lastMessageTimeCreated);
 
-		await this.serverLocalDb.updateDaemonCursor(reader.source, {
+		await this.serverStateDb.updateDaemonCursor(reader.source, {
 			lastMessageTimeCreated: newCursor,
 			lastUploadedAt: Date.now(),
 		});

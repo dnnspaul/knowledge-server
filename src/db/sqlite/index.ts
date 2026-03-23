@@ -123,8 +123,8 @@ export class KnowledgeDB implements IKnowledgeStore {
 				this.db.exec("DROP TABLE IF EXISTS embedding_metadata");
 				this.db.exec("DROP TABLE IF EXISTS schema_version");
 				// Note: consolidated_episode, consolidation_state, pending_episodes,
-				// and daemon_cursor are NOT dropped here — they live in server.db
-				// (ServerLocalDB). Dropping them from legacy knowledge.db would be
+				// and daemon_cursor are NOT dropped here — they live in state.db
+				// (ServerStateDB). Dropping them from legacy knowledge.db would be
 				// a no-op on v13+ DBs and dangerous on pre-migration DBs.
 			})();
 		}
@@ -983,11 +983,11 @@ export class KnowledgeDB implements IKnowledgeStore {
 	/**
 	 * Wipe all knowledge entries, relations, clusters, and embeddings.
 	 * Staging and bookkeeping tables (consolidated_episode, consolidation_state,
-	 * pending_episodes, daemon_cursor) are managed by ServerLocalDB — call
-	 * serverLocalDb.reinitialize() separately for a complete reset.
+	 * pending_episodes, daemon_cursor) are managed by ServerStateDB — call
+	 * serverStateDb.reinitialize() separately for a complete reset.
 	 */
 	async reinitialize(): Promise<void> {
-		// Wipe only knowledge tables — staging tables live in server.db (ServerLocalDB).
+		// Wipe only knowledge tables — staging tables live in state.db (ServerStateDB).
 		this.db.transaction(() => {
 			this.db.exec("DELETE FROM knowledge_cluster_member");
 			this.db.exec("DELETE FROM knowledge_cluster");

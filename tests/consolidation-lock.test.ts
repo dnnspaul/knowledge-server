@@ -21,45 +21,45 @@ import { join } from "node:path";
 import { ActivationEngine } from "../src/activation/activate";
 import { ConsolidationEngine } from "../src/consolidation/consolidate";
 import { KnowledgeDB } from "../src/db/sqlite/index";
-import { ServerLocalDB } from "../src/db/server-local/index";
+import { ServerStateDB } from "../src/db/state/index";
 
-// ── ServerLocalDB lock ────────────────────────────────────────────────────────
-// The consolidation lock lives on IServerLocalDB (ServerLocalDB), not on the
+// ── ServerStateDB lock ────────────────────────────────────────────────────────
+// The consolidation lock lives on IServerStateDB (ServerStateDB), not on the
 // knowledge stores (KnowledgeDB / PostgresKnowledgeDB).
 
-describe("ServerLocalDB.tryAcquireConsolidationLock", () => {
+describe("ServerStateDB.tryAcquireConsolidationLock", () => {
 	let tempDir: string;
-	let serverLocalDb: ServerLocalDB;
+	let serverStateDb: ServerStateDB;
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "ks-lock-test-"));
-		serverLocalDb = new ServerLocalDB(join(tempDir, "server.db"));
+		serverStateDb = new ServerStateDB(join(tempDir, "state.db"));
 	});
 
 	afterEach(async () => {
-		await serverLocalDb.close();
+		await serverStateDb.close();
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
 	it("first acquire returns true", async () => {
-		expect(await serverLocalDb.tryAcquireConsolidationLock()).toBe(true);
+		expect(await serverStateDb.tryAcquireConsolidationLock()).toBe(true);
 	});
 
 	it("second acquire while held returns false", async () => {
-		await serverLocalDb.tryAcquireConsolidationLock();
-		expect(await serverLocalDb.tryAcquireConsolidationLock()).toBe(false);
+		await serverStateDb.tryAcquireConsolidationLock();
+		expect(await serverStateDb.tryAcquireConsolidationLock()).toBe(false);
 	});
 
 	it("acquire succeeds again after release", async () => {
-		await serverLocalDb.tryAcquireConsolidationLock();
-		await serverLocalDb.releaseConsolidationLock();
-		expect(await serverLocalDb.tryAcquireConsolidationLock()).toBe(true);
+		await serverStateDb.tryAcquireConsolidationLock();
+		await serverStateDb.releaseConsolidationLock();
+		expect(await serverStateDb.tryAcquireConsolidationLock()).toBe(true);
 	});
 
 	it("releaseConsolidationLock is idempotent when not held", async () => {
 		// Should not throw
 		await expect(
-			serverLocalDb.releaseConsolidationLock(),
+			serverStateDb.releaseConsolidationLock(),
 		).resolves.toBeUndefined();
 	});
 });
@@ -69,28 +69,28 @@ describe("ServerLocalDB.tryAcquireConsolidationLock", () => {
 describe("ConsolidationEngine.consolidate() lock behaviour", () => {
 	let tempDir: string;
 	let db: KnowledgeDB;
-	let serverLocalDb: ServerLocalDB;
+	let serverStateDb: ServerStateDB;
 	let engine: ConsolidationEngine;
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "ks-engine-lock-test-"));
 		db = new KnowledgeDB(join(tempDir, "test.db"));
-		serverLocalDb = new ServerLocalDB(join(tempDir, "server.db"));
+		serverStateDb = new ServerStateDB(join(tempDir, "state.db"));
 		const activation = new ActivationEngine(db);
-		engine = new ConsolidationEngine(db, serverLocalDb, activation, [], null);
+		engine = new ConsolidationEngine(db, serverStateDb, activation, [], null);
 	});
 
 	afterEach(async () => {
 		mock.restore();
 		await db.close();
-		await serverLocalDb.close();
+		await serverStateDb.close();
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
 	it("returns zero result immediately when lock is already held", async () => {
-		// Pre-acquire the lock on serverLocalDb — that's where ConsolidationEngine
+		// Pre-acquire the lock on serverStateDb — that's where ConsolidationEngine
 		// actually calls tryAcquireConsolidationLock().
-		await serverLocalDb.tryAcquireConsolidationLock();
+		await serverStateDb.tryAcquireConsolidationLock();
 
 		const result = await engine.consolidate();
 
@@ -117,10 +117,10 @@ describe("ConsolidationEngine.consolidate() lock behaviour", () => {
 
 		await engine.consolidate();
 
-		// Verify lock is released on serverLocalDb (that's where ConsolidationEngine acquires it)
-		const lockAcquired = await serverLocalDb.tryAcquireConsolidationLock();
+		// Verify lock is released on serverStateDb (that's where ConsolidationEngine acquires it)
+		const lockAcquired = await serverStateDb.tryAcquireConsolidationLock();
 		expect(lockAcquired).toBe(true);
-		await serverLocalDb.releaseConsolidationLock();
+		await serverStateDb.releaseConsolidationLock();
 	});
 
 	it("releases lock even when _consolidate throws", async () => {
@@ -132,8 +132,8 @@ describe("ConsolidationEngine.consolidate() lock behaviour", () => {
 		await expect(engine.consolidate()).rejects.toThrow("Simulated LLM failure");
 
 		// Lock must be released despite the throw
-		const lockAcquired = await serverLocalDb.tryAcquireConsolidationLock();
+		const lockAcquired = await serverStateDb.tryAcquireConsolidationLock();
 		expect(lockAcquired).toBe(true);
-		await serverLocalDb.releaseConsolidationLock();
+		await serverStateDb.releaseConsolidationLock();
 	});
 });

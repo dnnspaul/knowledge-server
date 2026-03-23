@@ -75,8 +75,8 @@ export const PG_CREATE_TABLES = `
 
   -- Synthesis clusters — persistent embedding-similarity groups of knowledge entries.
   -- Note: consolidation_state, consolidated_episode, pending_episodes, and daemon_cursor
-  -- are NOT created here — they live in server.db (ServerLocalDB, local SQLite).
-  -- See src/db/server-local/schema.ts for those tables.
+  -- are NOT created here — they live in state.db (ServerStateDB, local SQLite).
+  -- See src/db/state/schema.ts for those tables.
   CREATE TABLE IF NOT EXISTS knowledge_cluster (
     id TEXT PRIMARY KEY,
     centroid BYTEA NOT NULL,

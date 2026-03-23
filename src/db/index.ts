@@ -6,14 +6,10 @@
  * it reads store configuration from config.jsonc and initializes all stores.
  */
 
-export type {
-	IKnowledgeDB,
-	IServerLocalDB,
-	IKnowledgeStore,
-} from "./interface.js";
+export type { IServerStateDB, IKnowledgeStore } from "./interface.js";
 export { KnowledgeDB } from "./sqlite/index.js";
 export { PostgresKnowledgeDB } from "./postgres/index.js";
 export {
-	ServerLocalDB,
-	DEFAULT_SERVER_LOCAL_PATH,
-} from "./server-local/index.js";
+	ServerStateDB,
+	DEFAULT_SERVER_STATE_PATH,
+} from "./state/index.js";
