@@ -496,12 +496,9 @@ export function validateConfig(): string[] {
 		);
 	}
 
-	const loopbackHosts = ["127.0.0.1", "::1", "localhost"];
-	if (!loopbackHosts.includes(config.host)) {
-		errors.push(
-			`KNOWLEDGE_HOST is set to "${config.host}", which exposes the server on non-loopback interfaces with no authentication. Only use 127.0.0.1 unless you have added authentication and understand the security implications.`,
-		);
-	}
+	// Note: loopback-host validation is done post-registry in index.ts because
+	// the resolved host may come from config.jsonc (not just KNOWLEDGE_HOST env var),
+	// and the registry is created after validateConfig() runs.
 
 	// Error only when the user explicitly configured OPENCODE_DB_PATH but the file
 	// doesn't exist — a typo or stale path is worth surfacing as a hard error.

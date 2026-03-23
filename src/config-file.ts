@@ -77,23 +77,45 @@ export interface KnowledgeServerConfig {
 	/**
 	 * Stable identifier for this user/machine in a shared DB setup.
 	 *
-	 * Used to scope the consolidation cursor and episode log so multiple users
-	 * sharing the same knowledge DB advance independently.
-	 *
 	 * Resolution order:
 	 *   1. KNOWLEDGE_USER_ID environment variable
 	 *   2. userId field in config.jsonc
 	 *   3. OS hostname (os.hostname())
 	 *   4. "default" (fallback)
-	 *
-	 * Note: USER_ID is intentionally NOT used — on Linux it contains the
-	 * numeric process UID (e.g. "1000") which would silently route cursors
-	 * to a numeric string. KNOWLEDGE_USER_ID is unambiguous.
-	 *
-	 * Single-user setups: leave unset. The default "default" keeps behaviour
-	 * identical to pre-v11 — no cursor namespacing.
 	 */
 	userId: string;
+	/**
+	 * HTTP port the server listens on.
+	 * Resolution order: KNOWLEDGE_PORT env var → config.jsonc port → 3179
+	 */
+	port: number;
+	/**
+	 * HTTP bind address.
+	 * Resolution order: KNOWLEDGE_HOST env var → config.jsonc host → "127.0.0.1"
+	 */
+	host: string;
+	/**
+	 * Whether the server auto-spawns knowledge-daemon on startup.
+	 * Resolution order: DAEMON_AUTO_SPAWN env var → config.jsonc daemonAutoSpawn → true
+	 */
+	daemonAutoSpawn: boolean;
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Parse a KNOWLEDGE_PORT env var string into a valid port number.
+ * Returns `fallback` when the value is absent or invalid, and emits a
+ * console.warn when it is present but invalid so the user knows it's ignored.
+ */
+function parsePortEnvVar(raw: string | undefined, fallback: number): number {
+	if (!raw) return fallback;
+	const n = Number.parseInt(raw, 10);
+	if (!Number.isNaN(n) && n >= 1 && n <= 65535) return n;
+	console.warn(
+		`[config] KNOWLEDGE_PORT "${raw}" is not a valid port (1–65535) — ignoring, using ${fallback}`,
+	);
+	return fallback;
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
@@ -330,7 +352,54 @@ function validateConfigFile(
 		"userId" in obj && typeof obj.userId === "string" ? obj.userId : undefined;
 	const userId = resolveUserId(configUserId);
 
-	return { stores, domains, projects, userId };
+	// port — optional, env var takes precedence
+	let port = 3179;
+	if ("port" in obj) {
+		if (
+			typeof obj.port !== "number" ||
+			!Number.isInteger(obj.port) ||
+			obj.port < 1 ||
+			obj.port > 65535
+		) {
+			throw new Error(
+				`config.jsonc "port" must be an integer between 1 and 65535 (got ${JSON.stringify(obj.port)})`,
+			);
+		}
+		port = obj.port as number;
+	}
+	port = parsePortEnvVar(process.env.KNOWLEDGE_PORT, port);
+
+	// host — optional, env var takes precedence
+	let host = "127.0.0.1";
+	if ("host" in obj) {
+		if (typeof obj.host !== "string" || !obj.host.trim()) {
+			throw new Error(
+				`config.jsonc "host" must be a non-empty string (got ${JSON.stringify(obj.host)})`,
+			);
+		}
+		host = (obj.host as string).trim();
+	}
+	if (process.env.KNOWLEDGE_HOST) {
+		// Trim for consistency with config file path — a stray space in .env
+		// would otherwise be passed verbatim to Bun's serve() as the bind address.
+		host = process.env.KNOWLEDGE_HOST.trim();
+	}
+
+	// daemonAutoSpawn — optional, env var takes precedence
+	let daemonAutoSpawn = true;
+	if ("daemonAutoSpawn" in obj) {
+		if (typeof obj.daemonAutoSpawn !== "boolean") {
+			throw new Error(
+				`config.jsonc "daemonAutoSpawn" must be a boolean (got ${JSON.stringify(obj.daemonAutoSpawn)})`,
+			);
+		}
+		daemonAutoSpawn = obj.daemonAutoSpawn as boolean;
+	}
+	if (process.env.DAEMON_AUTO_SPAWN !== undefined) {
+		daemonAutoSpawn = process.env.DAEMON_AUTO_SPAWN !== "false";
+	}
+
+	return { stores, domains, projects, userId, port, host, daemonAutoSpawn };
 }
 
 function validateDomain(
@@ -543,4 +612,7 @@ export const DEFAULT_CONFIG: KnowledgeServerConfig = {
 	domains: [],
 	projects: [],
 	userId: resolveUserId(),
+	port: parsePortEnvVar(process.env.KNOWLEDGE_PORT, 3179),
+	host: process.env.KNOWLEDGE_HOST?.trim() || "127.0.0.1",
+	daemonAutoSpawn: process.env.DAEMON_AUTO_SPAWN !== "false",
 };

@@ -39,12 +39,14 @@ export class StoreRegistry {
 	 * on the next consolidation run. Activation excludes them from fan-out.
 	 */
 	readonly unavailableStoreIds: ReadonlySet<string>;
-	/**
-	 * Stable user identifier for multi-user shared DB setups.
-	 * Scopes the consolidation cursor and episode log per user.
-	 * Resolved from KNOWLEDGE_USER_ID env var → config.jsonc userId → hostname → "default".
-	 */
+	/** Resolved from KNOWLEDGE_USER_ID → config.jsonc userId → hostname → "default". */
 	readonly userId: string;
+	/** Resolved from KNOWLEDGE_PORT env → config.jsonc port → 3179. */
+	readonly port: number;
+	/** Resolved from KNOWLEDGE_HOST env → config.jsonc host → "127.0.0.1". */
+	readonly host: string;
+	/** Resolved from DAEMON_AUTO_SPAWN env → config.jsonc daemonAutoSpawn → true. */
+	readonly daemonAutoSpawn: boolean;
 
 	private constructor(
 		stores: Map<string, IKnowledgeDB>,
@@ -67,6 +69,9 @@ export class StoreRegistry {
 				? new DomainRouter(config, stores, writable, unavailableIds)
 				: null;
 		this.userId = config.userId;
+		this.port = config.port;
+		this.host = config.host;
+		this.daemonAutoSpawn = config.daemonAutoSpawn;
 	}
 
 	/** The store that receives consolidation writes. */

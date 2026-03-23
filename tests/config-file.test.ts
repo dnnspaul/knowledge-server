@@ -450,4 +450,104 @@ describe("loadConfigFile — domain and project validation", () => {
 		// Should not throw — no domains to validate against
 		expect(() => loadConfigFile(configPath)).not.toThrow();
 	});
+
+	// ── Deployment settings (port, host, daemonAutoSpawn) ──────────────────────
+
+	it("uses default port/host/daemonAutoSpawn when not specified", () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				stores: [{ id: "main", kind: "sqlite", writable: true }],
+			}),
+		);
+		const cfg = loadConfigFile(configPath);
+		expect(cfg.port).toBe(3179);
+		expect(cfg.host).toBe("127.0.0.1");
+		expect(cfg.daemonAutoSpawn).toBe(true);
+	});
+
+	it("reads port, host, daemonAutoSpawn from config file", () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				stores: [{ id: "main", kind: "sqlite", writable: true }],
+				port: 4000,
+				host: "0.0.0.0",
+				daemonAutoSpawn: false,
+			}),
+		);
+		const cfg = loadConfigFile(configPath);
+		expect(cfg.port).toBe(4000);
+		expect(cfg.host).toBe("0.0.0.0");
+		expect(cfg.daemonAutoSpawn).toBe(false);
+	});
+
+	it("rejects non-integer port", () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				stores: [{ id: "main", kind: "sqlite", writable: true }],
+				port: "3179",
+			}),
+		);
+		expect(() => loadConfigFile(configPath)).toThrow(
+			/"port" must be an integer/,
+		);
+	});
+
+	it("rejects out-of-range port", () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				stores: [{ id: "main", kind: "sqlite", writable: true }],
+				port: 99999,
+			}),
+		);
+		expect(() => loadConfigFile(configPath)).toThrow(
+			/"port" must be an integer/,
+		);
+	});
+
+	it("rejects non-boolean daemonAutoSpawn", () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				stores: [{ id: "main", kind: "sqlite", writable: true }],
+				daemonAutoSpawn: "false",
+			}),
+		);
+		expect(() => loadConfigFile(configPath)).toThrow(
+			/"daemonAutoSpawn" must be a boolean/,
+		);
+	});
+
+	it("env vars take precedence over config file values for port/host/daemonAutoSpawn", () => {
+		writeFileSync(
+			configPath,
+			JSON.stringify({
+				stores: [{ id: "main", kind: "sqlite", writable: true }],
+				port: 4000,
+				host: "0.0.0.0",
+				daemonAutoSpawn: false,
+			}),
+		);
+		// Save and set env vars
+		const savedPort = process.env.KNOWLEDGE_PORT;
+		const savedHost = process.env.KNOWLEDGE_HOST;
+		const savedDaemon = process.env.DAEMON_AUTO_SPAWN;
+		try {
+			process.env.KNOWLEDGE_PORT = "5000";
+			process.env.KNOWLEDGE_HOST = "127.0.0.1";
+			process.env.DAEMON_AUTO_SPAWN = "true";
+			const cfg = loadConfigFile(configPath);
+			expect(cfg.port).toBe(5000);
+			expect(cfg.host).toBe("127.0.0.1");
+			expect(cfg.daemonAutoSpawn).toBe(true);
+		} finally {
+			// Restore original env state
+			process.env.KNOWLEDGE_PORT = savedPort;
+			process.env.KNOWLEDGE_HOST = savedHost;
+			process.env.DAEMON_AUTO_SPAWN = savedDaemon;
+		}
+	});
 });

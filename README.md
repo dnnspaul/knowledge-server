@@ -207,10 +207,11 @@ Configuration is split across two files:
 
 The default `config.jsonc` uses a single local SQLite store — no editing needed for single-machine use.
 
-For Postgres or team setups, edit `~/.config/knowledge-server/config.jsonc`:
+For Postgres, a non-default port, or to disable daemon auto-spawn, edit `~/.config/knowledge-server/config.jsonc`:
 
 ```jsonc
 {
+  // Store config (required)
   "stores": [
     {
       "id": "main",
@@ -218,19 +219,26 @@ For Postgres or team setups, edit `~/.config/knowledge-server/config.jsonc`:
       "uri": "postgres://user:pass@host:5432/knowledge",
       "writable": true
     }
-  ]
+  ],
+
+  // Deployment settings (optional — defaults shown)
+  "port": 3179,
+  "host": "127.0.0.1",
+  "daemonAutoSpawn": true,   // set false if you manage the daemon separately
+
+  // Multi-user identity (optional)
+  // "userId": "your-name"
 }
 ```
 
-Or use an environment variable instead of embedding credentials in the file:
-```jsonc
-{ "stores": [{ "id": "main", "kind": "postgres", "writable": true }] }
-```
+Secrets (Postgres URIs, API keys) can also be kept out of the config file using env vars:
 ```bash
+# Instead of "uri" in config.jsonc:
 export STORE_MAIN_URI="postgres://user:pass@host:5432/knowledge"
 ```
+Env vars take precedence over the config file for all fields.
 
-**Migrating from v2:** If you had `POSTGRES_CONNECTION_URI` or `KNOWLEDGE_DB_PATH` set, run once:
+**Migrating from v2:** If you had `POSTGRES_CONNECTION_URI`, `KNOWLEDGE_DB_PATH`, `KNOWLEDGE_PORT`, or `KNOWLEDGE_HOST` set, run once to generate `config.jsonc` from them:
 ```bash
 knowledge-server migrate-config
 ```
@@ -282,13 +290,20 @@ EMBEDDING_MODEL=nomic-embed-text
 
 ### Server
 
+`port`, `host`, and `daemonAutoSpawn` are deployment settings — set them in `config.jsonc` (see above) or override at runtime with an env var.
+
+| Setting | config.jsonc key | Env var override | Default | Description |
+|---|---|---|---|---|
+| HTTP port | `port` | `KNOWLEDGE_PORT` | `3179` | |
+| Bind address | `host` | `KNOWLEDGE_HOST` | `127.0.0.1` | Loopback only |
+| Daemon auto-spawn | `daemonAutoSpawn` | `DAEMON_AUTO_SPAWN=false` | `true` | Set false to manage daemon yourself |
+
+Credentials and paths stay in `.env`:
+
 | Variable | Default | Description |
 |---|---|---|
-| `KNOWLEDGE_PORT` | `3179` | HTTP port |
-| `KNOWLEDGE_HOST` | `127.0.0.1` | HTTP bind address (loopback only) |
 | `KNOWLEDGE_ADMIN_TOKEN` | *(random per process)* | Fixed admin token for scripted use (≥16 chars) |
 | `KNOWLEDGE_LOG_PATH` | `~/.local/share/knowledge-server/server.log` | Log file. Set to `""` to disable. |
-| `DAEMON_AUTO_SPAWN` | `true` | Set to `false` to manage the daemon yourself |
 
 ### Session sources
 

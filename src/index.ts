@@ -172,7 +172,8 @@ Run \`knowledge-server help-advanced\` for additional commands.
 		console.log(`knowledge-server v${pkg.version} — advanced commands
 
   migrate-config            Idempotent. Generates ~/.config/knowledge-server/config.jsonc
-                            from legacy env vars (POSTGRES_CONNECTION_URI, KNOWLEDGE_DB_PATH).
+                            from env vars: POSTGRES_CONNECTION_URI, KNOWLEDGE_DB_PATH,
+                            KNOWLEDGE_USER_ID, KNOWLEDGE_PORT, KNOWLEDGE_HOST, DAEMON_AUTO_SPAWN.
                             Run once after upgrading from a pre-config.jsonc release.
 `);
 		process.exit(0);
@@ -317,20 +318,35 @@ Run \`knowledge-server help-advanced\` for additional commands.
 		registry.unavailableStoreIds,
 	);
 
+	// port/host/daemonAutoSpawn come from the registry (config.jsonc with env var override)
+	// rather than config.ts, so they reflect the config file if one exists.
+	const { port, host, daemonAutoSpawn } = registry;
+
+	// Loopback-host check runs post-registry so it covers values set via config.jsonc
+	// (not just KNOWLEDGE_HOST env var). Checked here rather than in validateConfig()
+	// which runs before the registry is created.
+	const loopbackHosts = ["127.0.0.1", "::1", "localhost"];
+	if (!loopbackHosts.includes(host)) {
+		logger.error(
+			`"host" is set to "${host}", which exposes the server on non-loopback interfaces with no authentication. Only use 127.0.0.1 unless you have added authentication and understand the security implications.`,
+		);
+		process.exit(1);
+	}
+
 	// Start server — PID file written after this succeeds so it only exists
 	// when a port is truly bound.
 	let server: ReturnType<typeof serve>;
 	try {
 		server = serve({
 			fetch: app.fetch,
-			port: config.port,
-			hostname: config.host,
+			port,
+			hostname: host,
 			idleTimeout: 255, // max allowed by Bun — consolidation can take a while
 		});
 	} catch (e) {
 		if ((e as NodeJS.ErrnoException).code === "EADDRINUSE") {
 			logger.error(
-				`Port ${config.port} is already in use. Is another process running on that port?`,
+				`Port ${port} is already in use. Is another process running on that port?`,
 			);
 		} else {
 			logger.error(
@@ -344,7 +360,7 @@ Run \`knowledge-server help-advanced\` for additional commands.
 		writeFileSync(config.pidPath, String(process.pid), "utf8");
 	}
 
-	logger.raw(`\n✓ HTTP API listening on http://${config.host}:${config.port}`);
+	logger.raw(`\n✓ HTTP API listening on http://${host}:${port}`);
 	logger.raw("  GET  /activate?q=...                  — Activate knowledge");
 	logger.raw(
 		"  POST /consolidate                      — Run consolidation   [admin token required]",
@@ -360,7 +376,7 @@ Run \`knowledge-server help-advanced\` for additional commands.
 	);
 	logger.rawStdoutOnly(`\n  Admin token (keep this private): ${adminToken}`);
 	logger.rawStdoutOnly(
-		`  curl -X POST -H "Authorization: Bearer <token>" http://${config.host}:${config.port}/consolidate`,
+		`  curl -X POST -H "Authorization: Bearer <token>" http://${host}:${port}/consolidate`,
 	);
 	if (config.logPath) {
 		logger.raw(`\n  Logs: ${config.logPath}`);
@@ -387,7 +403,7 @@ Run \`knowledge-server help-advanced\` for additional commands.
 	// same KNOWLEDGE_* env vars. Its stdout/stderr are forwarded to the server log.
 	let daemonChild: ReturnType<typeof Bun.spawn> | null = null;
 
-	if (config.daemonAutoSpawn) {
+	if (daemonAutoSpawn) {
 		// Resolve the daemon command to spawn.
 		//
 		// Compiled install:   process.execPath = .../libexec/knowledge-server

@@ -5,8 +5,9 @@ import { DEFAULT_CONFIG_PATH, DEFAULT_SQLITE_PATH } from "../config-file.js";
 /**
  * `knowledge-server migrate-config`
  *
- * Generates ~/.config/knowledge-server/config.jsonc from legacy environment
- * variables (POSTGRES_CONNECTION_URI, KNOWLEDGE_DB_PATH, KNOWLEDGE_USER_ID).
+ * Generates ~/.config/knowledge-server/config.jsonc from environment variables:
+ * POSTGRES_CONNECTION_URI, KNOWLEDGE_DB_PATH, KNOWLEDGE_USER_ID,
+ * KNOWLEDGE_PORT, KNOWLEDGE_HOST, DAEMON_AUTO_SPAWN.
  *
  * Safe to run multiple times — exits early if config.jsonc already exists.
  */
@@ -20,6 +21,15 @@ export function runMigrateConfig(): void {
 	const pgUri = process.env.POSTGRES_CONNECTION_URI;
 	const sqlitePath = process.env.KNOWLEDGE_DB_PATH ?? DEFAULT_SQLITE_PATH;
 	const userId = process.env.KNOWLEDGE_USER_ID?.trim();
+	const port = process.env.KNOWLEDGE_PORT
+		? Number.parseInt(process.env.KNOWLEDGE_PORT, 10)
+		: null;
+	const host = process.env.KNOWLEDGE_HOST?.trim() || null;
+	// Capture DAEMON_AUTO_SPAWN when explicitly set to any value — both true and false
+	// should be migrated so the env var can be removed after migration.
+	const daemonAutoSpawnRaw = process.env.DAEMON_AUTO_SPAWN;
+	const daemonAutoSpawnExplicit =
+		daemonAutoSpawnRaw !== undefined ? daemonAutoSpawnRaw !== "false" : null;
 
 	let storeBlock: string;
 	let envVarsToRemove: string[];
@@ -65,6 +75,42 @@ export function runMigrateConfig(): void {
 		envVarsToRemove = [...envVarsToRemove, "KNOWLEDGE_USER_ID"];
 	}
 
+	// port block — write value whenever KNOWLEDGE_PORT was set (even if default),
+	// so the env var can be removed after migration.
+	const validPort =
+		port !== null && !Number.isNaN(port) && port >= 1 && port <= 65535;
+	if (port !== null && !validPort) {
+		console.warn(
+			`Warning: KNOWLEDGE_PORT "${process.env.KNOWLEDGE_PORT}" is not a valid port (1–65535) — writing default 3179 to config.jsonc.`,
+		);
+	}
+	const portBlock =
+		port !== null
+			? `\n  // HTTP port (from KNOWLEDGE_PORT). You can remove that env var now.\n  "port": ${validPort ? port : 3179},`
+			: `\n  // "port": 3179,  // HTTP port (default)`;
+	if (port !== null) {
+		envVarsToRemove = [...envVarsToRemove, "KNOWLEDGE_PORT"];
+	}
+
+	// host block — write value whenever KNOWLEDGE_HOST was set (even if default)
+	const hostBlock =
+		host !== null
+			? `\n  // HTTP bind address (from KNOWLEDGE_HOST). You can remove that env var now.\n  "host": ${JSON.stringify(host)},`
+			: `\n  // "host": "127.0.0.1",  // HTTP bind address (default, loopback only)`;
+	if (host !== null) {
+		envVarsToRemove = [...envVarsToRemove, "KNOWLEDGE_HOST"];
+	}
+
+	// daemonAutoSpawn block — write the actual value whenever the env var was set,
+	// so the user can remove DAEMON_AUTO_SPAWN from .env after migration.
+	const daemonBlock =
+		daemonAutoSpawnExplicit !== null
+			? `\n  // Auto-spawn knowledge-daemon alongside the server (from DAEMON_AUTO_SPAWN).\n  // Set to false if you manage the daemon separately (launchd, systemd, etc.).\n  // You can remove the DAEMON_AUTO_SPAWN env var now.\n  "daemonAutoSpawn": ${daemonAutoSpawnExplicit},`
+			: `\n  // "daemonAutoSpawn": true,  // Auto-spawn knowledge-daemon (default)`;
+	if (daemonAutoSpawnExplicit !== null) {
+		envVarsToRemove = [...envVarsToRemove, "DAEMON_AUTO_SPAWN"];
+	}
+
 	const content = `{
   // Knowledge Server configuration
   // See: https://github.com/MAnders333/knowledge-server#configuration
@@ -77,6 +123,9 @@ export function runMigrateConfig(): void {
 ${storeBlock}
   ],
 ${userIdBlock}
+${portBlock}
+${hostBlock}
+${daemonBlock}
 
   // domains and projects: optional routing config for multi-store setups.
   // See docs for examples.
