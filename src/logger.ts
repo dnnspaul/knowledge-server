@@ -133,6 +133,23 @@ class Logger {
 	rawStdoutOnly(...args: unknown[]): void {
 		process.stdout.write(`${this.toDisplay(args)}\n`);
 	}
+
+	/**
+	 * Write a pre-formatted line as-is to stdout and the log file.
+	 * Used for forwarding output from child processes (e.g. knowledge-daemon)
+	 * that already include their own timestamp and level prefix, to avoid
+	 * double-stamping in the log file.
+	 */
+	passthrough(line: string): void {
+		process.stdout.write(`${line}\n`);
+		if (this.logPath) {
+			try {
+				appendFileSync(this.logPath, `${line}\n`);
+			} catch {
+				process.stderr.write(`[logger] Failed to write to ${this.logPath}\n`);
+			}
+		}
+	}
 }
 
 // Singleton — initialized lazily on first import of logger.ts.
@@ -151,4 +168,5 @@ export const logger = {
 	error: (...args: unknown[]) => _logger.error(...args),
 	raw: (...args: unknown[]) => _logger.raw(...args),
 	rawStdoutOnly: (...args: unknown[]) => _logger.rawStdoutOnly(...args),
+	passthrough: (line: string) => _logger.passthrough(line),
 };

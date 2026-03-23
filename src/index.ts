@@ -472,7 +472,11 @@ Run \`knowledge-server help-advanced\` for additional commands.
 					for await (const chunk of stream) {
 						const text = decoder.decode(chunk, { stream: true });
 						for (const line of text.split("\n")) {
-							if (line.trimEnd()) logger.raw(line.trimEnd());
+							const trimmed = line.trimEnd();
+							if (!trimmed) continue;
+							// Daemon output is already structured (has its own timestamp +
+							// level prefix). Use passthrough to avoid double-stamping.
+							logger.passthrough(trimmed);
 						}
 					}
 				};
