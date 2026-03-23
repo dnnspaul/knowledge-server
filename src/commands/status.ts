@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import pkg from "../../package.json" with { type: "json" };
 import { ActivationEngine } from "../activation/activate.js";
 import { ConsolidationEngine } from "../consolidation/consolidate.js";
-import { createEpisodeReaders } from "../consolidation/readers/index.js";
+import { createEpisodeReaders } from "../daemon/readers/index.js";
 import { StoreRegistry } from "../db/store-registry.js";
 
 /**

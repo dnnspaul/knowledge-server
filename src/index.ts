@@ -14,7 +14,7 @@ import { runReview } from "./commands/review.js";
 import { runStatus } from "./commands/status.js";
 import { config, validateConfig } from "./config.js";
 import { ConsolidationEngine } from "./consolidation/consolidate.js";
-import { createEpisodeReaders } from "./consolidation/readers/index.js";
+import { createEpisodeReaders } from "./daemon/readers/index.js";
 import { StoreRegistry } from "./db/store-registry.js";
 import { logger } from "./logger.js";
 import { main as mcpMain } from "./mcp/index.js";

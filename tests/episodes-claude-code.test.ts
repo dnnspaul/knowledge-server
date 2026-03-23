@@ -20,7 +20,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../src/config";
-import { ClaudeCodeEpisodeReader } from "../src/consolidation/readers/claude-code";
+import { ClaudeCodeEpisodeReader } from "../src/daemon/readers/claude-code";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 

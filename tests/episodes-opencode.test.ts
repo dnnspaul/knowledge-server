@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { OpenCodeEpisodeReader } from "../src/consolidation/readers/opencode";
+import { OpenCodeEpisodeReader } from "../src/daemon/readers/opencode";
 
 // ── Schema helpers ─────────────────────────────────────────────────────────────
 

@@ -26,7 +26,7 @@ import { join } from "node:path";
 import {
 	CursorEpisodeReader,
 	resolveCursorDbPath,
-} from "../src/consolidation/readers/cursor";
+} from "../src/daemon/readers/cursor";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 

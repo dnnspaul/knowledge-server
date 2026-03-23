@@ -19,11 +19,18 @@
  *   - close() is a no-op and doesn't throw
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LocalFilesEpisodeReader } from "../src/consolidation/readers/local-files";
-import { MAX_TOKENS_PER_EPISODE } from "../src/consolidation/readers/shared";
+import { LocalFilesEpisodeReader } from "../src/daemon/readers/local-files";
+import { MAX_TOKENS_PER_EPISODE } from "../src/daemon/readers/shared";
 import * as loggerModule from "../src/logger";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -90,14 +97,18 @@ afterEach(() => {
 
 describe("LocalFilesEpisodeReader — directory absent", () => {
 	it("getCandidateSessions returns [] when dir does not exist", () => {
-		const absentReader = new LocalFilesEpisodeReader(join(tmpDir, "does-not-exist"));
+		const absentReader = new LocalFilesEpisodeReader(
+			join(tmpDir, "does-not-exist"),
+		);
 		const result = absentReader.getCandidateSessions(0);
 		expect(result).toEqual([]);
 		absentReader.close();
 	});
 
 	it("countNewSessions returns 0 when dir does not exist", () => {
-		const absentReader = new LocalFilesEpisodeReader(join(tmpDir, "does-not-exist"));
+		const absentReader = new LocalFilesEpisodeReader(
+			join(tmpDir, "does-not-exist"),
+		);
 		expect(absentReader.countNewSessions(0)).toBe(0);
 		absentReader.close();
 	});
@@ -105,10 +116,15 @@ describe("LocalFilesEpisodeReader — directory absent", () => {
 	it("getNewEpisodes returns [] when getCandidateSessions returns no candidates", () => {
 		// Directory absent → getCandidateSessions returns [] → no candidate IDs to pass in.
 		// getNewEpisodes([]) is the natural call-site behaviour for an absent directory.
-		const absentReader = new LocalFilesEpisodeReader(join(tmpDir, "does-not-exist"));
+		const absentReader = new LocalFilesEpisodeReader(
+			join(tmpDir, "does-not-exist"),
+		);
 		const candidates = absentReader.getCandidateSessions(0);
 		expect(candidates).toEqual([]); // sanity check
-		const result = absentReader.getNewEpisodes(candidates.map((c) => c.id), new Map());
+		const result = absentReader.getNewEpisodes(
+			candidates.map((c) => c.id),
+			new Map(),
+		);
 		expect(result).toEqual([]);
 		absentReader.close();
 	});
@@ -223,7 +239,11 @@ describe("LocalFilesEpisodeReader.countNewSessions", () => {
 
 describe("LocalFilesEpisodeReader.getNewEpisodes — episode shape", () => {
 	it("returns an episode with correct shape", () => {
-		const filePath = writeFile("knowledge.md", "# My Knowledge\n\nSome facts here.", BASE);
+		const filePath = writeFile(
+			"knowledge.md",
+			"# My Knowledge\n\nSome facts here.",
+			BASE,
+		);
 		const episodes = reader.getNewEpisodes([filePath], new Map());
 
 		expect(episodes).toHaveLength(1);
@@ -251,25 +271,41 @@ describe("LocalFilesEpisodeReader.getNewEpisodes — episode shape", () => {
 
 describe("LocalFilesEpisodeReader.getNewEpisodes — title derivation", () => {
 	it("extracts title from first # heading", () => {
-		const filePath = writeFile("doc.md", "# My Document Title\n\nContent.", BASE);
+		const filePath = writeFile(
+			"doc.md",
+			"# My Document Title\n\nContent.",
+			BASE,
+		);
 		const [ep] = reader.getNewEpisodes([filePath], new Map());
 		expect(ep.sessionTitle).toBe("My Document Title");
 	});
 
 	it("falls back to filename when no # heading present", () => {
-		const filePath = writeFile("my-project-notes.md", "Just some text without a heading.", BASE);
+		const filePath = writeFile(
+			"my-project-notes.md",
+			"Just some text without a heading.",
+			BASE,
+		);
 		const [ep] = reader.getNewEpisodes([filePath], new Map());
 		expect(ep.sessionTitle).toBe("my project notes");
 	});
 
 	it("replaces underscores with spaces in filename fallback", () => {
-		const filePath = writeFile("team_decisions_q1.md", "No heading here.", BASE);
+		const filePath = writeFile(
+			"team_decisions_q1.md",
+			"No heading here.",
+			BASE,
+		);
 		const [ep] = reader.getNewEpisodes([filePath], new Map());
 		expect(ep.sessionTitle).toBe("team decisions q1");
 	});
 
 	it("ignores ## second-level headings for title (only # is matched)", () => {
-		const filePath = writeFile("doc-h2-first.md", "## Not a title\n\n# Real Title\n\nContent.", BASE);
+		const filePath = writeFile(
+			"doc-h2-first.md",
+			"## Not a title\n\n# Real Title\n\nContent.",
+			BASE,
+		);
 		const [ep] = reader.getNewEpisodes([filePath], new Map());
 		// The regex ^#\s+ matches the first # heading on any line.
 		// "## Not a title" starts with ## so ^#\s+ won't match (# followed by #, not space).
@@ -306,7 +342,10 @@ describe("LocalFilesEpisodeReader.getNewEpisodes — idempotency via content has
 		const originalHash = firstRun[0].startMessageId;
 
 		const processedRanges = new Map([
-			[filePath, [{ startMessageId: originalHash, endMessageId: originalHash }]],
+			[
+				filePath,
+				[{ startMessageId: originalHash, endMessageId: originalHash }],
+			],
 		]);
 
 		// Update the file content (new hash)

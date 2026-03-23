@@ -12,7 +12,7 @@ import type {
 import { ContradictionScanner } from "./contradiction.js";
 import { computeStrength } from "./decay.js";
 import { ConsolidationLLM, formatEpisodes } from "./llm.js";
-import { approxTokens } from "./readers/shared.js";
+import { approxTokens } from "../daemon/readers/shared.js";
 import { Reconsolidator } from "./reconsolidate.js";
 
 /**

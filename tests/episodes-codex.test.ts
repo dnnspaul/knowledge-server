@@ -33,7 +33,7 @@ import { config } from "../src/config";
 import {
 	CodexEpisodeReader,
 	resolveCodexSessionsDir,
-} from "../src/consolidation/readers/codex";
+} from "../src/daemon/readers/codex";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 

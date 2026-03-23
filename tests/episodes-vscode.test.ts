@@ -25,19 +25,14 @@
  *   - resolveVSCodeDataDir() — env var branch
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import {
-	mkdirSync,
-	mkdtempSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { config } from "../src/config";
 import {
 	VSCodeEpisodeReader,
 	resolveVSCodeDataDir,
-} from "../src/consolidation/readers/vscode";
+} from "../src/daemon/readers/vscode";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -90,7 +85,8 @@ function makeSession(opts: {
 		requests: (opts.requests ?? []).map((r, i) => ({
 			requestId: r.requestId ?? `req-${i}`,
 			timestamp: r.timestamp ?? BASE + i * 1000,
-			message: r.messageText !== undefined ? { text: r.messageText } : undefined,
+			message:
+				r.messageText !== undefined ? { text: r.messageText } : undefined,
 			response: r.response,
 		})),
 	};
@@ -354,8 +350,16 @@ describe("VSCodeEpisodeReader.getNewEpisodes — basic extraction", () => {
 			makeSession({
 				sessionId: "session-1",
 				requests: [
-					{ requestId: "req-aaa", messageText: "first", response: [{ value: "reply1" }] },
-					{ requestId: "req-bbb", messageText: "second", response: [{ value: "reply2" }] },
+					{
+						requestId: "req-aaa",
+						messageText: "first",
+						response: [{ value: "reply1" }],
+					},
+					{
+						requestId: "req-bbb",
+						messageText: "second",
+						response: [{ value: "reply2" }],
+					},
 				],
 			}),
 		);
@@ -416,7 +420,9 @@ describe("VSCodeEpisodeReader.getNewEpisodes — response part kind filtering", 
 				requests: [
 					{
 						messageText: "explain",
-						response: [{ kind: "markdownContent", value: "Markdown explanation." }],
+						response: [
+							{ kind: "markdownContent", value: "Markdown explanation." },
+						],
 					},
 					{ messageText: "ok", response: [{ value: "done" }] },
 				],
@@ -463,7 +469,10 @@ describe("VSCodeEpisodeReader.getNewEpisodes — response part kind filtering", 
 					{
 						messageText: "run tool",
 						response: [
-							{ kind: "toolInvocationSerialized", value: '{"tool":"bash","input":"ls"}' },
+							{
+								kind: "toolInvocationSerialized",
+								value: '{"tool":"bash","input":"ls"}',
+							},
 							{ kind: "codeblockUri", value: "/some/file.ts" },
 							{ kind: "textEditGroup", value: "edit data" },
 							{ kind: "inlineReference", value: "ref data" },
@@ -558,7 +567,10 @@ describe("VSCodeEpisodeReader.getNewEpisodes — session skip conditions", () =>
 			makeSession({
 				sessionId: "session-1",
 				requests: [
-					{ messageText: "", response: [{ value: "response with no user text" }] },
+					{
+						messageText: "",
+						response: [{ value: "response with no user text" }],
+					},
 				],
 			}),
 		);
@@ -669,8 +681,16 @@ describe("VSCodeEpisodeReader.getNewEpisodes — processedRanges exclusion", () 
 			makeSession({
 				sessionId: "session-1",
 				requests: [
-					{ requestId: "r1", messageText: "start", response: [{ value: "reply1" }] },
-					{ requestId: "r2", messageText: "continue", response: [{ value: "reply2" }] },
+					{
+						requestId: "r1",
+						messageText: "start",
+						response: [{ value: "reply1" }],
+					},
+					{
+						requestId: "r2",
+						messageText: "continue",
+						response: [{ value: "reply2" }],
+					},
 				],
 			}),
 		);
@@ -694,7 +714,10 @@ describe("VSCodeEpisodeReader.getNewEpisodes — processedRanges exclusion", () 
 				],
 			],
 		]);
-		const episodes2 = reader.getNewEpisodes([candidates[0].id], processedRanges);
+		const episodes2 = reader.getNewEpisodes(
+			[candidates[0].id],
+			processedRanges,
+		);
 		expect(episodes2).toHaveLength(0);
 		reader.close();
 	});
