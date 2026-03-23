@@ -57,6 +57,7 @@ function makeEntry(id: string, overrides: Record<string, unknown> = {}) {
 describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 	let db: IKnowledgeStore;
 	let serverLocalDb: ServerLocalDB;
+	let pgTestSeq = 0;
 	const uri = PG_URI as string;
 	// Shared truncation client — created once to avoid pool churn on every test.
 	let truncSql: ReturnType<typeof postgres>;
@@ -81,8 +82,15 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		(db as unknown as { initPromise: null }).initPromise = null;
 		await (db as PostgresKnowledgeDB).initialize();
 		// Fresh ServerLocalDB for each test — staging methods now live here.
-		serverLocalDb?.close().catch(() => {});
-		serverLocalDb = new ServerLocalDB(join(tempDir, `server-${Date.now()}.db`));
+		// Use a counter rather than Date.now() to avoid filename collisions on fast machines.
+		await serverLocalDb
+			?.close()
+			.catch((e: unknown) =>
+				console.error("[test] serverLocalDb close error:", e),
+			);
+		serverLocalDb = new ServerLocalDB(
+			join(tempDir, `server-${++pgTestSeq}.db`),
+		);
 	});
 
 	afterAll(async () => {
