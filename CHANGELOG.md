@@ -1,5 +1,24 @@
 # Changelog
 
+## [3.0.2](https://github.com/MAnders333/knowledge-server/compare/v3.0.1...v3.0.2) (2026-03-23)
+
+
+### Bug Fixes
+
+* add STORE_ and DAEMON_ prefixes to .env allowlist ([ad4e6f0](https://github.com/MAnders333/knowledge-server/commit/ad4e6f02e3ac6d1607664af84b22da659e1073f9))
+* architectural cleanup post server.db split ([35d476c](https://github.com/MAnders333/knowledge-server/commit/35d476ccca2a325fe00f2daf74feed330007a3e1))
+* countPendingSessions() for O(1)-memory pending count in status ([d09d755](https://github.com/MAnders333/knowledge-server/commit/d09d755c69f36f1443a4ff01b24ef0ccae3fdc4e))
+* cursor only advances past successfully uploaded episodes; close src DB in finally ([d6fea91](https://github.com/MAnders333/knowledge-server/commit/d6fea910ed330beecd0511706099730d890ce6ae))
+* daemon log lines double-stamped in server log file ([750a414](https://github.com/MAnders333/knowledge-server/commit/750a414f1e0bfb3c7e627aa67cfcce201512e7cc))
+* flush TextDecoder carry-over buffer after daemon stream closes ([3472d1b](https://github.com/MAnders333/knowledge-server/commit/3472d1bd1fec5bc1f2f2b8b98742c845700654bd))
+* optional chaining in migration test afterEach ([cd7d08e](https://github.com/MAnders333/knowledge-server/commit/cd7d08e58739c7c534e240a195086c2e75a160c9))
+* PG integration tests + post-refactor cleanup ([8d1389c](https://github.com/MAnders333/knowledge-server/commit/8d1389cd5b178d580b20e99fbf0f50d6d2214686))
+* remove dead _SERVER_LOCAL_TABLE_COLUMNS; improve partial reinitialize note ([f598d0e](https://github.com/MAnders333/knowledge-server/commit/f598d0e9bd88cc65c4ef7db2eb7f7308806f26cd))
+* revert clearConsolidatedEpisodes; partial reinitialize leaves staging intact ([d273eda](https://github.com/MAnders333/knowledge-server/commit/d273eda638bc847413da8a8cc762c9097447e7e2))
+* status.ts no-limit pending count; setup-tool.ts warn on bad config.jsonc ([4f21d33](https://github.com/MAnders333/knowledge-server/commit/4f21d339f864789e95ed8c20e23d17e6c305d661))
+* type cast and error handling in countPendingSessions ([47ed63f](https://github.com/MAnders333/knowledge-server/commit/47ed63f3c05c0c518176c25959ebb1681f36dc4b))
+* use counter for ServerLocalDB filename uniqueness, surface close errors ([57c5414](https://github.com/MAnders333/knowledge-server/commit/57c5414e3c239fea3a9b4456856c6d14261cd759))
+
 ## [3.0.1](https://github.com/MAnders333/knowledge-server/compare/v3.0.0...v3.0.1) (2026-03-23)
 
 
