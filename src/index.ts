@@ -600,9 +600,11 @@ Run \`knowledge-server help-advanced\` for additional commands.
 		// instead of waiting up to pollIntervalMs (e.g. 8h) for the setTimeout.
 		const interruptibleSleep = async (ms: number) => {
 			const end = Date.now() + ms;
-			while (!shutdownRequested && Date.now() < end) {
+			while (!shutdownRequested) {
+				const remaining = end - Date.now();
+				if (remaining <= 0) break;
 				await new Promise((resolve) =>
-					setTimeout(resolve, Math.min(1000, end - Date.now())),
+					setTimeout(resolve, Math.min(1000, remaining)),
 				);
 			}
 		};

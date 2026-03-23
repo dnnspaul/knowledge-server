@@ -1,12 +1,17 @@
 # knowledge-server
 
-A persistent memory layer for AI coding agents. Reads your session history, extracts what's worth keeping, and injects relevant entries into new conversations automatically.
+AI coding agents are stateless by default — every session starts from zero. knowledge-server gives them memory: it runs in the background, learns from your coding conversations, and quietly surfaces what's relevant when you start a new session.
 
-Works with [OpenCode](https://opencode.ai), [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), [Cursor](https://cursor.com), [Codex CLI](https://github.com/openai/codex), and [VSCode](https://code.visualstudio.com) (GitHub Copilot). Fully local — no external service required beyond an LLM API key you already have.
+No prompting required. No manual notes. Just context that was missing before.
 
-**In practice:** if you spent a session working out how your auth system works, the next time you ask an auth-related question in a new session, the relevant conclusions from that previous session are silently included as context before the LLM sees your message. The agent has access to what was established before, without you having to re-explain it.
+**How it shows up in practice:**
+- You spend an afternoon figuring out why your deployment pipeline fails on certain file patterns. The next week, a teammate starts asking a related question — the agent already knows the conclusion you reached.
+- You establish a naming convention during a refactor. Future sessions in that codebase start with that context already loaded.
+- A decision about which library to use gets captured. It stops being re-litigated every time someone asks.
 
-It doesn't always work. The extraction quality depends on your LLM and what was said. Most sessions produce nothing — the bar is intentionally high. But when it does work, it removes a real friction point.
+Everything happens in the background. The tool reads your sessions, extracts what's worth keeping, and injects relevant entries before the LLM sees your next message. You don't interact with it directly.
+
+Works with [OpenCode](https://opencode.ai), [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview), [Cursor](https://cursor.com), [Codex CLI](https://github.com/openai/codex), and [VSCode](https://code.visualstudio.com) (GitHub Copilot). Single machine or shared across a team — knowledge accumulates in a shared database that everyone's agent draws from.
 
 ## Install
 
