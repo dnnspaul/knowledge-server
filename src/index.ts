@@ -459,12 +459,12 @@ Run \`knowledge-server help-advanced\` for additional commands.
 						}
 					}
 				};
-				forwardStream(daemonChild.stdout).catch((e) =>
-					logger.warn("[daemon] stdout forward error:", e),
-				);
-				forwardStream(daemonChild.stderr).catch((e) =>
-					logger.warn("[daemon] stderr forward error:", e),
-				);
+				forwardStream(
+					daemonChild.stdout as ReadableStream<Uint8Array> | null,
+				).catch((e) => logger.warn("[daemon] stdout forward error:", e));
+				forwardStream(
+					daemonChild.stderr as ReadableStream<Uint8Array> | null,
+				).catch((e) => logger.warn("[daemon] stderr forward error:", e));
 				// Observe daemon exit so unexpected crashes are surfaced in the server log.
 				daemonChild.exited
 					.then((code) => {

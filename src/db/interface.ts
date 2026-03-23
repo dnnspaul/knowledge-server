@@ -286,7 +286,6 @@ export interface IKnowledgeDB {
 	 * Used by PendingEpisodesReader to get new episodes for consolidation.
 	 */
 	getPendingEpisodes(
-		source: string,
 		afterMaxMessageTime: number,
 		limit?: number,
 	): Promise<PendingEpisode[]>;
