@@ -301,7 +301,7 @@ if [ -n "\$_env_file" ]; then
     _val="\${_line#*=}"
     # Allowlist: only load keys with a known knowledge-server prefix.
     # This rejects PATH, LD_PRELOAD, IFS, BASH_ENV, etc.
-    if [[ "\$_key" =~ ^(KNOWLEDGE_|LLM_|EMBEDDING_|ANTHROPIC_|OPENAI_|GOOGLE_|OPENCODE_|CONSOLIDATION_|ACTIVATION_|CONTRADICTION_|DECAY_|CURSOR_|CLAUDE_|CODEX_|VSCODE_)[A-Za-z0-9_]*\$ ]]; then
+    if [[ "\$_key" =~ ^(KNOWLEDGE_|LLM_|EMBEDDING_|ANTHROPIC_|OPENAI_|GOOGLE_|OPENCODE_|CONSOLIDATION_|ACTIVATION_|CONTRADICTION_|DECAY_|CURSOR_|CLAUDE_|CODEX_|VSCODE_|STORE_|DAEMON_)[A-Za-z0-9_]*\$ ]]; then
       # Strip matching surrounding quotes from the value so KNOWLEDGE_PORT="3179"
       # and KNOWLEDGE_PORT='3179' both work correctly. Asymmetric stripping (e.g.
       # removing a leading " and trailing ' independently) is intentionally avoided
