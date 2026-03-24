@@ -635,19 +635,15 @@ export class ConsolidationEngine {
 		let chunkCreated = 0;
 		let chunkUpdated = 0;
 
-		// Track IDs that were inserted or updated this chunk — only these are
-		// eligible for the contradiction scan (pre-existing entries were already
-		// checked in a previous consolidation run).
-		const changedIds = new Set<string>();
-
-		// Contradiction scanning is strictly within-store: entries from different domain
-		// stores should never be compared for contradictions. A work entry and a personal
-		// entry may legitimately hold different values for the same topic by design.
+		// IDs eligible for contradiction scanning — within-store only.
 		//
-		// This set tracks only the IDs that landed in chunkStore (the chunk's default
-		// domain store). Entries rerouted to a different store via per-entry LLM domain
-		// override are excluded — they'll be scanned within their own store on a future
-		// chunk that targets that store.
+		// Only newly inserted/updated entries in chunkStore are candidates:
+		// (1) Pre-existing entries were already scanned in a previous consolidation run.
+		// (2) Entries rerouted to a different domain store by the LLM are excluded —
+		//     cross-store contradiction detection is intentionally not performed.
+		//     A work entry and a personal entry may legitimately hold different values
+		//     for the same topic by design (domain isolation). They'll be scanned within
+		//     their own store on a future chunk that targets that store.
 		const contradictionCandidates = new Set<string>();
 
 		// Track which stores received inserts or content-changing updates this chunk.
@@ -684,7 +680,6 @@ export class ConsolidationEngine {
 					{
 						onInsert: (inserted) => {
 							chunkCreated++;
-							changedIds.add(inserted.id);
 							touchedStores.add(entryTargetStore ?? this.db);
 							// Only include in contradiction scan if the entry landed in chunkStore.
 							// Entries rerouted to a different domain store are excluded — cross-store
@@ -708,7 +703,6 @@ export class ConsolidationEngine {
 						},
 						onUpdate: (id, updated, freshEmbedding) => {
 							chunkUpdated++;
-							changedIds.add(id);
 							// Updates always go to chunkStore (via mergeDb) — existing entries live
 							// in the chunk's domain store. Always eligible for contradiction scan.
 							touchedStores.add(chunkStore);
