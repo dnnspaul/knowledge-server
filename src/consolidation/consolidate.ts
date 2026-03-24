@@ -252,6 +252,11 @@ export class ConsolidationEngine {
 
 		// Apply decay to ALL active entries across all configured stores.
 		// Fan out to domain stores via the router; always include this.db as primary.
+		// NOTE: decayStores is derived from domainRouter.allStores() (available stores
+		// registered with the router), while activation.writableDbs is derived from
+		// registry.writableStores() (all writable stores). Both exclude unavailable
+		// stores and should be equivalent in practice — but they are two independent
+		// derivation paths. If filtering logic changes in either, keep them in sync.
 		const decayStores = this.domainRouter
 			? new Set([this.db, ...this.domainRouter.allStores()])
 			: new Set([this.db]);

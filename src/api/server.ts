@@ -672,10 +672,9 @@ export function createApp(
 				: conflictRelation.sourceId
 			: null;
 
-		// Guard against cross-store conflicts — if the counterpart lives in a different
-		// store we cannot resolve it safely via a single store's applyContradictionResolution.
-		// Return 422 rather than silently producing dangling state.
-		if (counterpartId && resolution !== "delete") {
+		// Guard against cross-store conflicts — applies to all resolutions including
+		// delete (which needs to restore the counterpart to active).
+		if (counterpartId) {
 			const counterpartInSameStore = await entryStore.getEntry(counterpartId);
 			if (!counterpartInSameStore) {
 				return c.json(
