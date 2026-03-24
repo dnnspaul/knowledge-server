@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { config } from "../config.js";
 import { StoreRegistry } from "../db/store-registry.js";
+import { errCode } from "../utils.js";
 
 /**
  * `knowledge-server reinitialize [--store=<id>] [--reset-state] [--reset-store] [--confirm|--dry-run]`
@@ -90,8 +91,7 @@ export async function runReinitialize(args: string[]): Promise<void> {
 			try {
 				process.kill(pid, 0);
 			} catch (e: unknown) {
-				const code = (e as { code?: string }).code;
-				alive = code === "EPERM"; // EPERM = exists, no permission; ESRCH = dead
+				alive = errCode(e) === "EPERM"; // EPERM = exists, no permission; ESRCH = dead
 			}
 			if (alive) {
 				console.error(

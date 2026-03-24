@@ -18,6 +18,7 @@ import { ConsolidationEngine } from "./consolidation/consolidate.js";
 import { PendingEpisodesReader } from "./consolidation/readers/pending.js";
 import { StoreRegistry } from "./db/store-registry.js";
 import { logger } from "./logger.js";
+import { errCode } from "./utils.js";
 import { main as mcpMain } from "./mcp/index.js";
 import { runSetupTool } from "./commands/setup-tool.js";
 import { runStop } from "./commands/stop.js";
@@ -295,7 +296,7 @@ Run \`knowledge-server help-advanced\` for additional commands.
 				} catch (e) {
 					// EPERM = process exists but we can't signal it (still alive).
 					// ESRCH = no such process (truly dead).
-					return (e as NodeJS.ErrnoException).code === "EPERM";
+					return errCode(e) === "EPERM";
 				}
 			})();
 		if (isAlive) {
@@ -310,7 +311,7 @@ Run \`knowledge-server help-advanced\` for additional commands.
 		try {
 			unlinkSync(config.pidPath);
 		} catch (e) {
-			if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+			if (errCode(e) !== "ENOENT") throw e;
 		}
 	}
 
@@ -353,7 +354,7 @@ Run \`knowledge-server help-advanced\` for additional commands.
 			idleTimeout: 255, // max allowed by Bun — consolidation can take a while
 		});
 	} catch (e) {
-		if ((e as NodeJS.ErrnoException).code === "EADDRINUSE") {
+		if (errCode(e) === "EADDRINUSE") {
 			logger.error(
 				`Port ${port} is already in use. Is another process running on that port?`,
 			);

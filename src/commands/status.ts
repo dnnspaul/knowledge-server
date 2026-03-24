@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import pkg from "../../package.json" with { type: "json" };
 import { StoreRegistry } from "../db/store-registry.js";
+import { errCode } from "../utils.js";
 
 /**
  * `knowledge-server status`
@@ -24,7 +25,7 @@ export async function runStatus(pidPath: string): Promise<void> {
 					process.kill(pid, 0);
 					return true;
 				} catch (e) {
-					return (e as NodeJS.ErrnoException).code === "EPERM";
+					return errCode(e) === "EPERM";
 				}
 			})();
 			serverLine = isAlive
