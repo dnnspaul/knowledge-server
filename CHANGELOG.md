@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.0](https://github.com/MAnders333/knowledge-server/compare/v3.4.2...v3.5.0) (2026-03-24)
+
+
+### Features
+
+* remove scope field; strengthen domain descriptions; fix description length limit ([11af789](https://github.com/MAnders333/knowledge-server/commit/11af789e45c07cee0c1a606d009936d19e777f5e))
+
 ## [3.4.2](https://github.com/MAnders333/knowledge-server/compare/v3.4.1...v3.4.2) (2026-03-24)
 
 
