@@ -983,11 +983,13 @@ export class KnowledgeDB implements IKnowledgeStore {
 	/**
 	 * Wipe all knowledge entries, relations, clusters, and embeddings.
 	 * Staging and bookkeeping tables (consolidated_episode, consolidation_state,
-	 * pending_episodes, daemon_cursor) are managed by ServerStateDB — call
+	 * pending_episodes) are managed by IServerStateDB — call
 	 * serverStateDb.reinitialize() separately for a complete reset.
+	 * daemon_cursor lives in DaemonDB — call daemonDb.resetDaemonCursors() to
+	 * force a full re-upload on the next daemon tick.
 	 */
 	async reinitialize(): Promise<void> {
-		// Wipe only knowledge tables — staging tables live in state.db (ServerStateDB).
+		// Wipe only knowledge tables — staging tables live in state.db (IServerStateDB).
 		this.db.transaction(() => {
 			this.db.exec("DELETE FROM knowledge_cluster_member");
 			this.db.exec("DELETE FROM knowledge_cluster");

@@ -1,4 +1,4 @@
-import { type SQLQueryBindings, Database } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -6,7 +6,6 @@ import type { IServerStateDB } from "../interface.js";
 import { logger } from "../../logger.js";
 import type {
 	ConsolidationState,
-	Episode,
 	PendingEpisode,
 	ProcessedRange,
 } from "../../types.js";
@@ -177,7 +176,7 @@ export class ServerStateDB implements IServerStateDB {
 			projectName: r.project_name,
 			directory: r.directory,
 			content: r.content,
-			contentType: r.content_type as Episode["contentType"],
+			contentType: r.content_type as PendingEpisode["contentType"],
 			timeCreated: r.session_timestamp,
 			maxMessageTime: r.max_message_time,
 			approxTokens: r.approx_tokens,

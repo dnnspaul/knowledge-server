@@ -157,14 +157,10 @@ export class PostgresServerStateDB implements IServerStateDB {
 		}
 	}
 
-	private async ensureInit(): Promise<void> {
-		await this.initialize();
-	}
-
 	// ── Pending Episodes ──────────────────────────────────────────────────────
 
 	async insertPendingEpisode(episode: PendingEpisode): Promise<void> {
-		await this.ensureInit();
+		await this.initialize();
 		await this.sql`
 			INSERT INTO pending_episodes
 			(id, user_id, source, session_id, start_message_id, end_message_id,
@@ -187,7 +183,7 @@ export class PostgresServerStateDB implements IServerStateDB {
 		afterMaxMessageTime: number,
 		limit = 500,
 	): Promise<PendingEpisode[]> {
-		await this.ensureInit();
+		await this.initialize();
 		const rows = await this.sql`
 			SELECT * FROM pending_episodes
 			WHERE max_message_time > ${afterMaxMessageTime}
@@ -215,13 +211,13 @@ export class PostgresServerStateDB implements IServerStateDB {
 
 	async deletePendingEpisodes(ids: string[]): Promise<void> {
 		if (ids.length === 0) return;
-		await this.ensureInit();
+		await this.initialize();
 		await this
 			.sql`DELETE FROM pending_episodes WHERE id = ANY(${this.sql.array(ids)})`;
 	}
 
 	async countPendingSessions(): Promise<number> {
-		await this.ensureInit();
+		await this.initialize();
 		const result = await this.sql`
 			SELECT COUNT(DISTINCT session_id) as n FROM pending_episodes
 		`;
@@ -238,7 +234,7 @@ export class PostgresServerStateDB implements IServerStateDB {
 		contentType: "compaction_summary" | "messages" | "document",
 		entriesCreated: number,
 	): Promise<void> {
-		await this.ensureInit();
+		await this.initialize();
 		await this.sql`
 			INSERT INTO consolidated_episode
 			(source, session_id, start_message_id, end_message_id, content_type,
@@ -255,7 +251,7 @@ export class PostgresServerStateDB implements IServerStateDB {
 		sessionIds: string[],
 	): Promise<Map<string, ProcessedRange[]>> {
 		if (sessionIds.length === 0) return new Map();
-		await this.ensureInit();
+		await this.initialize();
 		const rows = await this.sql`
 			SELECT source, session_id, start_message_id, end_message_id, content_type
 			FROM consolidated_episode
@@ -267,10 +263,8 @@ export class PostgresServerStateDB implements IServerStateDB {
 			if (!map.has(sid)) map.set(sid, []);
 			map.get(sid)!.push({
 				source: r.source as string,
-				sessionId: sid,
 				startMessageId: r.start_message_id as string,
 				endMessageId: r.end_message_id as string,
-				contentType: r.content_type as ProcessedRange["contentType"],
 			});
 		}
 		return map;
@@ -279,7 +273,7 @@ export class PostgresServerStateDB implements IServerStateDB {
 	// ── Consolidation State ───────────────────────────────────────────────────
 
 	async getConsolidationState(): Promise<ConsolidationState> {
-		await this.ensureInit();
+		await this.initialize();
 		const rows = await this.sql`SELECT * FROM consolidation_state WHERE id = 1`;
 		const r = rows[0] as
 			| {
@@ -312,7 +306,7 @@ export class PostgresServerStateDB implements IServerStateDB {
 	async updateConsolidationState(
 		state: Partial<ConsolidationState>,
 	): Promise<void> {
-		await this.ensureInit();
+		await this.initialize();
 		if (Object.keys(state).length === 0) return;
 		// Use COALESCE to preserve existing values for fields not supplied by the
 		// caller — single atomic UPDATE avoids a read-then-write TOCTOU window.
@@ -329,7 +323,7 @@ export class PostgresServerStateDB implements IServerStateDB {
 	// ── Consolidation Lock ────────────────────────────────────────────────────
 
 	async tryAcquireConsolidationLock(): Promise<boolean> {
-		await this.ensureInit();
+		await this.initialize();
 		// Guard against double-acquire: if we already hold the connection, warn and
 		// return false rather than reserving a second connection and orphaning the first.
 		if (this.lockConnection !== null) {
@@ -352,7 +346,7 @@ export class PostgresServerStateDB implements IServerStateDB {
 			return acquired;
 		} catch (e) {
 			// Query failed — release reserved connection to avoid leaking it.
-			this.lockConnection.release();
+			this.lockConnection?.release();
 			this.lockConnection = null;
 			throw e;
 		}
@@ -370,7 +364,7 @@ export class PostgresServerStateDB implements IServerStateDB {
 	// ── Reinitialize ──────────────────────────────────────────────────────────
 
 	async reinitialize(): Promise<void> {
-		await this.ensureInit();
+		await this.initialize();
 		await this.sql.begin(async (sql: TxSql) => {
 			await sql`DELETE FROM pending_episodes`;
 			await sql`DELETE FROM consolidated_episode`;

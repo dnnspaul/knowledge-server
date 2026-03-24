@@ -104,8 +104,8 @@ export interface IServerStateDB {
 	 * Wipe staging data: pending_episodes, consolidated_episode, and reset
 	 * consolidation_state counters.
 	 *
-	 * daemon_cursor is intentionally NOT touched here — call resetDaemonCursors()
-	 * explicitly if re-upload is also needed.
+	 * daemon_cursor lives in DaemonDB (src/db/daemon/index.ts), not here.
+	 * Call DaemonDB.resetDaemonCursors() separately if re-upload is also needed.
 	 *
 	 * Use for re-consolidation with updated domain routing context. On shared
 	 * stores this is safe because session_ids are per-user by nature.

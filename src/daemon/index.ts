@@ -13,7 +13,7 @@
  *   - Episode readers (file parsers for OpenCode, Claude Code, etc.)
  *   - EpisodeUploader (the upload loop)
  *   - DaemonDB (daemon cursor, always local SQLite)
- *   - StoreRegistry (to get IServerStateDB for pending_episodes)
+ *   - createServerStateDB (thin factory, avoids importing StoreRegistry)
  *   - Config resolution
  *
  * Intentionally does NOT import:
