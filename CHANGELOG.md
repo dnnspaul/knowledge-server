@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.2.0](https://github.com/MAnders333/knowledge-server/compare/v3.1.0...v3.2.0) (2026-03-24)
+
+
+### Features
+
+* **reinitialize:** granular reset flags — daemon cursor, state, and store ([4cb9935](https://github.com/MAnders333/knowledge-server/commit/4cb9935e82057e18940520b31324cfaf53bcb455))
+
+
+### Bug Fixes
+
+* **api:** extend cross-store guard to delete resolution; document decayStores/writableDbs coupling ([688ea52](https://github.com/MAnders333/knowledge-server/commit/688ea52f0bfb7522ece384c886f9e15428a908fb))
+* **consolidation:** per-store episode recording; fix empty-extraction recording ([20a26ce](https://github.com/MAnders333/knowledge-server/commit/20a26cefca683a7b426cdc0f8422d51a49ac1aa2))
+* **consolidation:** use Promise.allSettled for per-store concurrent dispatch ([430c775](https://github.com/MAnders333/knowledge-server/commit/430c775be20b7c28557968828cb12b36f1e5658f))
+* **contradiction:** enforce within-store-only contradiction scanning ([f826f4e](https://github.com/MAnders333/knowledge-server/commit/f826f4e050c8e8a32ded1433a33029cee06b1f18))
+* **multi-store:** fan out decay, embeddings, re-embed, and API reads ([514676b](https://github.com/MAnders333/knowledge-server/commit/514676bf5184bfd94ac655126a03e5fb63ae7471))
+* **multi-store:** fan out review/status/reinitialize CLI and API to all stores ([8d0d788](https://github.com/MAnders333/knowledge-server/commit/8d0d788fa56ea65c3580bd8802a9cda01b2ba8d8))
+* **reinitialize:** align PID liveness check with stop.ts; fix storeFlag in suggest ([d1d287c](https://github.com/MAnders333/knowledge-server/commit/d1d287c50e55ccc35b7765feed06b728368ca017))
+* **reinitialize:** fix EPERM liveness check inversion; hoist server guard ([034a196](https://github.com/MAnders333/knowledge-server/commit/034a1960c91598dceb93733d05b2f32275c3136c))
+* **review:** assert store invariant instead of silent fallback; fix NaN in /status stats ([aa88206](https://github.com/MAnders333/knowledge-server/commit/aa88206487ed1015d574b7aa0edc058436ebaaf7))
+* **types:** replace NodeJS.ErrnoException with Bun-safe pattern in stop+reinitialize ([1f936cd](https://github.com/MAnders333/knowledge-server/commit/1f936cd2a0c180e373b950f490a29e3d057919c2))
+
 ## [3.1.0](https://github.com/MAnders333/knowledge-server/compare/v3.0.4...v3.1.0) (2026-03-23)
 
 
