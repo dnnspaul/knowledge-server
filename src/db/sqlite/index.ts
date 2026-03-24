@@ -163,10 +163,10 @@ export class KnowledgeDB implements IKnowledgeStore {
 		this.db
 			.prepare(
 				`INSERT INTO knowledge_entry 
-         (id, type, content, topics, confidence, source, scope, status, strength,
+         (id, type, content, topics, confidence, source, status, strength,
           created_at, updated_at, last_accessed_at, access_count, observation_count,
           superseded_by, derived_from, is_synthesized, embedding)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				entry.id,
@@ -175,7 +175,6 @@ export class KnowledgeDB implements IKnowledgeStore {
 				JSON.stringify(entry.topics),
 				entry.confidence,
 				entry.source,
-				entry.scope,
 				entry.status,
 				entry.strength,
 				entry.createdAt,
@@ -220,10 +219,6 @@ export class KnowledgeDB implements IKnowledgeStore {
 		if (updates.supersededBy !== undefined) {
 			fields.push("superseded_by = ?");
 			values.push(updates.supersededBy);
-		}
-		if (updates.scope !== undefined) {
-			fields.push("scope = ?");
-			values.push(updates.scope);
 		}
 		if (updates.embedding !== undefined) {
 			fields.push("embedding = ?");
@@ -346,13 +341,12 @@ export class KnowledgeDB implements IKnowledgeStore {
 	}
 
 	/**
-	 * Get entries with optional server-side filtering — pushes status/type/scope
+	 * Get entries with optional server-side filtering — pushes status/type
 	 * filters to SQL so we don't load the full table into memory just to slice it.
 	 */
 	async getEntries(filters: {
 		status?: string;
 		type?: string;
-		scope?: string;
 	}): Promise<KnowledgeEntry[]> {
 		const conditions: string[] = [];
 		const values: string[] = [];
@@ -364,10 +358,6 @@ export class KnowledgeDB implements IKnowledgeStore {
 		if (filters.type) {
 			conditions.push("type = ?");
 			values.push(filters.type);
-		}
-		if (filters.scope) {
-			conditions.push("scope = ?");
-			values.push(filters.scope);
 		}
 
 		const where =
@@ -908,7 +898,6 @@ export class KnowledgeDB implements IKnowledgeStore {
 			topics: JSON.parse(row.topics),
 			confidence: row.confidence,
 			source: row.source,
-			scope: row.scope as KnowledgeEntry["scope"],
 			status: row.status as KnowledgeEntry["status"],
 			strength: row.strength,
 			createdAt: row.created_at,
@@ -1286,7 +1275,6 @@ interface RawEntryRow {
 	topics: string;
 	confidence: number;
 	source: string;
-	scope: string;
 	status: string;
 	strength: number;
 	created_at: number;

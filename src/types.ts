@@ -47,25 +47,6 @@ export type KnowledgeStatus =
 	| "conflicted"
 	| "tombstoned";
 
-/** Single source of truth for valid entry scopes — mirrors the SQLite CHECK constraint in schema.ts. */
-const KNOWLEDGE_SCOPES = ["personal", "team"] as const;
-
-/**
- * Whether this knowledge is relevant only to the individual or to the whole team.
- */
-export type KnowledgeScope = (typeof KNOWLEDGE_SCOPES)[number];
-
-/**
- * Clamp a raw LLM-returned scope string to the nearest valid KnowledgeScope.
- * LLMs sometimes return values like "global" or "shared".
- * Falls back to "personal" if no valid scope is found.
- */
-export function clampKnowledgeScope(scope: string): KnowledgeScope {
-	const lower = scope.toLowerCase();
-	return (KNOWLEDGE_SCOPES.find((s) => s === lower) ??
-		"personal") as KnowledgeScope;
-}
-
 /**
  * A single knowledge entry in the graph.
  */
@@ -76,7 +57,6 @@ export interface KnowledgeEntry {
 	topics: string[];
 	confidence: number; // 0-1
 	source: string; // human-readable provenance
-	scope: KnowledgeScope;
 
 	// Lifecycle
 	status: KnowledgeStatus;

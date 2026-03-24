@@ -125,7 +125,6 @@ describe("ConsolidationLLM.extractKnowledge", () => {
 					content: "TypeScript is statically typed.",
 					topics: ["ts"],
 					confidence: 0.9,
-					scope: "personal",
 					source: "test",
 				},
 			]),
@@ -142,7 +141,6 @@ describe("ConsolidationLLM.extractKnowledge", () => {
 				content: "Always pre-aggregate.",
 				topics: ["sql"],
 				confidence: 0.8,
-				scope: "team",
 				source: "test",
 			},
 		]);
@@ -159,7 +157,6 @@ describe("ConsolidationLLM.extractKnowledge", () => {
 				content: "Bun is fast.",
 				topics: ["bun"],
 				confidence: 0.85,
-				scope: "personal",
 				source: "test",
 			},
 		]);
@@ -170,7 +167,7 @@ describe("ConsolidationLLM.extractKnowledge", () => {
 
 	it("recovers partial array when response is truncated after a complete object", async () => {
 		// Simulate a response truncated mid-second-object
-		const partial = `[{"type":"fact","content":"Entry one.","topics":["a"],"confidence":0.9,"scope":"personal","source":"t"},{"type":"fact","content":"Entry two tr`;
+		const partial = `[{"type":"fact","content":"Entry one.","topics":["a"],"confidence":0.9,"source":"t"},{"type":"fact","content":"Entry two tr`;
 		mockGenerateText(partial);
 		const result = await llm.extractKnowledge("episodes");
 		// Strategy 4 should recover the first complete object
@@ -194,7 +191,6 @@ describe("ConsolidationLLM.extractKnowledge", () => {
 					content: "Bad type entry.",
 					topics: [],
 					confidence: 0.5,
-					scope: "personal",
 					source: "t",
 				},
 				{
@@ -202,7 +198,6 @@ describe("ConsolidationLLM.extractKnowledge", () => {
 					content: "Good entry.",
 					topics: [],
 					confidence: 0.9,
-					scope: "personal",
 					source: "t",
 				},
 			]),
@@ -221,7 +216,6 @@ describe("ConsolidationLLM.extractKnowledge", () => {
 					content: "",
 					topics: [],
 					confidence: 0.9,
-					scope: "personal",
 					source: "t",
 				},
 				{
@@ -229,69 +223,12 @@ describe("ConsolidationLLM.extractKnowledge", () => {
 					content: "Valid.",
 					topics: [],
 					confidence: 0.9,
-					scope: "personal",
 					source: "t",
 				},
 			]),
 		);
 		const result = await llm.extractKnowledge("episodes");
 		expect(result.length).toBe(1);
-	});
-
-	it("preserves scope: team when LLM returns it", async () => {
-		mockGenerateText(
-			JSON.stringify([
-				{
-					type: "fact",
-					content: "The MI Jira project key is MI.",
-					topics: ["jira"],
-					confidence: 0.9,
-					scope: "team",
-					source: "t",
-				},
-			]),
-		);
-		const result = await llm.extractKnowledge("episodes");
-		expect(result.length).toBe(1);
-		expect(result[0].scope).toBe("team");
-	});
-
-	it("preserves scope: personal when LLM returns it", async () => {
-		mockGenerateText(
-			JSON.stringify([
-				{
-					type: "procedure",
-					content: "My local bun binary is at ~/.bun/bin/bun.",
-					topics: ["setup"],
-					confidence: 0.8,
-					scope: "personal",
-					source: "t",
-				},
-			]),
-		);
-		const result = await llm.extractKnowledge("episodes");
-		expect(result.length).toBe(1);
-		expect(result[0].scope).toBe("personal");
-	});
-
-	it("clamps an invalid scope value to 'personal'", async () => {
-		// The extraction layer clamps unknown scope strings to the default "personal"
-		// to prevent SQLite CHECK constraint violations downstream.
-		mockGenerateText(
-			JSON.stringify([
-				{
-					type: "fact",
-					content: "Some fact.",
-					topics: [],
-					confidence: 0.9,
-					scope: "unknown",
-					source: "t",
-				},
-			]),
-		);
-		const result = await llm.extractKnowledge("episodes");
-		expect(result.length).toBe(1);
-		expect(result[0].scope).toBe("personal");
 	});
 });
 

@@ -193,7 +193,7 @@ export async function main() {
 						(r, i) =>
 							`${i + 1}. [${r.entry.type}] ${r.entry.content}${staleTag(r.staleness)}${contradictionTagBlock(r.contradiction)}\n` +
 							`   Topics: ${r.entry.topics.join(", ")}\n` +
-							`   Confidence: ${r.entry.confidence} | Scope: ${r.entry.scope} | Semantic match: ${r.rawSimilarity.toFixed(3)} | Score: ${r.similarity.toFixed(3)}`,
+							`   Confidence: ${r.entry.confidence} | Semantic match: ${r.rawSimilarity.toFixed(3)} | Score: ${r.similarity.toFixed(3)}`,
 					)
 					.join("\n\n");
 

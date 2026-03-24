@@ -84,7 +84,7 @@
  * - These tables are dropped from Postgres on migration.
  * - SQLite knowledge.db: no change — these tables were already handled in v13.
  */
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 /**
  * Expected columns for each table, derived from the DDL below.
@@ -105,7 +105,6 @@ export const EXPECTED_TABLE_COLUMNS: Readonly<
 		"topics",
 		"confidence",
 		"source",
-		"scope",
 		"status",
 		"strength",
 		"created_at",
@@ -150,8 +149,6 @@ export const CREATE_TABLES = `
     topics TEXT NOT NULL DEFAULT '[]',  -- JSON array of strings
     confidence REAL NOT NULL DEFAULT 0.5 CHECK(confidence >= 0 AND confidence <= 1),
     source TEXT NOT NULL DEFAULT '',
-    scope TEXT NOT NULL DEFAULT 'personal' CHECK(scope IN ('personal', 'team')),
-    
     -- Lifecycle
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'archived', 'superseded', 'conflicted', 'tombstoned')),
     strength REAL NOT NULL DEFAULT 1.0,
@@ -173,7 +170,7 @@ export const CREATE_TABLES = `
   -- Indices for common queries
   CREATE INDEX IF NOT EXISTS idx_entry_status ON knowledge_entry(status);
   CREATE INDEX IF NOT EXISTS idx_entry_type ON knowledge_entry(type);
-  CREATE INDEX IF NOT EXISTS idx_entry_scope ON knowledge_entry(scope);
+
   CREATE INDEX IF NOT EXISTS idx_entry_strength ON knowledge_entry(strength);
   CREATE INDEX IF NOT EXISTS idx_entry_created ON knowledge_entry(created_at);
   CREATE INDEX IF NOT EXISTS idx_entry_accessed ON knowledge_entry(last_accessed_at);

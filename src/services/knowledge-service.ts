@@ -12,7 +12,7 @@ import type { KnowledgeEntry } from "../types.js";
  *
  *   updateEntry(id, updates)
  *     Works identically to IKnowledgeStore.updateEntry for non-semantic fields
- *     (status, strength, confidence, scope, isSynthesized, etc.).
+ *     (status, strength, confidence, isSynthesized, etc.).
  *     When `content` or `topics` are included in the update, it automatically
  *     re-computes and stores the embedding — no caller needs to remember to do
  *     this manually.

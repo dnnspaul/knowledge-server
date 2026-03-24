@@ -134,7 +134,7 @@ export function createApp(
 						(r, i) =>
 							`${i + 1}. [${r.entry.type}] ${r.entry.content}${staleTag(r.staleness)}${contradictionTagBlock(r.contradiction)}\n` +
 							`   Topics: ${r.entry.topics.join(", ")}\n` +
-							`   Confidence: ${r.entry.confidence} | Scope: ${r.entry.scope} | Semantic match: ${r.rawSimilarity.toFixed(3)} | Score: ${r.similarity.toFixed(3)}`,
+							`   Confidence: ${r.entry.confidence} | Semantic match: ${r.rawSimilarity.toFixed(3)} | Score: ${r.similarity.toFixed(3)}`,
 					)
 					.join("\n\n");
 
@@ -361,19 +361,12 @@ export function createApp(
 			.filter((e) => e.strength < REVIEW_STALE_STRENGTH_THRESHOLD)
 			.sort((a, b) => a.strength - b.strength);
 
-		// Find team-relevant entries that might need external documentation
-		const teamRelevant = allActive.filter(
-			(e) => e.scope === "team" && e.confidence >= 0.7,
-		);
-
 		return c.json({
 			conflicted: allConflicted.map(stripEmbedding),
 			stale: stale.map(stripEmbedding),
-			teamRelevant: teamRelevant.map(stripEmbedding),
 			summary: {
 				conflictedCount: allConflicted.length,
 				staleCount: stale.length,
-				teamRelevantCount: teamRelevant.length,
 			},
 		});
 	});
@@ -454,13 +447,10 @@ export function createApp(
 	app.get("/entries", async (c) => {
 		const status = c.req.query("status") || undefined;
 		const type = c.req.query("type") || undefined;
-		const scope = c.req.query("scope") || undefined;
 
 		// Fan out across all stores — entries in secondary domain stores are included.
 		const allEntries = (
-			await Promise.all(
-				readDbs.map((s) => s.getEntries({ status, type, scope })),
-			)
+			await Promise.all(readDbs.map((s) => s.getEntries({ status, type })))
 		).flat();
 
 		return c.json({
@@ -494,8 +484,8 @@ export function createApp(
 	});
 
 	// PATCH /entries/:id — update mutable fields on any entry.
-	// Useful for human review: correcting content, changing scope/type, marking stale entries active, etc.
-	// Accepts any subset of: content, topics, confidence, status, scope.
+	// Useful for human review: correcting content, changing type, marking stale entries active, etc.
+	// Accepts any subset of: content, topics, confidence, status.
 	// If content or topics change, re-compute the embedding immediately so activation
 	// and reconsolidation continue using a semantically correct vector.
 	app.patch("/entries/:id", async (c) => {
@@ -525,13 +515,7 @@ export function createApp(
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 
-		const allowed = [
-			"content",
-			"topics",
-			"confidence",
-			"status",
-			"scope",
-		] as const;
+		const allowed = ["content", "topics", "confidence", "status"] as const;
 		type AllowedField = (typeof allowed)[number];
 		const updates: Partial<KnowledgeEntry> = {};
 
@@ -579,16 +563,6 @@ export function createApp(
 				{
 					error: `Invalid status. Must be one of: ${validStatuses.join(", ")}`,
 				},
-				400,
-			);
-		}
-		if (
-			updates.scope !== undefined &&
-			updates.scope !== "personal" &&
-			updates.scope !== "team"
-		) {
-			return c.json(
-				{ error: `Invalid scope. Must be 'personal' or 'team'` },
 				400,
 			);
 		}

@@ -175,7 +175,6 @@ export const KnowledgePlugin: Plugin = async (ctx) => {
 							content: string;
 							topics: string[];
 							confidence: number;
-							scope: string;
 						};
 						rawSimilarity: number;
 						similarity: number;

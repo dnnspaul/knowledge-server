@@ -39,7 +39,6 @@ function makeEntry(id: string, overrides: Record<string, unknown> = {}) {
 		topics: ["test"],
 		confidence: 0.8,
 		source: "test-source",
-		scope: "personal" as const,
 		status: "active" as const,
 		strength: 1.0,
 		createdAt: now,
@@ -112,7 +111,6 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		const entry = makeEntry("test-1", {
 			content: "Churn rate is 4.2%",
 			topics: ["churn", "metrics"],
-			scope: "team",
 			derivedFrom: ["session-123"],
 		});
 		await db.insertEntry(entry);
@@ -121,7 +119,6 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		expect(retrieved).not.toBeNull();
 		expect(retrieved?.content).toBe("Churn rate is 4.2%");
 		expect(retrieved?.topics).toEqual(["churn", "metrics"]);
-		expect(retrieved?.scope).toBe("team");
 		expect(retrieved?.derivedFrom).toEqual(["session-123"]);
 		expect(retrieved?.isSynthesized).toBe(false);
 	});
@@ -210,17 +207,16 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 
 	it("getEntries with filters", async () => {
 		await db.insertEntry(
-			makeEntry("f1", { status: "active", type: "fact", scope: "team" }),
+			makeEntry("f1", { status: "active", type: "fact" }),
 		);
 		await db.insertEntry(
 			makeEntry("f2", {
 				status: "active",
 				type: "principle",
-				scope: "personal",
 			}),
 		);
 		await db.insertEntry(
-			makeEntry("f3", { status: "archived", type: "fact", scope: "team" }),
+			makeEntry("f3", { status: "archived", type: "fact" }),
 		);
 
 		const byStatus = await db.getEntries({ status: "active" });
@@ -229,13 +225,9 @@ describe.skipIf(!PG_URI)("PostgresKnowledgeDB integration", () => {
 		const byType = await db.getEntries({ type: "fact" });
 		expect(byType.length).toBe(2);
 
-		const byScope = await db.getEntries({ scope: "team" });
-		expect(byScope.length).toBe(2);
-
 		const combined = await db.getEntries({
 			status: "active",
 			type: "fact",
-			scope: "team",
 		});
 		expect(combined.length).toBe(1);
 		expect(combined[0].id).toBe("f1");

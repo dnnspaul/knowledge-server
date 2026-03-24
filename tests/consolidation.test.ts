@@ -305,15 +305,6 @@ describe("KnowledgeDB — getEntries with filters", () => {
 		expect(facts.map((e) => e.id)).not.toContain("t2");
 	});
 
-	it("filters by scope", async () => {
-		await db.insertEntry(makeEntry({ id: "sc1", scope: "personal" }));
-		await db.insertEntry(makeEntry({ id: "sc2", scope: "team" }));
-
-		const team = await db.getEntries({ scope: "team" });
-		expect(team.map((e) => e.id)).toContain("sc2");
-		expect(team.map((e) => e.id)).not.toContain("sc1");
-	});
-
 	it("returns all entries when no filters given", async () => {
 		await db.insertEntry(makeEntry({ id: "all1" }));
 		await db.insertEntry(makeEntry({ id: "all2", status: "archived" }));
@@ -324,26 +315,24 @@ describe("KnowledgeDB — getEntries with filters", () => {
 
 	it("combines multiple filters", async () => {
 		await db.insertEntry(
-			makeEntry({ id: "m1", type: "fact", scope: "team", status: "active" }),
+			makeEntry({ id: "m1", type: "fact", status: "active" }),
 		);
 		await db.insertEntry(
 			makeEntry({
 				id: "m2",
 				type: "fact",
-				scope: "personal",
-				status: "active",
+				status: "archived",
 			}),
 		);
 		await db.insertEntry(
 			makeEntry({
 				id: "m3",
 				type: "principle",
-				scope: "team",
 				status: "active",
 			}),
 		);
 
-		const results = await db.getEntries({ type: "fact", scope: "team" });
+		const results = await db.getEntries({ type: "fact", status: "active" });
 		expect(results.map((e) => e.id)).toEqual(["m1"]);
 	});
 });
@@ -612,7 +601,6 @@ describe("ConsolidationEngine.reconsolidate() — novel entry (below threshold)"
 				content: "TypeScript is statically typed.",
 				topics: ["typescript"],
 				confidence: 0.9,
-				scope: "personal",
 				source: "test",
 			},
 		]);
@@ -654,7 +642,6 @@ describe("ConsolidationEngine.reconsolidate() — novel entry (below threshold)"
 				content: "Bun is a fast JS runtime.",
 				topics: ["bun"],
 				confidence: 0.85,
-				scope: "personal",
 				source: "test",
 			},
 		]);
@@ -699,7 +686,6 @@ describe("ConsolidationEngine.reconsolidate() — 'keep' decision (above thresho
 				content: "TypeScript uses static types.",
 				topics: ["typescript"],
 				confidence: 0.88,
-				scope: "personal",
 				source: "test",
 			},
 		]);
@@ -954,7 +940,6 @@ describe("ConsolidationEngine.reconsolidate() — 'update' decision (above thres
 				content: "TypeScript has structural typing and type inference.",
 				topics: ["typescript"],
 				confidence: 0.9,
-				scope: "personal",
 				source: "test",
 			},
 		]);
@@ -1008,7 +993,6 @@ describe("ConsolidationEngine.reconsolidate() — 'insert' decision (above thres
 					"TypeScript compiles to JavaScript, unlike statically typed native languages.",
 				topics: ["typescript", "compilation"],
 				confidence: 0.87,
-				scope: "personal",
 				source: "test",
 			},
 		]);
@@ -1063,7 +1047,6 @@ describe("ConsolidationEngine.runContradictionScan() — hallucinated candidateI
 				content: "The server port was changed to 9090.",
 				topics: ["server", "config"],
 				confidence: 0.9,
-				scope: "personal",
 				source: "test",
 			},
 		]);
@@ -1130,7 +1113,6 @@ describe("ConsolidationEngine.runContradictionScan() — supersede_new stops fur
 				content: "Port was changed to 9090.",
 				topics: ["server"],
 				confidence: 0.9,
-				scope: "personal",
 				source: "test",
 			},
 		]);
@@ -1208,7 +1190,6 @@ describe("ConsolidationEngine.runContradictionScan() — superseded_in_scan trac
 				content: "Port changed to 9090.",
 				topics: ["server"],
 				confidence: 0.9,
-				scope: "personal",
 				source: "test",
 			},
 			{
@@ -1216,7 +1197,6 @@ describe("ConsolidationEngine.runContradictionScan() — superseded_in_scan trac
 				content: "Port also changed to 9091.",
 				topics: ["server"],
 				confidence: 0.85,
-				scope: "personal",
 				source: "test",
 			},
 		]);
@@ -1299,7 +1279,6 @@ describe("ConsolidationEngine.consolidate() — full pipeline with mocked LLM + 
 				content: "The server port was changed to 9090.",
 				topics: ["server", "config"],
 				confidence: 0.9,
-				scope: "team",
 				source: "test",
 			},
 		]);

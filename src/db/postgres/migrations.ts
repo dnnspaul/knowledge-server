@@ -290,4 +290,24 @@ export const PG_MIGRATIONS: Array<{
 			await sql`DROP TABLE IF EXISTS consolidation_state CASCADE`;
 		},
 	},
+	{
+		version: 15,
+		label:
+			"drop scope column — domain routing replaces personal/team scope distinction",
+		up: async (sql: TxSql) => {
+			// scope was a 'personal|team' classification that the LLM assigned at
+			// extraction time. With multi-store domain routing, the domain field carries
+			// this signal more precisely. Dropping it removes a confusing field that
+			// the LLM was conflating with domain assignment.
+			const col = await sql`
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = current_schema()
+				  AND table_name = 'knowledge_entry'
+				  AND column_name = 'scope'
+			`;
+			if (col.length > 0) {
+				await sql`ALTER TABLE knowledge_entry DROP COLUMN scope`;
+			}
+		},
+	},
 ];

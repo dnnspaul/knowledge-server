@@ -18,7 +18,6 @@ export function makeEntry(
 		topics: ["test"],
 		confidence: 0.8,
 		source: "test",
-		scope: "personal",
 		status: "active",
 		strength: 1.0,
 		createdAt: now,

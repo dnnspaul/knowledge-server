@@ -142,7 +142,7 @@ export interface IKnowledgeStore {
 
 	/**
 	 * Low-level field update for non-semantic fields: status, strength, confidence,
-	 * scope, isSynthesized — and `embedding` **only when supplying a freshly computed
+	 * isSynthesized — and `embedding` **only when supplying a freshly computed
 	 * vector for the current content/topics** (e.g. in ensureEmbeddings / checkAndReEmbed).
 	 *
 	 * **Never call this with `content` or `topics` changes.**
@@ -172,7 +172,6 @@ export interface IKnowledgeStore {
 	getEntries(filters: {
 		status?: string;
 		type?: string;
-		scope?: string;
 	}): Promise<KnowledgeEntry[]>;
 
 	recordAccess(id: string): Promise<void>;

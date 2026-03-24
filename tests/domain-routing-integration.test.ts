@@ -129,7 +129,6 @@ describe("Domain routing via DomainRouter + ConsolidationEngine", () => {
 				content: "The team uses Conventional Commits",
 				topics: ["git", "conventions"],
 				confidence: 0.9,
-				scope: "team" as const,
 				source: "test",
 				domain: "work",
 			},
@@ -202,7 +201,6 @@ describe("Domain routing via DomainRouter + ConsolidationEngine", () => {
 				content: "I prefer using uv over pip for Python",
 				topics: ["python", "tooling"],
 				confidence: 0.85,
-				scope: "personal" as const,
 				source: "test",
 				domain: "personal", // LLM overrides the work project default
 			},
@@ -269,7 +267,6 @@ describe("Domain routing via DomainRouter + ConsolidationEngine", () => {
 				content: "Single store entry",
 				topics: ["test"],
 				confidence: 0.9,
-				scope: "personal" as const,
 				source: "test",
 			},
 		]);

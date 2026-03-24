@@ -282,4 +282,27 @@ export const MIGRATIONS: Array<{
 			// No DDL changes needed for SQLite knowledge stores.
 		},
 	},
+	{
+		version: 15,
+		label:
+			"drop scope column — domain routing replaces personal/team scope distinction",
+		up: (db) => {
+			// scope was a 'personal|team' classification assigned by the LLM at extraction
+			// time. With multi-store domain routing, the domain field carries this signal
+			// more precisely. scope was never used in routing, activation weighting, or
+			// decay logic — it was purely metadata. Dropping it removes a confusing field
+			// that the LLM was conflating with domain assignment.
+			//
+			// SQLite ALTER TABLE DROP COLUMN requires SQLite 3.35+ (Bun's bundled SQLite
+			// supports it). The column is dropped and the index is removed.
+			const cols = db
+				.prepare("PRAGMA table_info(knowledge_entry)")
+				.all() as Array<{ name: string }>;
+			if (cols.length === 0) return; // table doesn't exist — fresh DB initialises without scope
+			if (cols.some((c) => c.name === "scope")) {
+				db.exec("DROP INDEX IF EXISTS idx_entry_scope");
+				db.exec("ALTER TABLE knowledge_entry DROP COLUMN scope");
+			}
+		},
+	},
 ];

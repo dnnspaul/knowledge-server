@@ -112,7 +112,6 @@ describe("HTTP API", () => {
 			topics: ["test"],
 			confidence: 0.9,
 			source: "test",
-			scope: "team",
 			status: "active",
 			strength: 1.0,
 			createdAt: now,
@@ -142,7 +141,6 @@ describe("HTTP API", () => {
 			topics: [],
 			confidence: 0.5,
 			source: "test",
-			scope: "personal" as const,
 			status: status as "active" | "archived",
 			strength: 1.0,
 			createdAt: now,
@@ -172,7 +170,6 @@ describe("HTTP API", () => {
 			topics: ["test"],
 			confidence: 0.7,
 			source: "test",
-			scope: "personal",
 			status: "active",
 			strength: 1.0,
 			createdAt: now,
@@ -230,7 +227,6 @@ describe("HTTP API", () => {
 		expect(data.summary).toBeDefined();
 		expect(data.conflicted).toEqual([]);
 		expect(data.stale).toEqual([]);
-		expect(data.teamRelevant).toEqual([]);
 	});
 
 	it("POST /consolidate should return 401 without token", async () => {
@@ -345,7 +341,6 @@ describe("HTTP API", () => {
 			topics: ["topic"],
 			confidence: 0.8,
 			source: "test",
-			scope: "personal",
 			status: "active",
 			strength: 1.0,
 			createdAt: Date.now(),
@@ -382,7 +377,6 @@ describe("HTTP API", () => {
 			topics: ["old-topic"],
 			confidence: 0.8,
 			source: "test",
-			scope: "personal",
 			status: "active",
 			strength: 1.0,
 			createdAt: Date.now(),
@@ -420,7 +414,6 @@ describe("HTTP API", () => {
 			topics: [],
 			confidence: 0.8,
 			source: "test",
-			scope: "personal",
 			status: "active",
 			strength: 1.0,
 			createdAt: Date.now(),
@@ -466,7 +459,6 @@ describe("HTTP API", () => {
 			topics: [],
 			confidence: 0.8,
 			source: "test",
-			scope: "personal",
 			status: "active",
 			strength: 1.0,
 			createdAt: Date.now(),
@@ -523,7 +515,6 @@ describe("HTTP API", () => {
 			topics: [],
 			confidence: 0.8,
 			source: "test",
-			scope: "personal",
 			status: "active",
 			strength: 1.0,
 			createdAt: Date.now(),
@@ -554,7 +545,6 @@ describe("HTTP API", () => {
 			topics: [],
 			confidence: 0.8,
 			source: "test",
-			scope: "personal",
 			status: "conflicted",
 			strength: 1.0,
 			createdAt: Date.now(),
@@ -588,7 +578,6 @@ describe("HTTP API", () => {
 			topics: [],
 			confidence: 0.8,
 			source: "test",
-			scope: "personal",
 			status: "conflicted",
 			strength: 1.0,
 			createdAt: Date.now(),
@@ -632,7 +621,6 @@ describe("HTTP API", () => {
 				topics: [],
 				confidence: 0.8,
 				source: "test",
-				scope: "personal",
 				status: "conflicted",
 				strength: 1.0,
 				createdAt: now,
@@ -652,7 +640,6 @@ describe("HTTP API", () => {
 				topics: [],
 				confidence: 0.8,
 				source: "test",
-				scope: "personal",
 				status: "conflicted",
 				strength: 1.0,
 				createdAt: now,

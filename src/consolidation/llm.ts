@@ -5,8 +5,8 @@ import { generateText } from "ai";
 import { config } from "../config.js";
 import type { DomainContext } from "./domain-router.js";
 import { logger } from "../logger.js";
-import { clampKnowledgeScope, clampKnowledgeType } from "../types.js";
-import type { Episode, KnowledgeScope, KnowledgeType } from "../types.js";
+import { clampKnowledgeType } from "../types.js";
+import type { Episode, KnowledgeType } from "../types.js";
 
 /**
  * LLM interface for consolidation.
@@ -276,17 +276,6 @@ Knowledge types:
 - "decision": An architectural or design choice with rationale (e.g., "Chose BigQuery over Snowflake because of existing GCP infra")
 - "procedure": A non-obvious multi-step workflow (e.g., "To deploy: run X, wait for Y, then trigger Z")
 
-Scope — choose based on who benefits, not who did the work:
-- "team": A colleague joining the project tomorrow could use this without any extra context.
-  Examples: shared data schemas and field definitions, business rules and KPI definitions,
-  architectural decisions, team conventions, project-specific APIs or config values,
-  recurring patterns in the team's codebase or analytical domain.
-  When in doubt and the knowledge concerns a shared codebase, data model, or business domain: use "team".
-- "personal": Only useful to this specific individual's personal workflow, preferences, or setup.
-  Examples: local dev environment quirks, personal productivity shortcuts, individual tool
-  preferences, personal account/credential locations, notes about one's own habits or mistakes.
-  If a team member would find no value in this entry: use "personal".
-
 ENCODE if:
 - It's a concrete, reusable fact that would otherwise require looking up (API field IDs, custom statuses, naming conventions, config values)
 - It's a decision with rationale that would be hard to reconstruct later
@@ -319,14 +308,15 @@ Respond ONLY with a JSON array. No markdown, no explanation. Return [] if nothin
 		const domainSection = domainContext
 			? `\n## DOMAIN ASSIGNMENT
 This session belongs to the "${domainContext.defaultDomain}" domain by default.
-Assign each entry to exactly one of the following domains based on its content:
+Assign each entry to exactly one of the following domains based on its content — NOT based on where the session came from:
 
 ${domainContext.domains.map((d) => `- "${d.id}": ${d.description}`).join("\n")}
 
 Assignment rules:
-- Use the default domain ("${domainContext.defaultDomain}") when the content clearly belongs there.
-- Override to a different domain when the entry's content is a better fit regardless of where the session came from.
+- Read the domain descriptions carefully. The content of the entry — not the session origin — determines the domain.
+- Default to "${domainContext.defaultDomain}" unless the content clearly matches a different domain's description.
 - The domain field must be exactly one of: ${domainContext.domains.map((d) => `"${d.id}"`).join(", ")}.
+
 `
 			: "";
 
@@ -346,7 +336,6 @@ Extract knowledge entries as a JSON array:
     "content": "The knowledge itself (1-3 sentences)",
     "topics": ["topic1", "topic2"],
     "confidence": 0.5-1.0,
-    "scope": "personal|team",
     "source": "Brief provenance (e.g., 'session: Churn Analysis, Feb 2026')"${domainContext ? `,\n    "domain": "${domainContext.domains.map((d) => d.id).join("|")}"` : ""}
   }
 ]
@@ -396,7 +385,6 @@ If there is nothing new worth extracting, return an empty array: []`;
 						!Number.isNaN(entry.confidence)
 							? Math.min(1, Math.max(0, entry.confidence))
 							: 0.5,
-					scope: clampKnowledgeScope(entry.scope ?? "personal"),
 					source:
 						entry.source ||
 						`extraction ${new Date().toISOString().split("T")[0]}`,
@@ -747,7 +735,6 @@ export interface ExtractedKnowledge {
 	content: string;
 	topics: string[];
 	confidence: number;
-	scope: KnowledgeScope;
 	source: string;
 	/**
 	 * Domain id assigned by the LLM during extraction (multi-store routing).

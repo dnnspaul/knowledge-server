@@ -239,7 +239,7 @@ function printEntry(
 ): void {
 	console.log(`[${index}/${total}]  ${reason.toUpperCase()}`);
 	console.log(
-		`  Type:       ${entry.type}  |  Scope: ${entry.scope}  |  Confidence: ${entry.confidence.toFixed(2)}  |  Strength: ${entry.strength.toFixed(3)}`,
+		`  Type:       ${entry.type}  |  Confidence: ${entry.confidence.toFixed(2)}  |  Strength: ${entry.strength.toFixed(3)}`,
 	);
 	console.log(`  Topics:     ${entry.topics.join(", ")}`);
 	console.log(`  Content:    ${truncate(entry.content, CONTENT_DISPLAY_MAX)}`);

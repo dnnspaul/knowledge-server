@@ -30,7 +30,6 @@ interface RawEntryRow {
 	topics: string[] | string;
 	confidence: number | string;
 	source: string;
-	scope: string;
 	status: string;
 	strength: number | string;
 	created_at: number | string;
@@ -258,7 +257,6 @@ export class PostgresKnowledgeDB implements IKnowledgeStore {
 			topics: Array.isArray(topics) ? topics : [],
 			confidence: toNum(row.confidence),
 			source: row.source,
-			scope: row.scope as KnowledgeEntry["scope"],
 			status: row.status as KnowledgeEntry["status"],
 			strength: toNum(row.strength),
 			createdAt: toNum(row.created_at),
@@ -284,13 +282,13 @@ export class PostgresKnowledgeDB implements IKnowledgeStore {
 
 		await this.sql`
 			INSERT INTO knowledge_entry
-			(id, type, content, topics, confidence, source, scope, status, strength,
+			(id, type, content, topics, confidence, source, status, strength,
 			 created_at, updated_at, last_accessed_at, access_count, observation_count,
 			 superseded_by, derived_from, is_synthesized, embedding)
 			VALUES (
 				${entry.id}, ${entry.type}, ${entry.content},
 				${this.sql.json(entry.topics)},
-				${entry.confidence}, ${entry.source}, ${entry.scope}, ${entry.status},
+				${entry.confidence}, ${entry.source}, ${entry.status},
 				${entry.strength}, ${entry.createdAt}, ${entry.updatedAt},
 				${entry.lastAccessedAt}, ${entry.accessCount}, ${entry.observationCount},
 				${entry.supersededBy}, ${this.sql.json(entry.derivedFrom)},
@@ -331,10 +329,6 @@ export class PostgresKnowledgeDB implements IKnowledgeStore {
 		if (updates.supersededBy !== undefined) {
 			setClauses.push(`superseded_by = $${idx++}`);
 			values.push(updates.supersededBy);
-		}
-		if (updates.scope !== undefined) {
-			setClauses.push(`scope = $${idx++}`);
-			values.push(updates.scope);
 		}
 		if (updates.embedding !== undefined) {
 			setClauses.push(`embedding = $${idx++}`);
@@ -428,7 +422,6 @@ export class PostgresKnowledgeDB implements IKnowledgeStore {
 	async getEntries(filters: {
 		status?: string;
 		type?: string;
-		scope?: string;
 	}): Promise<KnowledgeEntry[]> {
 		const conditions: string[] = [];
 		const values: unknown[] = [];
@@ -441,10 +434,6 @@ export class PostgresKnowledgeDB implements IKnowledgeStore {
 		if (filters.type) {
 			conditions.push(`type = $${idx++}`);
 			values.push(filters.type);
-		}
-		if (filters.scope) {
-			conditions.push(`scope = $${idx++}`);
-			values.push(filters.scope);
 		}
 
 		const where =

@@ -135,7 +135,8 @@
 				},
 				"description": {
 					"type": "string",
-					"description": "Human-readable description of what belongs in this domain. Injected into the LLM extraction prompt to guide classification. Example: \"Professional projects, team decisions, and technical choices.\""
+					"description": "Human-readable description of what belongs in this domain. Injected into the LLM extraction prompt to guide classification. Be specific — the more precise the description, the more accurately the LLM will route entries.",
+					"maxLength": 1000
 				},
 				"store": {
 					"type": "string",

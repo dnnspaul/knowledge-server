@@ -561,18 +561,12 @@ export class Reconsolidator {
 						);
 					}
 
-					// Pick a representative peer for scope (highest observationCount)
-					const repPeer = peers.reduce((best, p) =>
-						p.observationCount > best.observationCount ? p : best,
-					);
-
 					await this.reconsolidate(
 						{
 							type: result.type,
 							content: result.content,
 							topics: result.topics,
 							confidence: result.confidence,
-							scope: repPeer.scope,
 							source: `synthesis:cluster:${cluster.id}`,
 							isSynthesized: true,
 						},
@@ -711,7 +705,6 @@ export class Reconsolidator {
 			source:
 				entry.source ||
 				`consolidation ${new Date(entryTime).toISOString().split("T")[0]}`,
-			scope: entry.scope || "personal",
 			status: "active",
 			isSynthesized: entry.isSynthesized ?? false,
 			// Compute real initial strength using the session timestamp so decay is

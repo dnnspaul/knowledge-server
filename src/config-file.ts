@@ -494,9 +494,9 @@ function validateDomain(
 	if (typeof d.description !== "string" || !d.description.trim()) {
 		throw new Error(`${loc} must have a non-empty string "description"`);
 	}
-	if (d.description.length > 300) {
+	if (d.description.length > 1000) {
 		throw new Error(
-			`${loc} "description" must be ≤ 300 characters (got ${d.description.length})`,
+			`${loc} "description" must be ≤ 1000 characters (got ${d.description.length})`,
 		);
 	}
 	if (/[\r\n]/.test(d.description)) {
