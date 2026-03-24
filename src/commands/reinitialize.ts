@@ -105,7 +105,9 @@ export async function runReinitialize(args: string[]): Promise<void> {
 
 	const registry = await StoreRegistry.create();
 	const { serverStateDb } = registry;
-	const daemonDb = new DaemonDB();
+	// Declared here but only instantiated when --confirm is given so that --dry-run
+	// does not create or write to daemon.db as a side effect.
+	let daemonDb: DaemonDB | null = null;
 
 	try {
 		// Resolve target stores
@@ -194,6 +196,7 @@ export async function runReinitialize(args: string[]): Promise<void> {
 
 		// Apply — operations are not cross-store atomic. If one step fails,
 		// subsequent steps are skipped. Run the command again to retry.
+		daemonDb = new DaemonDB();
 		try {
 			await daemonDb.resetDaemonCursors();
 			console.log(
@@ -242,6 +245,6 @@ export async function runReinitialize(args: string[]): Promise<void> {
 		}
 	} finally {
 		await registry.close();
-		daemonDb.close();
+		daemonDb?.close();
 	}
 }

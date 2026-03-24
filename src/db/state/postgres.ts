@@ -140,16 +140,17 @@ export class PostgresServerStateDB implements IServerStateDB {
 		}
 
 		if (v === null) {
-			await this.sql.begin(async (sql: TxSql) => {
-				await sql.unsafe(PG_CREATE_STATE_TABLES);
-				// ON CONFLICT DO NOTHING guards against a crash-between-create-and-insert
-				// scenario where the table exists but has no row yet.
-				await sql`
-					INSERT INTO state_schema_version (version, applied_at)
-					VALUES (${STATE_SCHEMA_VERSION}, ${Date.now()})
-					ON CONFLICT DO NOTHING
-				`;
-			});
+			// Note: sql.unsafe() uses the simple query protocol and does not support
+			// true DDL atomicity even inside a transaction. DDL auto-commits individually.
+			// Safety relies on idempotency: CREATE TABLE IF NOT EXISTS and
+			// INSERT ... ON CONFLICT DO NOTHING. If init is interrupted mid-way,
+			// the next startup retries safely.
+			await this.sql.unsafe(PG_CREATE_STATE_TABLES);
+			await this.sql`
+				INSERT INTO state_schema_version (version, applied_at)
+				VALUES (${STATE_SCHEMA_VERSION}, ${Date.now()})
+				ON CONFLICT DO NOTHING
+			`;
 			logger.log("[pg-state-db] Initialized Postgres state DB (fresh schema).");
 		} else {
 			logger.log(`[pg-state-db] Postgres state DB at schema v${v}.`);
@@ -329,9 +330,15 @@ export class PostgresServerStateDB implements IServerStateDB {
 
 	async tryAcquireConsolidationLock(): Promise<boolean> {
 		await this.ensureInit();
-		// Guard against double-acquire: if we already hold the connection, return
-		// false rather than reserving a second connection and orphaning the first.
-		if (this.lockConnection !== null) return false;
+		// Guard against double-acquire: if we already hold the connection, warn and
+		// return false rather than reserving a second connection and orphaning the first.
+		if (this.lockConnection !== null) {
+			logger.warn(
+				"[pg-state-db] tryAcquireConsolidationLock called while lock already held — returning false. " +
+					"Check for a missing releaseConsolidationLock() call.",
+			);
+			return false;
+		}
 		this.lockConnection = await this.sql.reserve();
 		try {
 			const result = await this.lockConnection`
@@ -367,13 +374,18 @@ export class PostgresServerStateDB implements IServerStateDB {
 		await this.sql.begin(async (sql: TxSql) => {
 			await sql`DELETE FROM pending_episodes`;
 			await sql`DELETE FROM consolidated_episode`;
+			// Use UPSERT rather than UPDATE so the singleton row is restored even if
+			// a previous reinitialize or failed init left the table without a row.
 			await sql`
-				UPDATE consolidation_state SET
-					last_consolidated_at = 0,
+				INSERT INTO consolidation_state
+					(id, last_consolidated_at, total_sessions_processed,
+					 total_entries_created, total_entries_updated)
+				VALUES (1, 0, 0, 0, 0)
+				ON CONFLICT (id) DO UPDATE SET
+					last_consolidated_at     = 0,
 					total_sessions_processed = 0,
-					total_entries_created = 0,
-					total_entries_updated = 0
-				WHERE id = 1
+					total_entries_created    = 0,
+					total_entries_updated    = 0
 			`;
 		});
 	}
