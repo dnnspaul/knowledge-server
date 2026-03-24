@@ -1,7 +1,7 @@
 import type { ActivationEngine } from "../activation/activate.js";
 import { config } from "../config.js";
 import type { IKnowledgeStore, IServerStateDB } from "../db/index.js";
-import type { DomainRouter } from "./domain-router.js";
+import type { DomainResolution, DomainRouter } from "./domain-router.js";
 import { logger } from "../logger.js";
 import type {
 	ConsolidationResult,
@@ -12,6 +12,7 @@ import type {
 import { ContradictionScanner } from "./contradiction.js";
 import { computeStrength } from "./decay.js";
 import { ConsolidationLLM, formatEpisodes } from "./llm.js";
+import type { ExtractedKnowledge } from "./llm.js";
 import { approxTokens } from "../daemon/readers/shared.js";
 import { Reconsolidator } from "./reconsolidate.js";
 
@@ -500,19 +501,21 @@ export class ConsolidationEngine {
 	}
 
 	/**
-	 * Process a single chunk of episodes through the full extraction → reconsolidation
-	 * → contradiction scan pipeline.
+	 * Process a single chunk of episodes through the two-pass pipeline:
 	 *
-	 * Pre-flight token guard: if the formatted chunk exceeds MAX_CHUNK_TOKENS, the chunk
-	 * is split in half and each half is processed independently (recursively). This
-	 * handles fat-tail episodes (e.g. Confluence pages near the 50K episode cap) without
-	 * requiring a conservative global chunk size. A single oversized episode will
-	 * ultimately be processed alone — the soft-limit in chunkByTokenBudget already
-	 * ensures no individual episode is split further.
+	 * Pass 1 — Extract: call the LLM to extract knowledge entries from the episodes.
+	 *   Token budget is checked here; oversized chunks are split and processed
+	 *   recursively. This pass is pure LLM I/O — no DB reads or writes.
 	 *
-	 * recordEpisode is called here (not in the caller) so that each sub-chunk's episodes
-	 * are marked processed immediately after their LLM call succeeds. This preserves
-	 * idempotency: a crash mid-chunk only re-processes the remaining sub-chunks.
+	 * Pass 2 — Dispatch per store: group the extracted entries by their resolved
+	 *   domain store, then for each store:
+	 *     a. Load `entriesMap` ONCE from that store (not once per recursive leaf).
+	 *     b. Reconsolidate all entries for that store (dedup/merge against existing).
+	 *     c. Contradiction scan within-store only (domain isolation by design).
+	 *
+	 * recordEpisode is called after both passes succeed so that a crash in Pass 2
+	 * causes the chunk to be re-processed from scratch on the next run (safe because
+	 * reconsolidate() is idempotent via embedding-similarity dedup).
 	 */
 	private async processChunk(
 		source: string,
@@ -534,47 +537,16 @@ export class ConsolidationEngine {
 			};
 		}
 
-		// Pre-flight: check if the formatted chunk fits within the token budget.
-		const chunkSummary = formatEpisodes(chunk);
-		const chunkTokens = approxTokens(chunkSummary);
-
-		if (chunkTokens > MAX_CHUNK_TOKENS && chunk.length > 1) {
-			// Split in half and process each side independently.
-			logger.log(
-				`[consolidation/${source}] Chunk too large (~${chunkTokens} tokens, limit ${MAX_CHUNK_TOKENS}) — splitting ${chunk.length} episodes into two halves.`,
-			);
-			const mid = Math.ceil(chunk.length / 2);
-			const left = await this.processChunk(source, chunk.slice(0, mid));
-			const right = await this.processChunk(source, chunk.slice(mid));
-			return {
-				created: left.created + right.created,
-				updated: left.updated + right.updated,
-				conflictsDetected: left.conflictsDetected + right.conflictsDetected,
-				conflictsResolved: left.conflictsResolved + right.conflictsResolved,
-				touchedStores: new Set([...left.touchedStores, ...right.touchedStores]),
-			};
-		}
-
-		if (chunkTokens > MAX_CHUNK_TOKENS) {
-			// chunk.length === 1: single episode that can't be split further — log and proceed.
-			// chunkByTokenBudget already applies a per-session soft limit, so this is an
-			// unusual edge case (e.g. one enormous Confluence page). The LLM call may fail
-			// with a context-length error; the caller's retry logic handles it.
-			logger.warn(
-				`[consolidation/${source}] Single episode exceeds token limit (~${chunkTokens} tokens, limit ${MAX_CHUNK_TOKENS}) — processing alone.`,
-			);
-		}
-
-		// Domain routing: resolve the domain for this chunk based on the episodes' directory.
-		// Use the first episode's directory as the representative — episodes within a chunk
-		// come from the same session source. The LLM may still classify individual entries
-		// into different domains (e.g. a personal preference found in a work project).
+		// ── Pass 1: Extract ──────────────────────────────────────────────────────
+		// Domain routing: use the first episode's directory as the domain hint for
+		// the extraction prompt. Episodes in a chunk share the same domain because
+		// consolidateSource() groups them by domain before chunking.
 		const chunkDirectory = chunk[0]?.directory ?? "";
 		const domainResolution = this.domainRouter?.resolve(chunkDirectory) ?? null;
 
-		// If the target store for this chunk's domain is currently unavailable, skip
-		// the chunk entirely — before any DB access on the resolved store. The episodes
-		// remain in pending_episodes and will be retried on the next consolidation run.
+		// If the default store for this chunk's domain is unavailable, skip the whole
+		// chunk before any LLM or DB work. Episodes remain in pending_episodes and
+		// will be retried on the next consolidation run when the store may be back.
 		if (domainResolution?.storeUnavailable) {
 			logger.warn(
 				`[consolidation/${source}] Skipping chunk — target store for domain "${domainResolution.domainId}" is unavailable. Episodes will be retried on next run.`,
@@ -588,41 +560,19 @@ export class ConsolidationEngine {
 			};
 		}
 
-		// Load entries from the chunk's target store for reconsolidation/dedup.
-		// Using the domain-resolved store ensures that within-domain cross-chunk
-		// deduplication works correctly: entries written to this store in prior chunks
-		// are visible for similarity comparison. Without this, chunks targeting a
-		// secondary store always see an empty entriesMap (this.db has none of their
-		// entries) and silently produce duplicates across chunk boundaries.
-		const chunkStore = domainResolution?.store ?? this.db;
-		const allEntriesForChunk =
-			await chunkStore.getActiveEntriesWithEmbeddings();
-
-		// Extract knowledge via LLM (episodes only — no existing knowledge context).
-		const extractStart = Date.now();
-		const extracted = await this.llm.extractKnowledge(
-			chunkSummary,
-			domainResolution?.domainContext ?? undefined,
-		);
-		logger.log(
-			`[consolidation/${source}] Extracted ${extracted.length} entries in ${((Date.now() - extractStart) / 1000).toFixed(1)}s.`,
+		const extracted = await this.extractFromChunk(
+			source,
+			chunk,
+			domainResolution,
 		);
 
-		// Reconsolidate each extracted entry against existing knowledge.
-		// Performance: load all entries with embeddings ONCE per chunk into an in-memory
-		// Map. On insert/update, mutate the Map in place rather than reloading from DB.
-		const sessionIds = [...new Set(chunk.map((e) => e.sessionId))];
+		// ── Pass 2: Dispatch per store ───────────────────────────────────────────
+		// Group extracted entries by their resolved target store. Each entry may have
+		// been assigned a different domain by the LLM — group them now so we load
+		// entriesMap once per store rather than once per entry (or per recursive leaf).
+		const storeGroups = this.groupExtractedByStore(extracted, domainResolution);
+
 		// Use the max message time of the chunk as the session timestamp for new entries.
-		// This ensures entries extracted from old sessions start with the correct decay
-		// already applied rather than appearing freshly created.
-		// Defensive fallback: the empty-chunk guard at line 387 means chunk.length > 0
-		// here, but an explicit fallback prevents Math.max(...[]) = -Infinity if that
-		// guard is ever moved or removed in a future refactor.
-		// Use reduce rather than Math.max(...spread) to avoid stack-size issues
-		// on very large chunks. Use -Infinity as the neutral element so that a
-		// chunk where every entry has maxMessageTime = 0 (epoch) correctly yields
-		// 0, not -Infinity. -Infinity only arises for an empty chunk (already
-		// guarded at line 387); isFinite() catches that fallback case.
 		const reduced = chunk.reduce(
 			(max, e) => Math.max(max, e.maxMessageTime),
 			Number.NEGATIVE_INFINITY,
@@ -630,138 +580,44 @@ export class ConsolidationEngine {
 		const chunkSessionTimestamp = Number.isFinite(reduced)
 			? reduced
 			: Date.now();
-		// Reuse the entries already loaded above — no second DB read.
-		const entriesMap = new Map(allEntriesForChunk.map((e) => [e.id, e]));
-		let chunkCreated = 0;
-		let chunkUpdated = 0;
+		const sessionIds = [...new Set(chunk.map((e) => e.sessionId))];
 
-		// IDs eligible for contradiction scanning — within-store only.
-		//
-		// Only newly inserted/updated entries in chunkStore are candidates:
-		// (1) Pre-existing entries were already scanned in a previous consolidation run.
-		// (2) Entries rerouted to a different domain store by the LLM are excluded —
-		//     cross-store contradiction detection is intentionally not performed.
-		//     A work entry and a personal entry may legitimately hold different values
-		//     for the same topic by design (domain isolation). They'll be scanned within
-		//     their own store on a future chunk that targets that store.
-		const contradictionCandidates = new Set<string>();
-
-		// Track which stores received inserts or content-changing updates this chunk.
-		// Used after all chunks complete to run synthesis only on touched stores.
-		// onKeep (reinforcement only) does not count — it doesn't affect cluster ripeness.
-		const touchedStores = new Set<IKnowledgeStore>();
-
-		for (const entry of extracted) {
-			try {
-				// Resolve the target store for this entry:
-				// 1. If entry has an LLM-assigned domain, use that domain's store.
-				// 2. Otherwise fall back to the chunk's resolved domain store.
-				// 3. If no domain routing (domainResolution is null), pass undefined
-				//    so reconsolidate() uses this.db as its insertDb fallback.
-				//
-				// this.domainRouter is non-null whenever domainResolution is non-null:
-				// resolve() only returns non-null when domains are configured, and domains
-				// being configured is the precondition for domainRouter being non-null.
-				const domainRouter = this.domainRouter;
-				// domainResolution.domainId is always a defined string here:
-				// domainRouter is non-null only when config.domains.length > 0, which
-				// means resolve() cannot hit its early-exit undefined path.
-				const entryTargetStore =
-					domainResolution && domainRouter
-						? (domainRouter.resolveStore(
-								entry.domain ?? domainResolution.domainId,
-							) ?? domainResolution.store)
-						: undefined;
-
-				await this.reconsolidator.reconsolidate(
-					entry,
+		// Per-store consolidation runs concurrently — each store has independent state:
+		// its own DB connection, its own entriesMap, its own contradictionCandidates.
+		// There is no shared mutable state between stores within a single process.
+		// SQLite stores are already serialised by their per-connection mutex; Postgres
+		// uses a process-level advisory lock (held at consolidate() level) that prevents
+		// cross-process races, not cross-store within-process parallelism.
+		const storeResults = await Promise.all(
+			[...storeGroups.entries()].map(([store, entriesForStore]) =>
+				this.consolidateExtractedToStore(
+					source,
+					store,
+					entriesForStore,
 					sessionIds,
-					entriesMap,
-					{
-						onInsert: (inserted) => {
-							chunkCreated++;
-							touchedStores.add(entryTargetStore ?? this.db);
-							// Only include in contradiction scan if the entry landed in chunkStore.
-							// Entries rerouted to a different domain store are excluded — cross-store
-							// contradictions are intentional (domain isolation by design).
-							if ((entryTargetStore ?? chunkStore) === chunkStore) {
-								contradictionCandidates.add(inserted.id);
-							}
-							logger.log(
-								// type is a validated KnowledgeType enum — bare interpolation is safe.
-								// content is LLM-sourced — JSON.stringify escapes injected newlines/tokens.
-								`[consolidation/${source}] + insert [${inserted.type}] ${entry.domain ? `domain:${entry.domain} ` : ""}${JSON.stringify(inserted.content)}`,
-							);
-							// Add to cache so subsequent entries in this chunk can deduplicate against it.
-							// Embedding is available immediately since insertNewEntry stores it.
-							if (inserted.embedding) {
-								entriesMap.set(
-									inserted.id,
-									inserted as KnowledgeEntry & { embedding: number[] },
-								);
-							}
-						},
-						onUpdate: (id, updated, freshEmbedding) => {
-							chunkUpdated++;
-							// Updates always go to chunkStore (via mergeDb) — existing entries live
-							// in the chunk's domain store. Always eligible for contradiction scan.
-							touchedStores.add(chunkStore);
-							contradictionCandidates.add(id);
-							const existing = entriesMap.get(id);
-							const contentForLog = updated.content ?? existing?.content ?? "";
-							const typeForLog = updated.type ?? existing?.type ?? "?";
-							logger.log(
-								`[consolidation/${source}] ~ update [${typeForLog}] ${JSON.stringify(contentForLog)}`,
-							);
-							// Update the cache with the new content and fresh embedding.
-							if (existing) {
-								entriesMap.set(id, {
-									...existing,
-									content: updated.content ?? existing.content,
-									type:
-										(updated.type as KnowledgeEntry["type"]) ?? existing.type,
-									topics: updated.topics ?? existing.topics,
-									confidence: updated.confidence ?? existing.confidence,
-									embedding: freshEmbedding,
-								});
-							}
-						},
-						onKeep: () => {},
-					},
 					chunkSessionTimestamp,
-					undefined, // precomputedEmbedding
-					"consolidation",
-					entryTargetStore, // targetDb: new inserts land in the entry's domain store
-					chunkStore, // mergeDb: existing entries live in the chunk's domain store
-				);
-			} catch (err) {
-				// Log and skip this extracted entry — do NOT rethrow.
-				// Rethrowing would skip recordEpisode for the whole chunk, causing all
-				// entries in this chunk to be re-processed on the next run and producing
-				// duplicates for the entries that were already successfully inserted.
-				logger.error(
-					`[consolidation/${source}] Failed to reconsolidate entry ${JSON.stringify(entry.content ?? "")} — skipping:`,
-					err,
-				);
-			}
-		}
-
-		// Post-extraction contradiction scan — within-store only.
-		// Contradiction detection is intentionally scoped to chunkStore: entries from
-		// different domain stores should never be compared (a work entry and a personal
-		// entry may legitimately hold different views on the same topic by design).
-		// contradictionCandidates contains only IDs that landed in chunkStore;
-		// entries rerouted by per-entry LLM domain override are excluded.
-		const contradictionDb = chunkStore;
-		const chunkContradictions = await this.contradictionScanner.scan(
-			contradictionDb,
-			entriesMap,
-			contradictionCandidates,
+				).then((counts) => ({ store, counts })),
+			),
 		);
 
-		// Record each episode in this chunk as processed using its original source.
-		// Happens after the LLM call and DB writes succeed — makes consolidation
-		// idempotent on crash/retry at the episode level.
+		let chunkCreated = 0;
+		let chunkUpdated = 0;
+		let chunkConflictsDetected = 0;
+		let chunkConflictsResolved = 0;
+		const touchedStores = new Set<IKnowledgeStore>();
+
+		for (const { store, counts } of storeResults) {
+			chunkCreated += counts.created;
+			chunkUpdated += counts.updated;
+			chunkConflictsDetected += counts.conflictsDetected;
+			chunkConflictsResolved += counts.conflictsResolved;
+			if (counts.created > 0 || counts.updated > 0) touchedStores.add(store);
+		}
+
+		// Record all episodes as processed after both passes succeed. This preserves
+		// idempotency: a crash in Pass 2 causes the chunk to be fully re-processed on
+		// the next run. reconsolidate() is idempotent via embedding-similarity dedup,
+		// so re-processing produces duplicates that dedup catches — no data corruption.
 		const entriesPerEp = Math.round(
 			(chunkCreated + chunkUpdated) / chunk.length,
 		);
@@ -779,9 +635,226 @@ export class ConsolidationEngine {
 		return {
 			created: chunkCreated,
 			updated: chunkUpdated,
-			conflictsDetected: chunkContradictions.detected,
-			conflictsResolved: chunkContradictions.resolved,
+			conflictsDetected: chunkConflictsDetected,
+			conflictsResolved: chunkConflictsResolved,
 			touchedStores,
+		};
+	}
+
+	/**
+	 * Pass 1: extract knowledge entries from a chunk of episodes via LLM.
+	 *
+	 * Handles the token budget recursively — if the formatted chunk exceeds
+	 * MAX_CHUNK_TOKENS the chunk is split in half and both halves are extracted
+	 * independently, then their results are merged. A single oversized episode is
+	 * processed alone (the LLM call may fail with a context-length error in that case).
+	 *
+	 * Returns all extracted entries with their LLM-assigned domain field, ready for
+	 * Pass 2 to dispatch to the correct store.
+	 */
+	private async extractFromChunk(
+		source: string,
+		chunk: ReturnType<IEpisodeReader["getNewEpisodes"]>,
+		domainResolution: DomainResolution | null,
+	): Promise<ExtractedKnowledge[]> {
+		const chunkSummary = formatEpisodes(chunk);
+		const chunkTokens = approxTokens(chunkSummary);
+
+		if (chunkTokens > MAX_CHUNK_TOKENS && chunk.length > 1) {
+			logger.log(
+				`[consolidation/${source}] Chunk too large (~${chunkTokens} tokens, limit ${MAX_CHUNK_TOKENS}) — splitting ${chunk.length} episodes into two halves.`,
+			);
+			const mid = Math.ceil(chunk.length / 2);
+			const left = await this.extractFromChunk(
+				source,
+				chunk.slice(0, mid),
+				domainResolution,
+			);
+			const right = await this.extractFromChunk(
+				source,
+				chunk.slice(mid),
+				domainResolution,
+			);
+			return [...left, ...right];
+		}
+
+		if (chunkTokens > MAX_CHUNK_TOKENS) {
+			logger.warn(
+				`[consolidation/${source}] Single episode exceeds token limit (~${chunkTokens} tokens, limit ${MAX_CHUNK_TOKENS}) — processing alone.`,
+			);
+		}
+
+		const extractStart = Date.now();
+		const extracted = await this.llm.extractKnowledge(
+			chunkSummary,
+			domainResolution?.domainContext ?? undefined,
+		);
+		logger.log(
+			`[consolidation/${source}] Extracted ${extracted.length} entries in ${((Date.now() - extractStart) / 1000).toFixed(1)}s.`,
+		);
+		return extracted;
+	}
+
+	/**
+	 * Group extracted entries by their resolved target store.
+	 *
+	 * Each entry may carry an LLM-assigned domain that overrides the chunk default.
+	 * Returns a Map<store, entries[]> preserving the order entries were assigned to
+	 * each store. The chunk's default store (from domainResolution) is used for
+	 * entries with no domain assignment.
+	 */
+	private groupExtractedByStore(
+		extracted: ExtractedKnowledge[],
+		domainResolution: DomainResolution | null,
+	): Map<IKnowledgeStore, ExtractedKnowledge[]> {
+		const groups = new Map<IKnowledgeStore, ExtractedKnowledge[]>();
+		const domainRouter = this.domainRouter;
+
+		for (const entry of extracted) {
+			// Resolve the target store for this entry (same logic as before,
+			// now centralised here instead of inside the reconsolidate callback).
+			const targetStore =
+				domainResolution && domainRouter
+					? (domainRouter.resolveStore(
+							entry.domain ?? domainResolution.domainId,
+						) ?? domainResolution.store)
+					: this.db;
+
+			let group = groups.get(targetStore);
+			if (!group) {
+				group = [];
+				groups.set(targetStore, group);
+			}
+			group.push(entry);
+		}
+
+		// In single-store mode (no domain routing), all entries go to this.db.
+		if (groups.size === 0 && extracted.length > 0) {
+			groups.set(this.db, [...extracted]);
+		}
+
+		return groups;
+	}
+
+	/**
+	 * Pass 2: reconsolidate a batch of extracted entries into a single target store.
+	 *
+	 * All entries in this batch belong to the same store — groupExtractedByStore()
+	 * guarantees this. Benefits over the old interleaved approach:
+	 *
+	 * - getActiveEntriesWithEmbeddings() is called ONCE for this store regardless
+	 *   of how many recursive bisections happened in Pass 1.
+	 * - entriesMap is shared across all entries in the batch, so within-store
+	 *   cross-entry dedup works correctly for this entire call.
+	 * - Contradiction scanning is trivially within-store — no filtering needed.
+	 * - The store is explicit in the call signature, not inferred mid-callback.
+	 */
+	private async consolidateExtractedToStore(
+		source: string,
+		store: IKnowledgeStore,
+		entries: ExtractedKnowledge[],
+		sessionIds: string[],
+		chunkSessionTimestamp: number,
+	): Promise<{
+		created: number;
+		updated: number;
+		conflictsDetected: number;
+		conflictsResolved: number;
+	}> {
+		if (entries.length === 0) {
+			return {
+				created: 0,
+				updated: 0,
+				conflictsDetected: 0,
+				conflictsResolved: 0,
+			};
+		}
+
+		// Load all active entries from this store once.
+		// entriesMap is mutated in place as inserts/updates happen so that
+		// subsequent entries in this batch can deduplicate against earlier ones.
+		const allEntries = await store.getActiveEntriesWithEmbeddings();
+		const entriesMap = new Map(allEntries.map((e) => [e.id, e]));
+
+		let created = 0;
+		let updated = 0;
+		// Track IDs written to this store — eligible for within-store contradiction scan.
+		const contradictionCandidates = new Set<string>();
+
+		for (const entry of entries) {
+			try {
+				await this.reconsolidator.reconsolidate(
+					entry,
+					sessionIds,
+					entriesMap,
+					{
+						onInsert: (inserted) => {
+							created++;
+							contradictionCandidates.add(inserted.id);
+							logger.log(
+								`[consolidation/${source}] + insert [${inserted.type}] ${entry.domain ? `domain:${entry.domain} ` : ""}${JSON.stringify(inserted.content)}`,
+							);
+							// Propagate into the cache so later entries in this batch
+							// can deduplicate against entries inserted earlier.
+							if (inserted.embedding) {
+								entriesMap.set(
+									inserted.id,
+									inserted as KnowledgeEntry & { embedding: number[] },
+								);
+							}
+						},
+						onUpdate: (id, updatedFields, freshEmbedding) => {
+							updated++;
+							contradictionCandidates.add(id);
+							const existing = entriesMap.get(id);
+							logger.log(
+								`[consolidation/${source}] ~ update [${updatedFields.type ?? existing?.type ?? "?"}] ${JSON.stringify(updatedFields.content ?? existing?.content ?? "")}`,
+							);
+							if (existing) {
+								entriesMap.set(id, {
+									...existing,
+									content: updatedFields.content ?? existing.content,
+									type:
+										(updatedFields.type as KnowledgeEntry["type"]) ??
+										existing.type,
+									topics: updatedFields.topics ?? existing.topics,
+									confidence: updatedFields.confidence ?? existing.confidence,
+									embedding: freshEmbedding,
+								});
+							}
+						},
+						onKeep: () => {},
+					},
+					chunkSessionTimestamp,
+					undefined, // precomputedEmbedding — let reconsolidate() compute it
+					"consolidation",
+					store, // targetDb: inserts land in this store
+					store, // mergeDb: existing entries also live in this store
+				);
+			} catch (err) {
+				// Log and skip — do NOT rethrow. Re-throwing would skip recordEpisode
+				// for the whole chunk, causing all entries to be re-processed and
+				// producing duplicates for entries already successfully inserted.
+				logger.error(
+					`[consolidation/${source}] Failed to reconsolidate entry ${JSON.stringify(entry.content ?? "")} — skipping:`,
+					err,
+				);
+			}
+		}
+
+		// Contradiction scan — within-store only by construction (all entries in this
+		// batch were routed to `store` by groupExtractedByStore). No filtering needed.
+		const contradictions = await this.contradictionScanner.scan(
+			store,
+			entriesMap,
+			contradictionCandidates,
+		);
+
+		return {
+			created,
+			updated,
+			conflictsDetected: contradictions.detected,
+			conflictsResolved: contradictions.resolved,
 		};
 	}
 
