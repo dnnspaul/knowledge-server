@@ -523,7 +523,7 @@ There are two distinct scenarios where you'd run knowledge-daemon separately fro
 Multiple developers share a single knowledge store. Each developer runs `knowledge-daemon` locally to upload their sessions. A single `knowledge-server` instance (on a dedicated server, CI machine, or any always-on host) does the consolidation.
 
 **Each developer's machine:**
-1. Install knowledge-server (daemon only — or full install with `DAEMON_AUTO_SPAWN=false`)
+1. Install `knowledge-daemon` (or full `knowledge-server` install with `DAEMON_AUTO_SPAWN=false`)
 2. Point `config.jsonc` at the shared Postgres:
    ```jsonc
    { "stores": [{ "id": "main", "kind": "postgres", "uri": "postgres://...", "writable": true }] }
