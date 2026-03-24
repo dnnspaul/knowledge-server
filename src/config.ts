@@ -57,7 +57,7 @@ export const DEFAULT_RECONSOLIDATION_THRESHOLD = 0.78;
 /** Lower bound of the contradiction scan band. */
 export const DEFAULT_CONTRADICTION_MIN_SIMILARITY = 0.4;
 /** Minimum raw cosine similarity to activate an entry. */
-export const DEFAULT_ACTIVATION_SIMILARITY_THRESHOLD = 0.3;
+export const DEFAULT_ACTIVATION_SIMILARITY_THRESHOLD = 0.42;
 /**
  * Cosine similarity threshold for assigning an entry to an existing cluster
  * during greedy clustering. Below this threshold a new cluster is started.
