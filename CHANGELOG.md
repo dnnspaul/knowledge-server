@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.2](https://github.com/MAnders333/knowledge-server/compare/v3.4.1...v3.4.2) (2026-03-24)
+
+
+### Bug Fixes
+
+* **uploader:** split getProcessedEpisodeRanges from getUploadedEpisodeRanges ([c0093cf](https://github.com/MAnders333/knowledge-server/commit/c0093cf8e4f205dfd34957efb1c06a49a75e4911))
+
 ## [3.4.1](https://github.com/MAnders333/knowledge-server/compare/v3.4.0...v3.4.1) (2026-03-24)
 
 
