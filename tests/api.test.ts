@@ -692,7 +692,16 @@ describe("HTTP API", () => {
 			// counterpart in db2 during listing, but the relation+entry in db1 points
 			// to an ID that entryStore (db) no longer contains.
 			const mockConsolidation = {
-				consolidate: async () => ({}),
+				consolidate: async () => ({
+					sessionsProcessed: 0,
+					segmentsProcessed: 0,
+					entriesCreated: 0,
+					entriesUpdated: 0,
+					entriesArchived: 0,
+					conflictsDetected: 0,
+					conflictsResolved: 0,
+					duration: 0,
+				}),
 				get isConsolidating() {
 					return false;
 				},
