@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.1](https://github.com/MAnders333/knowledge-server/compare/v3.4.0...v3.4.1) (2026-03-24)
+
+
+### Bug Fixes
+
+* **daemon:** drain on any upload, not just full batches ([245da37](https://github.com/MAnders333/knowledge-server/commit/245da372b4f1e5693f6d15d61e42a308a4ea7229))
+
 ## [3.4.0](https://github.com/MAnders333/knowledge-server/compare/v3.3.0...v3.4.0) (2026-03-24)
 
 
