@@ -324,6 +324,7 @@ Run \`knowledge-server help-advanced\` for additional commands.
 		adminTokenIsStable,
 		registry.unavailableStoreIds,
 		registry.readStores(),
+		registry.writableStores(),
 	);
 
 	// port/host/daemonAutoSpawn come from the registry (config.jsonc with env var override)

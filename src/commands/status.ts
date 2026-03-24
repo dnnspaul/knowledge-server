@@ -34,10 +34,30 @@ export async function runStatus(pidPath: string): Promise<void> {
 	}
 
 	const registry = await StoreRegistry.create();
-	const db = registry.writableStore();
 	const { serverStateDb } = registry;
 	try {
-		const stats = await db.getStats();
+		// Fan out stats across all readable stores and sum counts.
+		const allStats = await Promise.all(
+			registry.readStores().map((s) => s.getStats()),
+		);
+		const stats = allStats.reduce(
+			(acc, s) => ({
+				total: acc.total + s.total,
+				active: acc.active + s.active,
+				superseded: acc.superseded + (s.superseded ?? 0),
+				archived: acc.archived + (s.archived ?? 0),
+				conflicted: acc.conflicted + (s.conflicted ?? 0),
+				tombstoned: (acc.tombstoned ?? 0) + (s.tombstoned ?? 0),
+			}),
+			{
+				total: 0,
+				active: 0,
+				superseded: 0,
+				archived: 0,
+				conflicted: 0,
+				tombstoned: 0,
+			},
+		);
 		const state = await serverStateDb.getConsolidationState();
 
 		// Count pending sessions directly from state.db — avoids constructing

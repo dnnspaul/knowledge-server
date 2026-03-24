@@ -226,8 +226,8 @@ export class Reconsolidator {
 				// and resets last_accessed_at so decay restarts from now.
 				// We use reinforceObservation rather than recordAccess — this is not a retrieval
 				// event; it's confirmation that the knowledge is still true.
-			// existingDb — nearestEntry lives in whichever store entriesMap was loaded from.
-			await existingDb.reinforceObservation(nearestEntry.id);
+				// existingDb — nearestEntry lives in whichever store entriesMap was loaded from.
+				await existingDb.reinforceObservation(nearestEntry.id);
 				logger.log(
 					`[${logPrefix}] Keep existing (reinforced): ${JSON.stringify(nearestEntry.content)}`,
 				);
@@ -257,8 +257,12 @@ export class Reconsolidator {
 						decision.topics ?? [],
 					),
 				);
-			// existingDb — nearestEntry lives in whichever store entriesMap was loaded from.
-			await existingDb.mergeEntry(nearestEntry.id, mergeUpdates, freshEmbedding);
+				// existingDb — nearestEntry lives in whichever store entriesMap was loaded from.
+				await existingDb.mergeEntry(
+					nearestEntry.id,
+					mergeUpdates,
+					freshEmbedding,
+				);
 				logger.log(
 					`[${logPrefix}] ${decision.action === "update" ? "Updated" : "Replaced"}: ${JSON.stringify(nearestEntry.content)} → ${JSON.stringify(decision.content)}`,
 				);
@@ -632,11 +636,11 @@ export class Reconsolidator {
 								);
 							},
 						},
-					undefined, // no sessionTimestamp — synthesized entries stamped at now
-					synthEmbedding,
-					"synthesis", // logPrefix — keeps synthesis reconsolidation out of [consolidation] logs
-					db, // targetDb — new synthesized entries land in the store being synthesized
-					db, // mergeDb — existing entries also live in this store (entriesMap loaded from db)
+						undefined, // no sessionTimestamp — synthesized entries stamped at now
+						synthEmbedding,
+						"synthesis", // logPrefix — keeps synthesis reconsolidation out of [consolidation] logs
+						db, // targetDb — new synthesized entries land in the store being synthesized
+						db, // mergeDb — existing entries also live in this store (entriesMap loaded from db)
 					);
 				} catch (err) {
 					// Log and skip this result — do NOT rethrow.

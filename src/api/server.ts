@@ -70,6 +70,12 @@ export function createApp(
 	 * stores are visible via the API.
 	 */
 	readDbs: IKnowledgeStore[] = [db],
+	/**
+	 * All writable stores for /reinitialize fan-out.
+	 * Defaults to [db]. Pass registry.writableStores() in multi-store setups
+	 * so all domain stores are wiped atomically on reinitialize.
+	 */
+	writableDbs: IKnowledgeStore[] = [db],
 ): Hono {
 	const app = new Hono();
 	// Reuse ActivationEngine's EmbeddingClient to avoid a second model connection.
@@ -318,7 +324,13 @@ export function createApp(
 				);
 			}
 
-			await db.reinitialize();
+			// Fan out reinitialize to all writable stores so secondary domain stores
+			// are wiped together with the primary. Without this, post-reinitialize
+			// consolidation re-inserts everything from pending_episodes while secondary
+			// stores retain their old entries, producing duplicates.
+			for (const store of writableDbs) {
+				await store.reinitialize();
+			}
 			await serverStateDb.reinitialize();
 
 			logger.log("[reinitialize] Knowledge DB wiped and cursor reset.");

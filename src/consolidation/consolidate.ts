@@ -61,8 +61,8 @@ export class ConsolidationEngine {
 	 * Stores that received inserts or content-changing updates during the most
 	 * recent consolidation run. Accumulated across all batches in a drain loop.
 	 * Reset at the start of each new consolidation run (_consolidate resets it).
-	 * Reserved for the follow-up refactor that will scope runSynthesis() to only
-	 * touched stores — currently runSynthesis() always operates on this.db.
+	 * Used by runSynthesis() to limit synthesis to stores that had new knowledge.
+	 * runSynthesis() iterates this set ∪ {this.db} and calls runKBSynthesis() per store.
 	 *
 	 * Invariant: if _consolidate() throws mid-run, this set is partial (only stores
 	 * from completed readers). The exception propagates to the caller who must not

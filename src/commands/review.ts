@@ -44,36 +44,50 @@ export async function runReview(args: string[]): Promise<void> {
 
 	const registry = await StoreRegistry.create();
 	const db = registry.writableStore();
+	const readDbs = registry.readStores();
 	// Share one EmbeddingClient instance for the lifetime of the command so
 	// re-embeds on edit reuse the same config/connection as the rest of the run.
 	const embedder = new EmbeddingClient();
-	const service = new KnowledgeService(db, embedder);
+	// Pre-build a service per store so writes (delete/archive/edit) target the
+	// store where the entry actually lives, not always the primary store.
+	const serviceByStore = new Map(
+		readDbs.map((s) => [s, new KnowledgeService(s, embedder)]),
+	);
 
 	// Hoisted outside try so finally can always call rl?.close() — even on the
 	// early-return path (toReview.length === 0) where rl is never assigned.
 	let rl: ReturnType<typeof readline.createInterface> | undefined;
 
 	try {
-		// Gather entries to review
-		const toReview: Array<{ entry: KnowledgeEntry; reason: string }> = [];
+		// Gather entries to review — fan out across all readable stores.
+		const toReview: Array<{
+			entry: KnowledgeEntry;
+			reason: string;
+			store: import("../db/index.js").IKnowledgeStore;
+		}> = [];
 
 		if (filter === "conflicted" || filter === "all") {
-			const conflicted = await db.getEntriesByStatus("conflicted");
-			for (const e of conflicted) {
-				toReview.push({ entry: e, reason: "conflicted" });
+			for (const store of readDbs) {
+				const conflicted = await store.getEntriesByStatus("conflicted");
+				for (const e of conflicted) {
+					toReview.push({ entry: e, reason: "conflicted", store });
+				}
 			}
 		}
 
 		if (filter === "stale" || filter === "all") {
-			const active = await db.getActiveEntries();
-			const stale = active
-				.filter((e) => e.strength < REVIEW_STALE_STRENGTH_THRESHOLD)
-				.sort((a, b) => a.strength - b.strength);
-			for (const e of stale) {
-				toReview.push({
-					entry: e,
-					reason: `stale (strength ${e.strength.toFixed(3)})`,
-				});
+			for (const store of readDbs) {
+				const active = await store.getActiveEntries();
+				const stale = active
+					.filter((e) => e.strength < REVIEW_STALE_STRENGTH_THRESHOLD)
+					.sort((a, b) => a.strength - b.strength);
+				for (const e of stale) {
+					toReview.push({
+						entry: e,
+						reason: `stale (strength ${e.strength.toFixed(3)})`,
+						store,
+					});
+				}
 			}
 		}
 
@@ -107,7 +121,9 @@ export async function runReview(args: string[]): Promise<void> {
 		let edited = 0;
 
 		for (let i = 0; i < toReview.length; i++) {
-			const { entry, reason } = toReview[i];
+			const { entry, reason, store: entryStore } = toReview[i];
+			const entryService =
+				serviceByStore.get(entryStore) ?? serviceByStore.get(db)!;
 
 			printEntry(entry, reason, i + 1, toReview.length);
 
@@ -127,7 +143,7 @@ export async function runReview(args: string[]): Promise<void> {
 					case "delete": {
 						const deleteConfirm = await prompt("  Delete this entry? (y/N) ");
 						if (deleteConfirm.trim().toLowerCase() === "y") {
-							await db.deleteEntry(entry.id);
+							await entryStore.deleteEntry(entry.id);
 							console.log("  Deleted.\n");
 							deleted++;
 						} else {
@@ -140,8 +156,8 @@ export async function runReview(args: string[]): Promise<void> {
 
 					case "a":
 					case "archive":
-						// status is non-semantic — service passes it through without re-embedding.
-						await service.updateEntry(entry.id, { status: "archived" });
+						// status is non-semantic — entryService passes it through without re-embedding.
+						await entryService.updateEntry(entry.id, { status: "archived" });
 						console.log("  Archived.\n");
 						archived++;
 						handled = true;
@@ -156,8 +172,8 @@ export async function runReview(args: string[]): Promise<void> {
 							"  New content (blank to cancel): ",
 						);
 						if (newContent.trim()) {
-							// service.updateEntry auto-re-embeds when content changes.
-							await service.updateEntry(entry.id, {
+							// entryService.updateEntry auto-re-embeds when content changes.
+							await entryService.updateEntry(entry.id, {
 								content: newContent.trim(),
 							});
 							console.log("  Updated.\n");

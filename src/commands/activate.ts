@@ -17,6 +17,7 @@ export async function runActivate(query: string): Promise<void> {
 	const activation = new ActivationEngine(
 		registry.writableStore(),
 		registry.readStores(),
+		registry.writableStores(),
 	);
 
 	try {
