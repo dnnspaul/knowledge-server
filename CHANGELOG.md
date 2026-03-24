@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.0](https://github.com/MAnders333/knowledge-server/compare/v3.3.0...v3.4.0) (2026-03-24)
+
+
+### Features
+
+* **daemon:** concurrent source uploads; drain backlog without waiting ([7317181](https://github.com/MAnders333/knowledge-server/commit/731718187ce5aa5a3f27e4d923bb65e3928570f8))
+
 ## [3.3.0](https://github.com/MAnders333/knowledge-server/compare/v3.2.0...v3.3.0) (2026-03-24)
 
 
