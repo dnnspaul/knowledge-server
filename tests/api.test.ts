@@ -611,7 +611,7 @@ describe("HTTP API", () => {
 		expect(res.status).toBe(400);
 	});
 
-	it("POST /entries/:id/resolve returns 422 when counterpart is in a different store", async () => {
+	it("POST /entries/:id/resolve returns 422 and leaves entry untouched when counterpart is in a different store", async () => {
 		// Simulate a cross-store conflict: entry + contradicts relation in primary db,
 		// counterpart ONLY in a secondary store. The resolve handler finds the entry in
 		// db (entryStore), looks up the relation pointing to "counterpart-other-store",
@@ -671,22 +671,41 @@ describe("HTTP API", () => {
 			// store boundaries and writes a relation linking entries from different stores.
 			const rawDb = (db as unknown as { db: import("bun:sqlite").Database }).db;
 			rawDb.exec("PRAGMA foreign_keys = OFF");
-			rawDb
-				.prepare(
-					`INSERT INTO knowledge_relation (id, source_id, target_id, type, created_at)
-					 VALUES (?, ?, ?, ?, ?)`,
-				)
-				.run("cross-store-rel", "cross-store-entry", "counterpart-other-store", "contradicts", now);
-			rawDb.exec("PRAGMA foreign_keys = ON");
+			try {
+				rawDb
+					.prepare(
+						`INSERT INTO knowledge_relation (id, source_id, target_id, type, created_at)
+						 VALUES (?, ?, ?, ?, ?)`,
+					)
+					.run(
+						"cross-store-rel",
+						"cross-store-entry",
+						"counterpart-other-store",
+						"contradicts",
+						now,
+					);
+			} finally {
+				rawDb.exec("PRAGMA foreign_keys = ON");
+			}
 
 			// Build an app that reads from both stores — so the API can find the
 			// counterpart in db2 during listing, but the relation+entry in db1 points
 			// to an ID that entryStore (db) no longer contains.
+			const mockConsolidation = {
+				consolidate: async () => ({}),
+				get isConsolidating() {
+					return false;
+				},
+				tryLock: () => true,
+				unlock: () => {},
+				close: () => {},
+			} as unknown as ConsolidationEngine;
+
 			const crossStoreApp = createApp(
 				db,
 				serverStateDb,
 				activation,
-				{ consolidate: async () => ({}), get isConsolidating() { return false; }, tryLock: () => true, unlock: () => {}, close: () => {} } as unknown as ConsolidationEngine,
+				mockConsolidation,
 				TEST_ADMIN_TOKEN,
 				false,
 				new Set(),
@@ -719,7 +738,7 @@ describe("HTTP API", () => {
 			const checkData = await check.json();
 			expect(checkData.entry.status).toBe("conflicted");
 		} finally {
-			await db2.close();
+			await db2?.close();
 		}
 	});
 });
