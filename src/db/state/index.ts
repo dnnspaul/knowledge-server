@@ -232,13 +232,22 @@ export class ServerStateDB implements IServerStateDB {
 	): Promise<Map<string, ProcessedRange[]>> {
 		if (sessionIds.length === 0) return new Map();
 
+		// UNION with pending_episodes so the reader's range overlap check covers
+		// both already-consolidated episodes and episodes staged but not yet
+		// consolidated. This eliminates the need for a separate pendingSet check
+		// in the uploader and fixes the time-filter bug (pending_episodes rows
+		// are excluded by session_id scope, not by afterMaxMessageTime).
 		const rows = this.db
 			.prepare(
 				`SELECT source, session_id, start_message_id, end_message_id
          FROM consolidated_episode
+         WHERE session_id IN (SELECT value FROM json_each(?))
+         UNION
+         SELECT source, session_id, start_message_id, end_message_id
+         FROM pending_episodes
          WHERE session_id IN (SELECT value FROM json_each(?))`,
 			)
-			.all(JSON.stringify(sessionIds)) as Array<{
+			.all(JSON.stringify(sessionIds), JSON.stringify(sessionIds)) as Array<{
 			source: string;
 			session_id: string;
 			start_message_id: string;

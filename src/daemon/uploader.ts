@@ -117,34 +117,19 @@ export class EpisodeUploader {
 
 		const candidateIds = candidateSessions.map((s) => s.id);
 
-		// Load already-uploaded/consolidated episodes to avoid re-uploading.
+		// getProcessedEpisodeRanges returns both consolidated and pending (staged)
+		// episode ranges, so the reader's overlap check covers both cases.
+		// No separate pendingSet check needed.
 		const processedRanges =
 			await this.serverStateDb.getProcessedEpisodeRanges(candidateIds);
 
-		// Also check what's already pending (uploaded but not yet consolidated).
-		const alreadyPending = await this.serverStateDb.getPendingEpisodes(
-			cursor.lastMessageTimeCreated,
-		);
-		const pendingSet = new Set(
-			alreadyPending
-				.filter((ep) => ep.source === reader.source)
-				.map((ep) => `${ep.sessionId}|${ep.startMessageId}|${ep.endMessageId}`),
-		);
-
-		let episodes: Episode[];
+		let newEpisodes: Episode[];
 		try {
-			episodes = reader.getNewEpisodes(candidateIds, processedRanges);
+			newEpisodes = reader.getNewEpisodes(candidateIds, processedRanges);
 		} catch (err) {
 			logger.error(`[daemon/${reader.source}] getNewEpisodes failed:`, err);
 			return { episodes: 0, sessions: 0 };
 		}
-
-		const newEpisodes = episodes.filter(
-			(ep) =>
-				!pendingSet.has(
-					`${ep.sessionId}|${ep.startMessageId}|${ep.endMessageId}`,
-				),
-		);
 
 		let uploadedCount = 0;
 		const uploadedSessionIds = new Set<string>();

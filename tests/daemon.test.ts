@@ -228,50 +228,45 @@ describe("EpisodeUploader.upload", () => {
 		expect(cursor.lastMessageTimeCreated).toBeGreaterThan(0);
 	});
 
-	it("does not re-upload already-pending episodes", async () => {
+	it("getProcessedEpisodeRanges includes pending_episodes so readers can skip already-staged ranges", async () => {
+		// Verifies that getProcessedEpisodeRanges returns ranges from pending_episodes,
+		// not just consolidated_episode. This is the mechanism that replaced the old
+		// pendingSet check in uploader.ts — readers use processedRanges for overlap
+		// detection, so pending rows must appear there.
 		const now = Date.now();
-		// Pre-insert the episode as already pending
 		await db.insertPendingEpisode(
 			makePendingEpisode({
 				id: "pre-existing",
 				source: "opencode",
 				userId: "alice",
-				sessionId: "session-1",
+				sessionId: "session-dedup",
 				startMessageId: "msg-a",
 				endMessageId: "msg-b",
 				maxMessageTime: now,
 			}),
 		);
 
-		const reader = makeMockReader(
+		const ranges = await db.getProcessedEpisodeRanges(["session-dedup"]);
+		const sessionRanges = ranges.get("session-dedup");
+		expect(sessionRanges).toBeDefined();
+		expect(sessionRanges).toHaveLength(1);
+		expect(sessionRanges![0].source).toBe("opencode");
+		expect(sessionRanges![0].startMessageId).toBe("msg-a");
+		expect(sessionRanges![0].endMessageId).toBe("msg-b");
+
+		// Confirm it still returns consolidated_episode ranges too
+		await db.recordEpisode(
 			"opencode",
-			[{ id: "session-1", maxMessageTime: now }],
-			[
-				{
-					source: "opencode",
-					sessionId: "session-1",
-					startMessageId: "msg-a",
-					endMessageId: "msg-b",
-					sessionTitle: "Test",
-					projectName: "project",
-					directory: "/home/alice/work",
-					timeCreated: now - 1000,
-					maxMessageTime: now,
-					content: "session content",
-					contentType: "messages",
-					approxTokens: 50,
-				},
-			],
+			"session-consolidated",
+			"msg-x",
+			"msg-y",
+			"messages",
+			1,
 		);
-
-		const uploader = new EpisodeUploader([reader], db, daemonDb, "alice");
-		const result = await uploader.upload();
-
-		// Should not upload again — already in pending_episodes
-		expect(result.episodesUploaded).toBe(0);
-		const pending = await db.getPendingEpisodes(0);
-		expect(pending).toHaveLength(1);
-		expect(pending[0].id).toBe("pre-existing");
+		const ranges2 = await db.getProcessedEpisodeRanges([
+			"session-consolidated",
+		]);
+		expect(ranges2.get("session-consolidated")).toHaveLength(1);
 	});
 
 	it("skips a failed reader and continues with others", async () => {
