@@ -387,9 +387,9 @@ export function createApp(
 			(acc, s) => ({
 				total: acc.total + s.total,
 				active: acc.active + s.active,
-				superseded: acc.superseded + s.superseded,
-				archived: acc.archived + s.archived,
-				conflicted: acc.conflicted + s.conflicted,
+				superseded: acc.superseded + (s.superseded ?? 0),
+				archived: acc.archived + (s.archived ?? 0),
+				conflicted: acc.conflicted + (s.conflicted ?? 0),
 				tombstoned: acc.tombstoned + (s.tombstoned ?? 0),
 			}),
 			{

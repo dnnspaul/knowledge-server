@@ -122,8 +122,12 @@ export async function runReview(args: string[]): Promise<void> {
 
 		for (let i = 0; i < toReview.length; i++) {
 			const { entry, reason, store: entryStore } = toReview[i];
-			const entryService =
-				serviceByStore.get(entryStore) ?? serviceByStore.get(db)!;
+			const entryService = serviceByStore.get(entryStore);
+			if (!entryService) {
+				throw new Error(
+					`[review] No service for entry store — this is a bug (store not in readDbs)`,
+				);
+			}
 
 			printEntry(entry, reason, i + 1, toReview.length);
 
