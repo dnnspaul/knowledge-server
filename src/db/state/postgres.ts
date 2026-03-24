@@ -253,7 +253,7 @@ export class PostgresServerStateDB implements IServerStateDB {
 		if (sessionIds.length === 0) return new Map();
 		await this.initialize();
 		const rows = await this.sql`
-			SELECT source, session_id, start_message_id, end_message_id, content_type
+			SELECT source, session_id, start_message_id, end_message_id
 			FROM consolidated_episode
 			WHERE session_id = ANY(${this.sql.array(sessionIds)})
 		`;
