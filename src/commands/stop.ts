@@ -41,7 +41,7 @@ export async function runStop(pidPath: string): Promise<void> {
 		} catch (e) {
 			// EPERM = process exists but we can't signal it (still alive).
 			// ESRCH = no such process (truly dead).
-			return (e as NodeJS.ErrnoException).code === "EPERM";
+			return (e as { code?: string }).code === "EPERM";
 		}
 	})();
 
@@ -58,7 +58,7 @@ export async function runStop(pidPath: string): Promise<void> {
 	try {
 		process.kill(pid, "SIGTERM");
 	} catch (err: unknown) {
-		const code = (err as NodeJS.ErrnoException).code;
+		const code = (err as { code?: string }).code;
 		if (code === "ESRCH") {
 			// Raced — process exited between the liveness check and the kill.
 			console.log("Server already stopped.");
@@ -95,7 +95,7 @@ export async function runStop(pidPath: string): Promise<void> {
 				noticePrinted = true;
 			}
 		} catch (e) {
-			if ((e as NodeJS.ErrnoException).code === "EPERM") continue; // alive, no permission
+			if ((e as { code?: string }).code === "EPERM") continue; // alive, no permission
 			// ESRCH or other — process is gone.
 			console.log("Knowledge server stopped.");
 			// The server cleans up its own PID file on graceful shutdown.

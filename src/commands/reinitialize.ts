@@ -90,7 +90,7 @@ export async function runReinitialize(args: string[]): Promise<void> {
 			try {
 				process.kill(pid, 0);
 			} catch (e: unknown) {
-				const code = (e as NodeJS.ErrnoException).code;
+				const code = (e as { code?: string }).code;
 				alive = code === "EPERM"; // EPERM = exists, no permission; ESRCH = dead
 			}
 			if (alive) {
