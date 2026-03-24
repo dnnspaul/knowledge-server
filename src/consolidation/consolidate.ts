@@ -640,6 +640,16 @@ export class ConsolidationEngine {
 		// checked in a previous consolidation run).
 		const changedIds = new Set<string>();
 
+		// Contradiction scanning is strictly within-store: entries from different domain
+		// stores should never be compared for contradictions. A work entry and a personal
+		// entry may legitimately hold different values for the same topic by design.
+		//
+		// This set tracks only the IDs that landed in chunkStore (the chunk's default
+		// domain store). Entries rerouted to a different store via per-entry LLM domain
+		// override are excluded — they'll be scanned within their own store on a future
+		// chunk that targets that store.
+		const contradictionCandidates = new Set<string>();
+
 		// Track which stores received inserts or content-changing updates this chunk.
 		// Used after all chunks complete to run synthesis only on touched stores.
 		// onKeep (reinforcement only) does not count — it doesn't affect cluster ripeness.
@@ -676,6 +686,12 @@ export class ConsolidationEngine {
 							chunkCreated++;
 							changedIds.add(inserted.id);
 							touchedStores.add(entryTargetStore ?? this.db);
+							// Only include in contradiction scan if the entry landed in chunkStore.
+							// Entries rerouted to a different domain store are excluded — cross-store
+							// contradictions are intentional (domain isolation by design).
+							if ((entryTargetStore ?? chunkStore) === chunkStore) {
+								contradictionCandidates.add(inserted.id);
+							}
 							logger.log(
 								// type is a validated KnowledgeType enum — bare interpolation is safe.
 								// content is LLM-sourced — JSON.stringify escapes injected newlines/tokens.
@@ -693,9 +709,10 @@ export class ConsolidationEngine {
 						onUpdate: (id, updated, freshEmbedding) => {
 							chunkUpdated++;
 							changedIds.add(id);
-							// Updates go to chunkStore (via mergeDb) — existing entries live in
-							// whichever store entriesMap was loaded from (the chunk's domain store).
+							// Updates always go to chunkStore (via mergeDb) — existing entries live
+							// in the chunk's domain store. Always eligible for contradiction scan.
 							touchedStores.add(chunkStore);
+							contradictionCandidates.add(id);
 							const existing = entriesMap.get(id);
 							const contentForLog = updated.content ?? existing?.content ?? "";
 							const typeForLog = updated.type ?? existing?.type ?? "?";
@@ -735,15 +752,17 @@ export class ConsolidationEngine {
 			}
 		}
 
-		// Post-extraction contradiction scan.
-		// Use the chunk's resolved domain store so that both candidate queries and
-		// resolution writes target the same store the entries were written to.
-		// Falls back to this.db in single-store mode (no domain routing).
-		const contradictionDb = domainResolution?.store ?? this.db;
+		// Post-extraction contradiction scan — within-store only.
+		// Contradiction detection is intentionally scoped to chunkStore: entries from
+		// different domain stores should never be compared (a work entry and a personal
+		// entry may legitimately hold different views on the same topic by design).
+		// contradictionCandidates contains only IDs that landed in chunkStore;
+		// entries rerouted by per-entry LLM domain override are excluded.
+		const contradictionDb = chunkStore;
 		const chunkContradictions = await this.contradictionScanner.scan(
 			contradictionDb,
 			entriesMap,
-			changedIds,
+			contradictionCandidates,
 		);
 
 		// Record each episode in this chunk as processed using its original source.
