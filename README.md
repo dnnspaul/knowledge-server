@@ -248,6 +248,63 @@ Env vars take precedence over the config file for all fields.
 knowledge-server migrate-config
 ```
 
+### Domains and projects (multi-store routing)
+
+By default, all knowledge is written to the single writable store. If you have multiple writable stores and want to route knowledge to the right one automatically, configure `domains` and `projects`.
+
+**Domains** define logical buckets for knowledge. Each domain names a writable store that receives its entries:
+
+```jsonc
+"domains": [
+  {
+    "id": "work",          // unique identifier — lowercase alphanumeric, hyphens, underscores
+    "description": "Work-related knowledge: professional projects, team decisions, technical choices.",
+    "store": "work"        // must match a writable store id
+  },
+  {
+    "id": "personal",
+    "description": "Personal projects, private workflows, and anything outside of professional work.",
+    "store": "personal"    // each domain can point to a different store
+  }
+]
+```
+
+The `description` is injected into the LLM extraction prompt. Write it as a brief characterisation of what belongs here — the LLM uses it to classify individual entries within a session, and may override the default domain for entries that clearly fit elsewhere (e.g. a personal preference found while working in a work project).
+
+**Projects** map directory path prefixes to a default domain. When a session was recorded in that directory, entries from that session are routed to the corresponding domain by default:
+
+```jsonc
+"projects": [
+  { "path": "~/Documents/priv",        "default_domain": "personal" },
+  { "path": "~/Documents/work-repo",   "default_domain": "work" }
+]
+```
+
+- `path` — absolute path prefix; `~` is expanded to the home directory at parse time.
+- `default_domain` — domain id to use for sessions whose working directory matches this prefix. The **longest matching prefix wins** when paths overlap.
+- Sessions that match no project entry fall back to `domains[0]` (the first domain in the list).
+
+**Full two-store example:**
+
+```jsonc
+{
+  "stores": [
+    { "id": "work",     "kind": "postgres", "uri": "postgres://user:pass@host:5432/knowledge",  "writable": true },
+    { "id": "personal", "kind": "sqlite",   "path": "~/.local/share/knowledge-server/personal.db", "writable": true }
+  ],
+  "domains": [
+    { "id": "work",     "description": "Professional projects and team knowledge.", "store": "work" },
+    { "id": "personal", "description": "Personal projects and private notes.",      "store": "personal" }
+  ],
+  "projects": [
+    { "path": "~/Documents/work",    "default_domain": "work" },
+    { "path": "~/Documents/private", "default_domain": "personal" }
+  ]
+}
+```
+
+Activation reads fan out across **all** configured stores regardless of domain, so a query always searches the full knowledge base.
+
 ### LLM credentials (`.env`)
 
 **Option A — Direct API key (most common):**
