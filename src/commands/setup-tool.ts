@@ -456,6 +456,8 @@ function setupOpenCode(): void {
 		? `bun run ${join(projectDir, "src", "index.ts")}`
 		: "knowledge-server";
 
+	maybeSetupDaemon();
+
 	console.log(`
 Start the knowledge server before using OpenCode:
   ${startHint}
@@ -677,6 +679,8 @@ function setupClaudeCode(): void {
 		? `bun run ${join(getProjectDir(), "src", "index.ts")}`
 		: "knowledge-server";
 
+	maybeSetupDaemon();
+
 	console.log(`
 Start the knowledge server before using Claude Code:
   ${startHint}
@@ -793,6 +797,8 @@ export function setupCursor(): void {
 		? `bun run ${join(getProjectDir(), "src", "index.ts")}`
 		: "knowledge-server";
 
+	maybeSetupDaemon();
+
 	console.log(`
 Start the knowledge server before using Cursor:
   ${startHint}
@@ -890,6 +896,8 @@ env = { KNOWLEDGE_HOST = "${resolvedHost}", KNOWLEDGE_PORT = "${resolvedPort}" }
 	const startHint = isSourceInstall()
 		? `bun run ${join(getProjectDir(), "src", "index.ts")}`
 		: "knowledge-server";
+
+	maybeSetupDaemon();
 
 	console.log(`
 Start the knowledge server before using Codex:
@@ -1017,7 +1025,63 @@ function forceSymlink(src: string, dst: string): void {
 	symlinkSync(src, dst);
 }
 
-// ── Entry point ────────────────────────────────────────────────────────────────
+// ── Daemon auto-registration ──────────────────────────────────────────────────
+
+/**
+ * Called at the end of each tool setup (opencode, claude-code, cursor, codex).
+ *
+ * If the daemon is already registered as a system service, prints a quiet
+ * confirmation and returns — setup is idempotent.
+ *
+ * If not yet registered, calls setupDaemon() to register it. This ensures the
+ * daemon survives reboots on the developer machine without requiring a separate
+ * manual step.
+ *
+ * Rationale: setup-tool is always run on a developer machine (the machine that
+ * produces AI tool sessions). The daemon always belongs on that machine — it
+ * reads local session files and writes to stateDb (local SQLite or remote
+ * Postgres depending on config). Registration is safe regardless of stateDb
+ * config because:
+ *   - SQLite (default): stateDb is always reachable, daemon starts successfully.
+ *   - Postgres: if unreachable at startup, launchd/systemd crash-loops and
+ *     retries — standard service behaviour for infrastructure dependencies.
+ */
+function maybeSetupDaemon(): void {
+	const platform = process.platform;
+	const home = homedir();
+
+	let serviceFilePath: string;
+	if (platform === "darwin") {
+		serviceFilePath = join(
+			home,
+			"Library",
+			"LaunchAgents",
+			"com.knowledge-server.daemon.plist",
+		);
+	} else if (platform === "linux") {
+		serviceFilePath = join(
+			home,
+			".config",
+			"systemd",
+			"user",
+			"knowledge-daemon.service",
+		);
+	} else {
+		// Unsupported platform — skip silently (setupDaemon will warn if called directly).
+		return;
+	}
+
+	if (existsSync(serviceFilePath)) {
+		console.log(
+			"  ✓ Daemon already registered as background service — skipping re-registration.",
+		);
+		return;
+	}
+
+	console.log("");
+	console.log("Registering daemon as background service...");
+	setupDaemon();
+}
 
 // ── Daemon service registration ───────────────────────────────────────────────
 
