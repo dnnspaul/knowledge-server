@@ -937,24 +937,29 @@ export class ConsolidationEngine {
 		});
 
 		// ── Phase C: batch decideMerge for all candidates in one LLM call ──────────
-		const mergeStart = Date.now();
-		const mergeDecisions = await this.llm.batchDecideMerge(
-			reclassifiedCandidates.map((c) => ({
-				existing: {
-					content: c.nearestEntry!.content,
-					type: c.nearestEntry!.type,
-					topics: c.nearestEntry!.topics,
-					confidence: c.nearestEntry!.confidence,
-				},
-				extracted: {
-					content: c.entry.content,
-					type: c.entry.type,
-					topics: c.entry.topics || [],
-					confidence: c.entry.confidence,
-				},
-			})),
-		);
+		// Skip entirely when there are no candidates — avoids an unnecessary LLM call
+		// and makes the "novel path, no LLM call" invariant observable in tests.
+		const mergeDecisions: import("./llm.js").MergeDecision[] = [];
 		if (reclassifiedCandidates.length > 0) {
+			const mergeStart = Date.now();
+			mergeDecisions.push(
+				...(await this.llm.batchDecideMerge(
+					reclassifiedCandidates.map((c) => ({
+						existing: {
+							content: c.nearestEntry!.content,
+							type: c.nearestEntry!.type,
+							topics: c.nearestEntry!.topics,
+							confidence: c.nearestEntry!.confidence,
+						},
+						extracted: {
+							content: c.entry.content,
+							type: c.entry.type,
+							topics: c.entry.topics || [],
+							confidence: c.entry.confidence,
+						},
+					})),
+				)),
+			);
 			logger.log(
 				`[consolidation/${source}] batchDecideMerge: ${reclassifiedCandidates.length} candidates → ${((Date.now() - mergeStart) / 1000).toFixed(1)}s`,
 			);
