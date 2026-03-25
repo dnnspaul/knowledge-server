@@ -671,7 +671,13 @@ export class Reconsolidator {
 	 * old sessions start with the correct decay already applied — an entry from a
 	 * session 30 days ago will have 30 days of decay, not 0.
 	 */
-	private async insertNewEntry(
+	/**
+	 * Insert a new knowledge entry directly (no similarity check, no LLM call).
+	 * Called from consolidateExtractedToStore for entries classified as novel
+	 * (similarity below reconsolidationThreshold) after batch embedding.
+	 * Also used internally by reconsolidate() and runKBSynthesis().
+	 */
+	async insertNewEntry(
 		entry: ExtractedKnowledge,
 		sessionIds: string[],
 		embedding?: number[],

@@ -398,6 +398,134 @@ If there is nothing new worth extracting, return an empty array: []`;
 	}
 
 	/**
+	 * Batch version of decideMerge: evaluate all candidate pairs in a single LLM call.
+	 *
+	 * Each element of `pairs` is an (existing, extracted) pair. Returns one MergeDecision
+	 * per pair in the same order. Falls back to `{ action: "insert" }` for any pair
+	 * that cannot be parsed — safe default that never loses data.
+	 *
+	 * This replaces N sequential decideMerge() calls with 1 call, which is the primary
+	 * performance bottleneck in the consolidation pipeline for sessions with many
+	 * near-duplicate candidates.
+	 */
+	async batchDecideMerge(
+		pairs: Array<{
+			existing: {
+				content: string;
+				type: string;
+				topics: string[];
+				confidence: number;
+			};
+			extracted: {
+				content: string;
+				type: string;
+				topics: string[];
+				confidence: number;
+			};
+		}>,
+	): Promise<MergeDecision[]> {
+		if (pairs.length === 0) return [];
+		if (pairs.length === 1) {
+			// Single pair — use the targeted single-pair prompt for better quality.
+			return [await this.decideMerge(pairs[0].existing, pairs[0].extracted)];
+		}
+
+		const systemPrompt = `You are a knowledge memory manager. For each numbered pair below, decide what to do with the NEW OBSERVATION given the EXISTING ENTRY:
+
+- "keep"    — The existing entry already captures this fully. Discard the new observation.
+- "update"  — The existing entry is partially correct but the new observation adds important detail, nuance, or correction. Merge into an improved version.
+- "replace" — The new observation clearly supersedes the existing entry (more general, more accurate, or corrects it).
+- "insert"  — Despite surface similarity, they capture genuinely distinct knowledge. Keep both.
+
+Rules:
+- Prefer "keep" when the new observation is just a restatement or minor rephrasing.
+- Prefer "update" when the new observation adds a specific detail, exception, or expanded context.
+- Prefer "replace" when the new observation generalizes the existing fact or corrects it.
+- Prefer "insert" only when they are genuinely about different things despite similar wording.
+
+For "update" or "replace", include the full improved content (incorporating both entries), the best type, topics array, and confidence.
+
+Respond ONLY with a JSON array with one decision object per pair, in the same order. No markdown, no explanation.`;
+
+		const pairsText = pairs
+			.map(
+				(p, i) => `PAIR ${i + 1}:
+EXISTING ENTRY:
+type: ${p.existing.type}
+topics: ${p.existing.topics.join(", ")}
+confidence: ${p.existing.confidence}
+content: <existing_content>${p.existing.content}</existing_content>
+
+NEW OBSERVATION:
+type: ${p.extracted.type}
+topics: ${p.extracted.topics.join(", ")}
+confidence: ${p.extracted.confidence}
+content: <new_content>${p.extracted.content}</new_content>`,
+			)
+			.join("\n\n---\n\n");
+
+		const userPrompt = `${pairsText}
+
+Return a JSON array with exactly ${pairs.length} elements, one per pair in order.
+Each element must be one of these exact shapes:
+
+{"action": "keep"}
+{"action": "insert"}
+{"action": "update", "content": "<merged content string>", "type": "fact|principle|pattern|decision|procedure", "topics": ["topic1", "topic2"], "confidence": 0.85}
+{"action": "replace", "content": "<replacement content string>", "type": "fact|principle|pattern|decision|procedure", "topics": ["topic1", "topic2"], "confidence": 0.85}
+
+Rules for the response array:
+- Element 1 = decision for PAIR 1, element 2 = decision for PAIR 2, etc.
+- "content", "type", "topics", "confidence" are REQUIRED for "update" and "replace" — omitting any of them is invalid.
+- "content" and "topics" must NOT be null or empty.
+- "confidence" must be a number between 0.0 and 1.0.
+- No extra fields, no markdown, no explanation outside the JSON array.`;
+
+		const response = await complete(
+			config.llm.mergeModel,
+			systemPrompt,
+			userPrompt,
+		);
+		const parsed = parseJSON<MergeDecision[]>(response, false);
+
+		if (!Array.isArray(parsed) || parsed.length !== pairs.length) {
+			logger.warn(
+				`[llm] batchDecideMerge parse failure (got ${Array.isArray(parsed) ? parsed.length : "non-array"}, expected ${pairs.length}) — defaulting all to insert:`,
+				response.slice(0, 200),
+			);
+			return pairs.map(() => ({ action: "insert" }) as MergeDecision);
+		}
+
+		return parsed.map((decision, i) => {
+			if (
+				!decision ||
+				!["keep", "update", "replace", "insert"].includes(decision.action)
+			) {
+				logger.warn(
+					`[llm] batchDecideMerge pair ${i + 1}: invalid action "${decision?.action}" — defaulting to insert`,
+				);
+				return { action: "insert" } as MergeDecision;
+			}
+			// For update/replace, validate required fields are present and non-empty.
+			if (decision.action === "update" || decision.action === "replace") {
+				if (
+					typeof decision.content !== "string" ||
+					!decision.content.trim() ||
+					typeof decision.type !== "string" ||
+					!Array.isArray(decision.topics) ||
+					typeof decision.confidence !== "number"
+				) {
+					logger.warn(
+						`[llm] batchDecideMerge pair ${i + 1}: ${decision.action} missing required fields (content/type/topics/confidence) — defaulting to insert`,
+					);
+					return { action: "insert" } as MergeDecision;
+				}
+			}
+			return decision;
+		});
+	}
+
+	/**
 	 * Focused reconsolidation decision for near-duplicate entries (sim ≥ reconsolidation threshold).
 	 * Uses the merge model (cheaper — this is essentially a classification task).
 	 *

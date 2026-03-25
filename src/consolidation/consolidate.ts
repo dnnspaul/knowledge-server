@@ -12,7 +12,10 @@ import type {
 import { ContradictionScanner } from "./contradiction.js";
 import { computeStrength } from "./decay.js";
 import { ConsolidationLLM, formatEpisodes } from "./llm.js";
+import { formatEmbeddingText } from "../activation/embeddings.js";
 import type { ExtractedKnowledge } from "./llm.js";
+import { cosineSimilarity } from "../activation/embeddings.js";
+import { clampKnowledgeType } from "../types.js";
 import { approxTokens } from "../daemon/readers/shared.js";
 import { Reconsolidator } from "./reconsolidate.js";
 
@@ -830,62 +833,172 @@ export class ConsolidationEngine {
 		// Track IDs written to this store — eligible for within-store contradiction scan.
 		const contradictionCandidates = new Set<string>();
 
-		for (const entry of entries) {
+		// ── Phase A: embed all entries and classify as novel vs candidate ──────────
+		// Embed all entries concurrently. Use individual embed() calls via Promise.all
+		// rather than embedBatch() so test mocks on embed() continue to work correctly.
+		// In production, embed() calls are pipelined by the HTTP client anyway.
+		const embeddings = await Promise.all(
+			entries.map((e) =>
+				this.activation.embeddings.embed(
+					formatEmbeddingText(e.type, e.content, e.topics ?? []),
+				),
+			),
+		);
+
+		// For each entry, find its nearest existing entry. Classify as:
+		// - novel: similarity below reconsolidationThreshold → insert directly
+		// - candidate: similarity above threshold → needs decideMerge
+		type EntryWithEmbedding = {
+			entry: ExtractedKnowledge;
+			embedding: number[];
+			nearestEntry: (KnowledgeEntry & { embedding: number[] }) | null;
+			nearestSimilarity: number;
+		};
+		const classified: EntryWithEmbedding[] = entries.map((entry, i) => {
+			const embedding = embeddings[i];
+			let nearestEntry: (KnowledgeEntry & { embedding: number[] }) | null =
+				null;
+			let nearestSimilarity = 0;
+			for (const existing of entriesMap.values()) {
+				const sim = cosineSimilarity(embedding, existing.embedding);
+				if (sim > nearestSimilarity) {
+					nearestSimilarity = sim;
+					nearestEntry = existing;
+				}
+			}
+			return { entry, embedding, nearestEntry, nearestSimilarity };
+		});
+
+		const novel = classified.filter(
+			(c) =>
+				!c.nearestEntry ||
+				c.nearestSimilarity < config.consolidation.reconsolidationThreshold,
+		);
+		const candidates = classified.filter(
+			(c) =>
+				c.nearestEntry &&
+				c.nearestSimilarity >= config.consolidation.reconsolidationThreshold,
+		);
+
+		// ── Phase B: batch decideMerge for all candidates in one LLM call ──────────
+		const mergeStart = Date.now();
+		const mergeDecisions = await this.llm.batchDecideMerge(
+			candidates.map((c) => ({
+				existing: {
+					content: c.nearestEntry!.content,
+					type: c.nearestEntry!.type,
+					topics: c.nearestEntry!.topics,
+					confidence: c.nearestEntry!.confidence,
+				},
+				extracted: {
+					content: c.entry.content,
+					type: c.entry.type,
+					topics: c.entry.topics || [],
+					confidence: c.entry.confidence,
+				},
+			})),
+		);
+		if (candidates.length > 0) {
+			logger.log(
+				`[consolidation/${source}] batchDecideMerge: ${candidates.length} candidates → ${((Date.now() - mergeStart) / 1000).toFixed(1)}s`,
+			);
+		}
+
+		// ── Phase C: apply decisions sequentially, updating entriesMap in place ─────
+		// Process novel entries first, then candidates, to maintain within-chunk dedup.
+		// Novel entries are inserted directly without an LLM call.
+		const applyInsert = async (c: EntryWithEmbedding) => {
 			try {
-				await this.reconsolidator.reconsolidate(
-					entry,
+				const inserted = await this.reconsolidator.insertNewEntry(
+					c.entry,
 					sessionIds,
-					entriesMap,
-					{
-						onInsert: (inserted) => {
-							created++;
-							contradictionCandidates.add(inserted.id);
-							logger.log(
-								`[consolidation/${source}] + insert [${inserted.type}] ${entry.domain ? `domain:${entry.domain} ` : ""}${JSON.stringify(inserted.content)}`,
-							);
-							// Propagate into the cache so later entries in this batch
-							// can deduplicate against entries inserted earlier.
-							if (inserted.embedding) {
-								entriesMap.set(
-									inserted.id,
-									inserted as KnowledgeEntry & { embedding: number[] },
-								);
-							}
-						},
-						onUpdate: (id, updatedFields, freshEmbedding) => {
-							updated++;
-							contradictionCandidates.add(id);
-							const existing = entriesMap.get(id);
-							logger.log(
-								`[consolidation/${source}] ~ update [${updatedFields.type ?? existing?.type ?? "?"}] ${JSON.stringify(updatedFields.content ?? existing?.content ?? "")}`,
-							);
-							if (existing) {
-								entriesMap.set(id, {
-									...existing,
-									content: updatedFields.content ?? existing.content,
-									type:
-										(updatedFields.type as KnowledgeEntry["type"]) ??
-										existing.type,
-									topics: updatedFields.topics ?? existing.topics,
-									confidence: updatedFields.confidence ?? existing.confidence,
-									embedding: freshEmbedding,
-								});
-							}
-						},
-						onKeep: () => {},
-					},
+					c.embedding,
 					chunkSessionTimestamp,
-					undefined, // precomputedEmbedding — let reconsolidate() compute it
-					"consolidation",
-					store, // targetDb: inserts land in this store
-					store, // mergeDb: existing entries also live in this store
+					store,
 				);
+				created++;
+				contradictionCandidates.add(inserted.id);
+				logger.log(
+					`[consolidation/${source}] + insert [${inserted.type}] ${c.entry.domain ? `domain:${c.entry.domain} ` : ""}${JSON.stringify(inserted.content)}`,
+				);
+				if (inserted.embedding) {
+					entriesMap.set(
+						inserted.id,
+						inserted as KnowledgeEntry & { embedding: number[] },
+					);
+				}
 			} catch (err) {
-				// Log and skip — do NOT rethrow. Re-throwing would skip recordEpisode
-				// for the whole chunk, causing all entries to be re-processed and
-				// producing duplicates for entries already successfully inserted.
 				logger.error(
-					`[consolidation/${source}] Failed to reconsolidate entry ${JSON.stringify(entry.content ?? "")} — skipping:`,
+					`[consolidation/${source}] Failed to insert novel entry ${JSON.stringify(c.entry.content ?? "")} — skipping:`,
+					err,
+				);
+			}
+		};
+
+		for (const c of novel) {
+			await applyInsert(c);
+		}
+
+		for (let i = 0; i < candidates.length; i++) {
+			const c = candidates[i];
+			const decision = mergeDecisions[i];
+			const nearest = c.nearestEntry!;
+			try {
+				logger.log(
+					`[consolidation/${source}] Reconsolidation candidate (sim=${c.nearestSimilarity.toFixed(3)}): ${JSON.stringify(c.entry.content)} vs ${JSON.stringify(nearest.content)}`,
+				);
+				switch (decision.action) {
+					case "keep": {
+						await store.reinforceObservation(nearest.id);
+						logger.log(
+							`[consolidation/${source}] Keep existing (reinforced): ${JSON.stringify(nearest.content)}`,
+						);
+						break;
+					}
+					case "update":
+					case "replace": {
+						const safeType = clampKnowledgeType(decision.type);
+						const mergeUpdates = {
+							content: decision.content,
+							type: safeType,
+							topics: decision.topics,
+							confidence: Math.max(0, Math.min(1, decision.confidence)),
+							additionalSources: sessionIds,
+						};
+						const freshEmbedding = await this.activation.embeddings.embed(
+							formatEmbeddingText(
+								safeType,
+								decision.content,
+								decision.topics ?? [],
+							),
+						);
+						await store.mergeEntry(nearest.id, mergeUpdates, freshEmbedding);
+						logger.log(
+							`[consolidation/${source}] ${decision.action === "update" ? "Updated" : "Replaced"}: ${JSON.stringify(nearest.content)} → ${JSON.stringify(decision.content)}`,
+						);
+						updated++;
+						contradictionCandidates.add(nearest.id);
+						const existingCached = entriesMap.get(nearest.id);
+						if (existingCached) {
+							entriesMap.set(nearest.id, {
+								...existingCached,
+								content: decision.content,
+								type: safeType as KnowledgeEntry["type"],
+								topics: decision.topics,
+								confidence: mergeUpdates.confidence,
+								embedding: freshEmbedding,
+							});
+						}
+						break;
+					}
+					case "insert": {
+						await applyInsert(c);
+						break;
+					}
+				}
+			} catch (err) {
+				logger.error(
+					`[consolidation/${source}] Failed to apply merge decision for ${JSON.stringify(c.entry.content ?? "")} — skipping:`,
 					err,
 				);
 			}
