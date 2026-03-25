@@ -42,10 +42,15 @@ const intervalArg = args.find((a) => a.startsWith("--interval="));
 const parsedInterval = intervalArg
 	? Number.parseInt(intervalArg.split("=")[1], 10)
 	: Number.NaN;
+const envInterval = process.env.DAEMON_UPLOAD_INTERVAL_SECONDS
+	? Number.parseInt(process.env.DAEMON_UPLOAD_INTERVAL_SECONDS, 10)
+	: Number.NaN;
 const intervalMs =
 	!Number.isNaN(parsedInterval) && parsedInterval > 0
 		? parsedInterval * 1000
-		: 5 * 60 * 1000; // default: 5 minutes
+		: !Number.isNaN(envInterval) && envInterval > 0
+			? envInterval * 1000
+			: 30 * 60 * 1000; // default: 30 minutes — gives sessions time to reach a natural pause
 
 const onceFlag = args.includes("--once");
 

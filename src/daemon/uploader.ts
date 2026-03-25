@@ -215,12 +215,12 @@ export class EpisodeUploader {
 	/**
 	 * Run the daemon in polling mode — upload on interval until stopped.
 	 *
-	 * @param intervalMs  Upload interval in milliseconds (default: 5 minutes).
+	 * @param intervalMs  Upload interval in milliseconds (default: 30 minutes).
 	 * @param onShutdown  Optional async cleanup callback called before process.exit.
 	 *                    Use this to close DB connections and readers gracefully.
 	 */
 	async runPolling(
-		intervalMs = 5 * 60 * 1000,
+		intervalMs = 30 * 60 * 1000,
 		onShutdown?: () => Promise<void>,
 	): Promise<void> {
 		logger.log(
