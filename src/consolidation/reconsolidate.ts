@@ -663,19 +663,15 @@ export class Reconsolidator {
 	}
 
 	/**
-	 * Insert a new knowledge entry into the DB.
-	 * Optionally pre-supply the embedding to avoid re-computing it.
-	 *
-	 * sessionTimestamp: unix ms of the source session (capped at now).
-	 * Using the session's time rather than Date.now() means entries extracted from
-	 * old sessions start with the correct decay already applied — an entry from a
-	 * session 30 days ago will have 30 days of decay, not 0.
-	 */
-	/**
 	 * Insert a new knowledge entry directly (no similarity check, no LLM call).
 	 * Called from consolidateExtractedToStore for entries classified as novel
 	 * (similarity below reconsolidationThreshold) after batch embedding.
 	 * Also used internally by reconsolidate() and runKBSynthesis().
+	 *
+	 * Pre-supply embedding to skip re-computing it (same format as
+	 * formatEmbeddingText(type, content, topics)). If omitted, embed() is called.
+	 * sessionTimestamp: unix ms of source session — entries get the session's
+	 * timestamp rather than now() so decay is applied correctly.
 	 */
 	async insertNewEntry(
 		entry: ExtractedKnowledge,

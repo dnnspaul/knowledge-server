@@ -880,33 +880,12 @@ export class ConsolidationEngine {
 				c.nearestSimilarity >= config.consolidation.reconsolidationThreshold,
 		);
 
-		// ── Phase B: batch decideMerge for all candidates in one LLM call ──────────
-		const mergeStart = Date.now();
-		const mergeDecisions = await this.llm.batchDecideMerge(
-			candidates.map((c) => ({
-				existing: {
-					content: c.nearestEntry!.content,
-					type: c.nearestEntry!.type,
-					topics: c.nearestEntry!.topics,
-					confidence: c.nearestEntry!.confidence,
-				},
-				extracted: {
-					content: c.entry.content,
-					type: c.entry.type,
-					topics: c.entry.topics || [],
-					confidence: c.entry.confidence,
-				},
-			})),
-		);
-		if (candidates.length > 0) {
-			logger.log(
-				`[consolidation/${source}] batchDecideMerge: ${candidates.length} candidates → ${((Date.now() - mergeStart) / 1000).toFixed(1)}s`,
-			);
-		}
-
-		// ── Phase C: apply decisions sequentially, updating entriesMap in place ─────
-		// Process novel entries first, then candidates, to maintain within-chunk dedup.
-		// Novel entries are inserted directly without an LLM call.
+		// ── Phase B: insert novel entries first, then re-classify candidates ─────────
+		// Novel entries are inserted before batch-deciding candidates. This preserves
+		// the within-chunk dedup invariant: after inserting a novel entry it becomes
+		// visible in entriesMap, so a subsequent candidate entry that closely matches
+		// it will be correctly identified as a candidate (not novel) after re-classification.
+		// This matches the old sequential path where entriesMap was updated between entries.
 		const applyInsert = async (c: EntryWithEmbedding) => {
 			try {
 				const inserted = await this.reconsolidator.insertNewEntry(
@@ -939,8 +918,51 @@ export class ConsolidationEngine {
 			await applyInsert(c);
 		}
 
-		for (let i = 0; i < candidates.length; i++) {
-			const c = candidates[i];
+		// Re-classify candidates against the updated entriesMap (which now includes
+		// newly-inserted novel entries). Candidates whose nearest match was below
+		// threshold but now has a newly-inserted near-duplicate become candidates again.
+		const reclassifiedCandidates = candidates.map((c) => {
+			let nearestEntry: (KnowledgeEntry & { embedding: number[] }) | null =
+				c.nearestEntry;
+			let nearestSimilarity = c.nearestSimilarity;
+			for (const existing of entriesMap.values()) {
+				if (c.nearestEntry && existing.id === c.nearestEntry.id) continue; // already checked
+				const sim = cosineSimilarity(c.embedding, existing.embedding);
+				if (sim > nearestSimilarity) {
+					nearestSimilarity = sim;
+					nearestEntry = existing;
+				}
+			}
+			return { ...c, nearestEntry, nearestSimilarity };
+		});
+
+		// ── Phase C: batch decideMerge for all candidates in one LLM call ──────────
+		const mergeStart = Date.now();
+		const mergeDecisions = await this.llm.batchDecideMerge(
+			reclassifiedCandidates.map((c) => ({
+				existing: {
+					content: c.nearestEntry!.content,
+					type: c.nearestEntry!.type,
+					topics: c.nearestEntry!.topics,
+					confidence: c.nearestEntry!.confidence,
+				},
+				extracted: {
+					content: c.entry.content,
+					type: c.entry.type,
+					topics: c.entry.topics || [],
+					confidence: c.entry.confidence,
+				},
+			})),
+		);
+		if (reclassifiedCandidates.length > 0) {
+			logger.log(
+				`[consolidation/${source}] batchDecideMerge: ${reclassifiedCandidates.length} candidates → ${((Date.now() - mergeStart) / 1000).toFixed(1)}s`,
+			);
+		}
+
+		// ── Phase D: apply candidate decisions sequentially ──────────────────────────
+		for (let i = 0; i < reclassifiedCandidates.length; i++) {
+			const c = reclassifiedCandidates[i];
 			const decision = mergeDecisions[i];
 			const nearest = c.nearestEntry!;
 			try {
