@@ -147,19 +147,9 @@ export class ConsolidationEngine {
 		lastConsolidatedAt: number;
 	}> {
 		const state = await this.serverStateDb.getConsolidationState();
-		let pendingSessions = 0;
-
-		// Call prepare() on readers that support it so countNewSessions() returns
-		// the actual count rather than the conservative placeholder of 1.
-		// prepare() resets its own state at the start so calling it here is safe —
-		// the consolidation engine will call it again when processing begins.
-		for (const reader of this.readers) {
-			if (reader.prepare) {
-				await reader.prepare(0);
-			}
-			pendingSessions += reader.countNewSessions(0);
-		}
-
+		// Query pending_episodes directly — no need for prepare() or countNewSessions()
+		// which returns a conservative placeholder of 1 before prepare() has run.
+		const pendingSessions = await this.serverStateDb.countPendingSessions();
 		return { pendingSessions, lastConsolidatedAt: state.lastConsolidatedAt };
 	}
 
