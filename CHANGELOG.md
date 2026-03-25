@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.6.0](https://github.com/MAnders333/knowledge-server/compare/v3.5.1...v3.6.0) (2026-03-25)
+
+
+### Features
+
+* **setup-tool:** auto-register daemon as system service when setting up AI tools ([d496cde](https://github.com/MAnders333/knowledge-server/commit/d496cde5487addd8fb5b6aa55563de97b44564c0))
+
+
+### Bug Fixes
+
+* **consolidate:** write CLI consolidation logs to server.log ([b677fd2](https://github.com/MAnders333/knowledge-server/commit/b677fd2b9d64f1fe856db59b9909816b3988e5d5))
+
 ## [3.5.1](https://github.com/MAnders333/knowledge-server/compare/v3.5.0...v3.5.1) (2026-03-24)
 
 
