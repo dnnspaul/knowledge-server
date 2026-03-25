@@ -1075,8 +1075,11 @@ export class PostgresKnowledgeDB implements IKnowledgeStore {
 		// if the underlying connection is recycled.
 		this.lockConnection = await this.sql.reserve();
 		try {
+			// postgres.js does not accept bigint template parameters — cast to Number.
+			// This is safe: OIDs are unsigned 32-bit values (max ~4.3B), which JS
+			// Number represents exactly (doubles have 53-bit mantissa precision).
 			const result = await this.lockConnection`
-				SELECT pg_try_advisory_lock(${this.advisoryLockKey}) as acquired
+				SELECT pg_try_advisory_lock(${Number(this.advisoryLockKey)}) as acquired
 			`;
 			const acquired = (result[0] as { acquired: boolean }).acquired;
 			if (!acquired) {
@@ -1099,7 +1102,7 @@ export class PostgresKnowledgeDB implements IKnowledgeStore {
 		// next consolidation run.
 		try {
 			await this.lockConnection`
-				SELECT pg_advisory_unlock(${this.advisoryLockKey})
+				SELECT pg_advisory_unlock(${Number(this.advisoryLockKey)})
 			`;
 		} finally {
 			this.lockConnection.release();
