@@ -11,7 +11,10 @@ import { logger } from "../logger.js";
  * sessions until none remain. Prints live progress to stdout.
  */
 export async function runConsolidate(): Promise<void> {
-	logger.init(""); // disable file logging — output goes to stdout only
+	// Log to both stdout and the server log file so all consolidation activity
+	// (whether triggered via HTTP, polling, or CLI) appears in one place.
+	const { config } = await import("../config.js");
+	logger.init(config.logPath);
 
 	const registry = await StoreRegistry.create();
 	const db = registry.writableStore();
