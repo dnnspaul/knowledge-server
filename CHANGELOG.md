@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.6.4](https://github.com/MAnders333/knowledge-server/compare/v3.6.3...v3.6.4) (2026-03-26)
+
+
+### Bug Fixes
+
+* resolve vscode-remote:// workspace URIs for SSH and Dev Container sessions ([3d29fed](https://github.com/MAnders333/knowledge-server/commit/3d29fedf78bdd0675606417a82784bcdcee37ff1))
+* resolve vscode-remote:// workspace URIs for SSH and Dev Container sessions ([835e47f](https://github.com/MAnders333/knowledge-server/commit/835e47fe41a1a095c5e0356eac1766f7417bc10f))
+* resolve workspace root for Cursor sessions to prevent cross-project contamination ([8449a28](https://github.com/MAnders333/knowledge-server/commit/8449a28d3a18e86f47ad3c237ba5cc2198c5dc23))
+* resolve workspace root for Cursor sessions to prevent cross-project contamination ([d88f6df](https://github.com/MAnders333/knowledge-server/commit/d88f6df38d9eb611daffedd9453583dacc889e42))
+* return empty string on Dev Container decode failure and unknown schemes; add tests ([c9c2489](https://github.com/MAnders333/knowledge-server/commit/c9c2489eec7cd03a79646c6a01e92b40aa9f6023))
+
 ## [3.6.3](https://github.com/MAnders333/knowledge-server/compare/v3.6.2...v3.6.3) (2026-03-25)
 
 
