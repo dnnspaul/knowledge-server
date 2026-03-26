@@ -25,6 +25,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	CursorEpisodeReader,
+	collectFilePathsFromString,
+	longestCommonDirectoryPrefix,
 	resolveCursorDbPath,
 } from "../src/daemon/readers/cursor";
 
@@ -775,6 +777,270 @@ describe("resolveCursorDbPath", () => {
 			} else {
 				process.env.CURSOR_DB_PATH = original;
 			}
+			cleanup();
+		}
+	});
+});
+
+// ── longestCommonDirectoryPrefix ──────────────────────────────────────────────
+
+describe("longestCommonDirectoryPrefix", () => {
+	it("returns dirname of the single path when given one path", () => {
+		expect(longestCommonDirectoryPrefix(["/Users/x/project/src/a.ts"])).toBe(
+			"/Users/x/project/src",
+		);
+	});
+
+	it("returns empty string for an empty array", () => {
+		expect(longestCommonDirectoryPrefix([])).toBe("");
+	});
+
+	it("returns the shared directory for two paths in different subdirs of the same project", () => {
+		expect(
+			longestCommonDirectoryPrefix([
+				"/Users/x/project/src/a.ts",
+				"/Users/x/project/lib/b.ts",
+			]),
+		).toBe("/Users/x/project");
+	});
+
+	it("returns the full shared path when paths are in the same directory", () => {
+		expect(
+			longestCommonDirectoryPrefix([
+				"/Users/x/project/src/a.ts",
+				"/Users/x/project/src/b.ts",
+			]),
+		).toBe("/Users/x/project/src");
+	});
+
+	it("does not produce partial segment matches (foo-bar vs foo-baz)", () => {
+		// A naive string prefix would yield "/Users/x/foo-" — segment-based avoids this
+		expect(
+			longestCommonDirectoryPrefix([
+				"/Users/x/foo-bar/a.ts",
+				"/Users/x/foo-baz/b.ts",
+			]),
+		).toBe("/Users/x");
+	});
+
+	it("returns dirname when all paths are identical (same file)", () => {
+		expect(
+			longestCommonDirectoryPrefix([
+				"/Users/x/project/src/a.ts",
+				"/Users/x/project/src/a.ts",
+			]),
+		).toBe("/Users/x/project/src");
+	});
+
+	it("returns the common root for a monorepo with files in different packages", () => {
+		expect(
+			longestCommonDirectoryPrefix([
+				"/Users/x/repo/packages/a/src/foo.ts",
+				"/Users/x/repo/packages/b/src/bar.ts",
+			]),
+		).toBe("/Users/x/repo/packages");
+	});
+
+	it("returns empty string when paths share only the root /", () => {
+		expect(
+			longestCommonDirectoryPrefix(["/Users/x/a.ts", "/home/y/b.ts"]),
+		).toBe("");
+	});
+
+	it("handles three or more paths correctly", () => {
+		expect(
+			longestCommonDirectoryPrefix([
+				"/Users/x/project/src/a.ts",
+				"/Users/x/project/lib/b.ts",
+				"/Users/x/project/test/c.ts",
+			]),
+		).toBe("/Users/x/project");
+	});
+});
+
+// ── collectFilePathsFromString ────────────────────────────────────────────────
+
+describe("collectFilePathsFromString", () => {
+	it("extracts a simple file:// URI", () => {
+		const out: string[] = [];
+		collectFilePathsFromString(
+			'{"external":"file:///Users/x/project/src/a.ts"}',
+			out,
+		);
+		expect(out).toEqual(["/Users/x/project/src/a.ts"]);
+	});
+
+	it("extracts multiple URIs from a single string", () => {
+		const out: string[] = [];
+		collectFilePathsFromString(
+			'{"a":"file:///Users/x/project/src/a.ts","b":"file:///Users/x/project/lib/b.ts"}',
+			out,
+		);
+		expect(out).toEqual([
+			"/Users/x/project/src/a.ts",
+			"/Users/x/project/lib/b.ts",
+		]);
+	});
+
+	it("decodes percent-encoded characters", () => {
+		const out: string[] = [];
+		collectFilePathsFromString(
+			'"file:///Users/dennis%20paul/project/a.ts"',
+			out,
+		);
+		expect(out).toEqual(["/Users/dennis paul/project/a.ts"]);
+	});
+
+	it("returns nothing when no file:// URI is present", () => {
+		const out: string[] = [];
+		collectFilePathsFromString('{"key":"value","other":"https://example.com"}', out);
+		expect(out).toEqual([]);
+	});
+
+	it("appends to an existing out array without clearing it", () => {
+		const out: string[] = ["/existing/path.ts"];
+		collectFilePathsFromString('"file:///Users/x/new.ts"', out);
+		expect(out).toEqual(["/existing/path.ts", "/Users/x/new.ts"]);
+	});
+
+	it("stops at JSON delimiters (does not bleed across fields)", () => {
+		const out: string[] = [];
+		// The URI ends at the closing quote — should not bleed into next field
+		collectFilePathsFromString(
+			'"file:///Users/x/a.ts","nextField":"value"',
+			out,
+		);
+		expect(out).toEqual(["/Users/x/a.ts"]);
+	});
+});
+
+// ── workspace root resolution via DB ─────────────────────────────────────────
+
+describe("CursorEpisodeReader — workspace root resolution", () => {
+	it("resolves directory from composerData context fileSelections", () => {
+		const db = createDb();
+		const composerId = COMPOSER_A;
+		// Embed file:// URIs in the composerData value (as context.fileSelections would)
+		const data = {
+			composerId,
+			name: "Test Session",
+			createdAt: BASE,
+			lastUpdatedAt: BASE + 10_000,
+			conversation: [
+				{ type: 1, bubbleId: "b1", text: "What is this file?" },
+				{ type: 2, bubbleId: "b2", text: "It is a config file." },
+				{ type: 1, bubbleId: "b3", text: "Thanks." },
+				{ type: 2, bubbleId: "b4", text: "No problem." },
+			],
+			context: {
+				fileSelections: [
+					{
+						uri: {
+							external:
+								"file:///Users/x/Documents/my-project/src/index.ts",
+						},
+					},
+					{
+						uri: {
+							external:
+								"file:///Users/x/Documents/my-project/src/utils.ts",
+						},
+					},
+				],
+			},
+		};
+		db.run("INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)", [
+			`composerData:${composerId}`,
+			JSON.stringify(data),
+		]);
+		const { path, cleanup } = dbToFile(db);
+		try {
+			const reader = new CursorEpisodeReader(path);
+			const candidates = reader.getCandidateSessions(0);
+			const episodes = reader.getNewEpisodes([candidates[0].id], new Map());
+			expect(episodes).toHaveLength(1);
+			expect(episodes[0].directory).toBe("/Users/x/Documents/my-project/src");
+			expect(episodes[0].projectName).toBe("src");
+			reader.close();
+		} finally {
+			cleanup();
+		}
+	});
+
+	it("resolves directory from checkpointId entries when composerData has no URIs", () => {
+		const db = createDb();
+		const composerId = COMPOSER_A;
+		// Plain composerData with no file URIs
+		db.run("INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)", [
+			`composerData:${composerId}`,
+			JSON.stringify({
+				composerId,
+				name: "Checkpoint Session",
+				createdAt: BASE,
+				lastUpdatedAt: BASE + 10_000,
+				conversation: [
+					{ type: 1, bubbleId: "b1", text: "Edit the config." },
+					{ type: 2, bubbleId: "b2", text: "Done." },
+					{ type: 1, bubbleId: "b3", text: "Check the output." },
+					{ type: 2, bubbleId: "b4", text: "Looks good." },
+				],
+			}),
+		]);
+		// Insert checkpointId entries with absolute file:// paths
+		db.run("INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)", [
+			`checkpointId:${composerId}:cp1`,
+			JSON.stringify({
+				external: "file:///Users/x/Documents/repo/config/settings.json",
+			}),
+		]);
+		db.run("INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)", [
+			`checkpointId:${composerId}:cp2`,
+			JSON.stringify({
+				external: "file:///Users/x/Documents/repo/src/main.ts",
+			}),
+		]);
+		const { path, cleanup } = dbToFile(db);
+		try {
+			const reader = new CursorEpisodeReader(path);
+			const candidates = reader.getCandidateSessions(0);
+			const episodes = reader.getNewEpisodes([candidates[0].id], new Map());
+			expect(episodes).toHaveLength(1);
+			expect(episodes[0].directory).toBe("/Users/x/Documents/repo");
+			expect(episodes[0].projectName).toBe("repo");
+			reader.close();
+		} finally {
+			cleanup();
+		}
+	});
+
+	it("sets directory and projectName to empty string for pure chat sessions with no file URIs", () => {
+		const db = createDb();
+		const composerId = COMPOSER_A;
+		db.run("INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)", [
+			`composerData:${composerId}`,
+			JSON.stringify({
+				composerId,
+				name: "Pure Chat",
+				createdAt: BASE,
+				lastUpdatedAt: BASE + 10_000,
+				conversation: [
+					{ type: 1, bubbleId: "b1", text: "What is the capital of France?" },
+					{ type: 2, bubbleId: "b2", text: "Paris." },
+					{ type: 1, bubbleId: "b3", text: "Thanks." },
+					{ type: 2, bubbleId: "b4", text: "You're welcome." },
+				],
+			}),
+		]);
+		const { path, cleanup } = dbToFile(db);
+		try {
+			const reader = new CursorEpisodeReader(path);
+			const candidates = reader.getCandidateSessions(0);
+			const episodes = reader.getNewEpisodes([candidates[0].id], new Map());
+			expect(episodes).toHaveLength(1);
+			expect(episodes[0].directory).toBe("");
+			expect(episodes[0].projectName).toBe("");
+			reader.close();
+		} finally {
 			cleanup();
 		}
 	});

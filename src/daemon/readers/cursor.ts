@@ -218,6 +218,11 @@ export class CursorEpisodeReader implements IEpisodeReader {
 
 	// ── Private helpers ───────────────────────────────────────────────────────
 
+	/**
+	 * Returns the shared read-only Database handle, opening it on first call.
+	 * Subsequent calls return the same cached instance — no new connection is
+	 * opened per session or per resolveWorkspaceRoot() invocation.
+	 */
 	private getDb(): Database {
 		if (!this._db) {
 			this._db = new Database(this.dbPath, { readonly: true });
@@ -626,7 +631,7 @@ export class CursorEpisodeReader implements IEpisodeReader {
  * Extract absolute file paths from file:// URIs found anywhere in a string.
  * Paths are decoded and pushed into the output array.
  */
-function collectFilePathsFromString(str: string, out: string[]): void {
+export function collectFilePathsFromString(str: string, out: string[]): void {
 	// Use a fresh regex per call to avoid shared lastIndex state
 	const re = /file:\/\/\/([\w/._@+%-]+)/g;
 	for (const match of str.matchAll(re)) {
@@ -649,7 +654,7 @@ function collectFilePathsFromString(str: string, out: string[]): void {
  *
  * Returns "" if no meaningful common prefix exists (less than 2 path segments).
  */
-function longestCommonDirectoryPrefix(paths: string[]): string {
+export function longestCommonDirectoryPrefix(paths: string[]): string {
 	if (paths.length === 0) return "";
 	if (paths.length === 1) return dirname(paths[0]);
 
