@@ -440,19 +440,27 @@ export class VSCodeEpisodeReader implements IEpisodeReader {
  * 1. Local:         file:///Users/x/Documents/project
  *    → /Users/x/Documents/project
  *
- * 2. SSH Remote:    vscode-remote://ssh-remote%2B<host>/<remote-path>
- *    → /<remote-path>  (the remote filesystem path)
+ *    Note: on Windows this would yield /C:/Users/... after stripping the scheme,
+ *    but Windows is not a supported platform for knowledge-server.
  *
- * 3. Dev Container: vscode-remote://dev-container%2B<hex-encoded-json>/<container-path>
+ * 2. SSH Remote:    vscode-remote://ssh-remote+<host>/<remote-path>
+ *    (stored percent-encoded as vscode-remote://ssh-remote%2B<host>/<remote-path>)
+ *    → /<remote-path>  (the remote filesystem path, e.g. /home/user/project)
+ *
+ * 3. Dev Container: vscode-remote://dev-container+<hex-encoded-json>/<container-path>
  *    The authority contains hex-encoded JSON with a `hostPath` field pointing to
  *    the local project directory that was mounted into the container. We decode
  *    and extract that host path, which is the real project directory on the local
  *    machine.
- *    → /Users/x/Documents/project  (the host path)
+ *    → /Users/x/Documents/project  (the host path from the JSON payload)
+ *    If decoding fails, returns "" rather than falling back to the container-internal
+ *    path (e.g. /opt/app) which would be useless for domain routing on the host.
  *
- * Returns "" if the URI cannot be parsed or is an unsupported scheme.
+ * Returns "" if the URI cannot be parsed, uses an unknown scheme, or if a
+ * Dev Container URI cannot be decoded. An empty string propagates cleanly
+ * through the domain router (no match) rather than silently routing incorrectly.
  */
-function resolveWorkspaceFolder(folderUri: string): string {
+export function resolveWorkspaceFolder(folderUri: string): string {
 	// Case 1: file:// URI — strip scheme, decode percent-encoding
 	if (folderUri.startsWith("file://")) {
 		return decodeURIComponent(folderUri.replace(/^file:\/\//, ""));
@@ -471,6 +479,8 @@ function resolveWorkspaceFolder(folderUri: string): string {
 
 		// Case 3: Dev Container — authority is "dev-container+<hex-encoded-json>"
 		// The JSON payload contains a `hostPath` field with the local project directory.
+		// On decode failure we return "" rather than falling through to pathname —
+		// the container-internal path (e.g. /opt/app) is not meaningful on the host.
 		if (authority.startsWith("dev-container+")) {
 			try {
 				const hexPayload = authority.slice("dev-container+".length);
@@ -486,18 +496,21 @@ function resolveWorkspaceFolder(folderUri: string): string {
 					return (containerConfig as Record<string, string>).hostPath;
 				}
 			} catch {
-				// Hex decode or JSON parse failed — fall through to pathname
+				// Hex decode or JSON parse failed — return "" (container-internal
+				// path would be useless for domain routing on the host machine)
 			}
+			return "";
 		}
 
-		// Case 2: SSH Remote (or dev-container without decodable hostPath)
-		// Use the pathname which is the remote filesystem path.
+		// Case 2: SSH Remote — use the pathname which is the remote filesystem path.
 		const remotePath = decodeURIComponent(url.pathname);
 		return remotePath || "";
 	}
 
-	// Unknown scheme — return as-is (best effort)
-	return folderUri;
+	// Unknown scheme — return "" rather than the raw URI, which would fail
+	// silently in domain routing just like an empty string but is harder to
+	// reason about.
+	return "";
 }
 
 // ── Path resolution ───────────────────────────────────────────────────────────
