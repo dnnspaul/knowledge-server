@@ -218,8 +218,7 @@ export class VSCodeEpisodeReader implements IEpisodeReader {
 						folder?: string;
 					};
 					if (wsJson.folder) {
-						// folder is a file:// URI — strip the scheme
-						workspaceDir = wsJson.folder.replace(/^file:\/\//, "");
+						workspaceDir = resolveWorkspaceFolder(wsJson.folder);
 					}
 				}
 			} catch {
@@ -429,6 +428,76 @@ export class VSCodeEpisodeReader implements IEpisodeReader {
 
 		return messages;
 	}
+}
+
+// ── Workspace folder resolution ───────────────────────────────────────────────
+
+/**
+ * Resolve a workspace folder URI from workspace.json into a usable filesystem path.
+ *
+ * VSCode stores workspace folders as URIs in three forms:
+ *
+ * 1. Local:         file:///Users/x/Documents/project
+ *    → /Users/x/Documents/project
+ *
+ * 2. SSH Remote:    vscode-remote://ssh-remote%2B<host>/<remote-path>
+ *    → /<remote-path>  (the remote filesystem path)
+ *
+ * 3. Dev Container: vscode-remote://dev-container%2B<hex-encoded-json>/<container-path>
+ *    The authority contains hex-encoded JSON with a `hostPath` field pointing to
+ *    the local project directory that was mounted into the container. We decode
+ *    and extract that host path, which is the real project directory on the local
+ *    machine.
+ *    → /Users/x/Documents/project  (the host path)
+ *
+ * Returns "" if the URI cannot be parsed or is an unsupported scheme.
+ */
+function resolveWorkspaceFolder(folderUri: string): string {
+	// Case 1: file:// URI — strip scheme, decode percent-encoding
+	if (folderUri.startsWith("file://")) {
+		return decodeURIComponent(folderUri.replace(/^file:\/\//, ""));
+	}
+
+	// Case 2 & 3: vscode-remote:// URI
+	if (folderUri.startsWith("vscode-remote://")) {
+		let url: URL;
+		try {
+			url = new URL(folderUri);
+		} catch {
+			return "";
+		}
+
+		const authority = decodeURIComponent(url.hostname);
+
+		// Case 3: Dev Container — authority is "dev-container+<hex-encoded-json>"
+		// The JSON payload contains a `hostPath` field with the local project directory.
+		if (authority.startsWith("dev-container+")) {
+			try {
+				const hexPayload = authority.slice("dev-container+".length);
+				const jsonStr = Buffer.from(hexPayload, "hex").toString("utf-8");
+				const containerConfig: unknown = JSON.parse(jsonStr);
+				if (
+					containerConfig &&
+					typeof containerConfig === "object" &&
+					"hostPath" in containerConfig &&
+					typeof (containerConfig as Record<string, unknown>).hostPath ===
+						"string"
+				) {
+					return (containerConfig as Record<string, string>).hostPath;
+				}
+			} catch {
+				// Hex decode or JSON parse failed — fall through to pathname
+			}
+		}
+
+		// Case 2: SSH Remote (or dev-container without decodable hostPath)
+		// Use the pathname which is the remote filesystem path.
+		const remotePath = decodeURIComponent(url.pathname);
+		return remotePath || "";
+	}
+
+	// Unknown scheme — return as-is (best effort)
+	return folderUri;
 }
 
 // ── Path resolution ───────────────────────────────────────────────────────────
