@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.6.7](https://github.com/MAnders333/knowledge-server/compare/v3.6.6...v3.6.7) (2026-03-27)
+
+
+### Bug Fixes
+
+* binaries self-load .env; daemon drops unneeded validateConfig ([23dc6a1](https://github.com/MAnders333/knowledge-server/commit/23dc6a10cc0183c9dcb9fa676ece30ce856d5ea4))
+
 ## [3.6.6](https://github.com/MAnders333/knowledge-server/compare/v3.6.5...v3.6.6) (2026-03-26)
 
 
