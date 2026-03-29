@@ -43,7 +43,7 @@ import {
  *   6. Appends ?beta=true to /v1/messages requests (required for OAuth).
  */
 function createAnthropicOAuthFetch(): typeof globalThis.fetch {
-	return async (input, init) => {
+	return (async (input: RequestInfo | URL, init?: RequestInit) => {
 		// Resolve URL and preserve Request properties (method, body, etc.) when
 		// input is a Request object. Merging init on top allows the caller to
 		// override individual fields while keeping body/method from the Request.
@@ -98,7 +98,7 @@ function createAnthropicOAuthFetch(): typeof globalThis.fetch {
 		headers.set("User-Agent", ANTHROPIC_OAUTH_USER_AGENT);
 
 		return globalThis.fetch(url, { ...baseInit, headers });
-	};
+	}) as typeof globalThis.fetch;
 }
 
 /**
